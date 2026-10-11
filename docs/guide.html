@@ -1,0 +1,1763 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<title>Orca 티켓 무인 루프 가이드북</title>
+<style>
+  @page { size: A4; margin: 15mm 15mm 15mm 15mm; }
+  :root {
+    --ink: #1c1f24; --muted: #5b6270; --line: #d9dde3; --soft: #f4f6f8;
+    --accent: #2457c5; --accent-soft: #e8eefb; --warn: #b4441c; --warn-soft: #fbeee8;
+    --ok: #1f7a4d; --ok-soft: #e6f4ec;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; color: var(--ink); background: #fff;
+    font-family: "NanumGothic", "Noto Sans CJK KR", "Noto Sans KR", "Apple SD Gothic Neo", sans-serif;
+    font-size: 9.6pt; line-height: 1.58; }
+  code, pre, .mono { font-family: "D2Coding", "NanumGothicCoding", "Noto Sans Mono CJK KR", "DejaVu Sans Mono", monospace; font-size: 8.6pt; }
+  code { background: var(--soft); border-radius: 3px; padding: 0 3px; }
+  pre { background: var(--soft); border: 1px solid var(--line); border-radius: 6px;
+    padding: 7px 10px; white-space: pre-wrap; word-break: break-all; margin: 6px 0 10px; line-height: 1.45; }
+  pre code { background: none; padding: 0; }
+  pre.out { background: #1f2329; color: #e6e8eb; border-color: #1f2329; }
+  pre.script { font-size: 7.3pt; line-height: 1.35; }
+  h1, h2, h3, h4 { line-height: 1.3; }
+  h2 { font-size: 15pt; margin: 0 0 8px; padding-bottom: 5px; border-bottom: 2px solid var(--accent); break-after: avoid; }
+  h3 { font-size: 11.5pt; margin: 16px 0 6px; color: var(--accent); break-after: avoid; }
+  h4 { font-size: 10pt; margin: 12px 0 4px; break-after: avoid; }
+  p { margin: 5px 0 8px; }
+  ul, ol { margin: 4px 0 8px; padding-left: 20px; }
+  li { margin: 2px 0; }
+  table { width: 100%; border-collapse: collapse; margin: 6px 0 12px; font-size: 8.8pt; break-inside: auto; }
+  th, td { border: 1px solid var(--line); padding: 4px 7px; vertical-align: top; text-align: left; }
+  th { background: var(--soft); font-weight: 700; }
+  tr { break-inside: avoid; }
+  section { break-before: page; }
+  .dense table { font-size: 8.4pt; }
+  .dense td, .dense th { padding: 3px 6px; }
+  .dense p, .dense li { font-size: 9.2pt; }
+  .dense h3 { margin-top: 10px; }
+  .note, .warn, .ok { border-radius: 6px; padding: 8px 11px; margin: 8px 0 12px; break-inside: avoid; }
+  .note { background: var(--accent-soft); border-left: 4px solid var(--accent); }
+  .warn { background: var(--warn-soft); border-left: 4px solid var(--warn); }
+  .ok { background: var(--ok-soft); border-left: 4px solid var(--ok); }
+  .label { display: inline-block; font-size: 8pt; font-weight: 700; border-radius: 10px; padding: 0 7px; border: 1px solid var(--line); background: #fff; }
+  .muted { color: var(--muted); }
+  .small { font-size: 8.5pt; }
+  .step { display: flex; gap: 10px; margin: 8px 0; break-inside: avoid; }
+  .step .n { flex: 0 0 24px; height: 24px; border-radius: 50%; background: var(--accent); color: #fff;
+    font-weight: 700; text-align: center; line-height: 24px; font-size: 9pt; }
+  .step .b { flex: 1; min-width: 0; }
+  .step .b > :first-child { margin-top: 1px; }
+  .scenario { border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; margin: 10px 0; background: #fbfcfd; }
+  .scenario > h4:first-child { margin-top: 0; }
+  .tag { display: inline-block; font-size: 7.8pt; font-weight: 700; color: #fff; background: var(--accent); border-radius: 4px; padding: 0 6px; margin-right: 4px; }
+  .tag.r { background: var(--warn); }
+  .tag.g { background: var(--ok); }
+  figure { margin: 8px 0 14px; break-inside: avoid; }
+  figcaption { font-size: 8.5pt; color: var(--muted); text-align: center; margin-top: 4px; }
+
+  .cover { height: 262mm; display: flex; flex-direction: column; justify-content: space-between; }
+  .cover .top { margin-top: 30mm; }
+  .cover .kicker { color: var(--accent); font-weight: 700; letter-spacing: .08em; font-size: 10pt; }
+  .cover h1 { font-size: 30pt; margin: 8px 0 10px; }
+  .cover .sub { font-size: 13pt; color: var(--muted); }
+  .cover .meta { border-top: 1px solid var(--line); padding-top: 10px; font-size: 9pt; color: var(--muted); }
+  .toc { margin-top: 12mm; font-size: 10.5pt; columns: 2; column-gap: 10mm; }
+  .toc ol { padding-left: 18px; margin: 0; }
+  .toc li { margin: 4px 0; break-inside: avoid; }
+</style>
+</head>
+<body>
+
+<!-- ============ 표지 ============ -->
+<div class="cover">
+  <div class="top">
+    <div class="kicker">ORCA · CLAUDE CODE · MATTPOCOCK SKILLS · GITHUB</div>
+    <h1>Orca 티켓 무인 루프<br>가이드북</h1>
+    <div class="sub">스킬로 쪼갠 GitHub 이슈를 Orca 워크트리에서<br>한 건씩 자동으로 구현·검증·병합하고, 멈추면 이어받는 방법</div>
+    <div class="toc">
+      <ol>
+        <li>개요</li>
+        <li>워크트리와 Orca</li>
+        <li>구성 요소</li>
+        <li>환경 구축과 설치</li>
+        <li>티켓 준비</li>
+        <li>루프 실행</li>
+        <li>티켓 한 건의 생애</li>
+        <li>워커 안에서 일어나는 일</li>
+        <li>실전 시나리오</li>
+        <li>중단과 복구</li>
+        <li>안전 장치와 운영 수칙</li>
+        <li>FAQ</li>
+        <li>부록 — 치트시트, 프롬프트·스킬 원문, 스크립트 전문, 개정 이력</li>
+      </ol>
+    </div>
+  </div>
+  <div class="meta">
+    대상: GitHub 저장소를 쓰는 개발자·팀, macOS 또는 Linux(Windows는 WSL). 특정 언어·프레임워크를 가정하지 않는다.<br>
+    함께 배포하는 파일: <code>ticket-loop.sh</code> (부록 D에 전문 수록). 설치·업데이트는 <code>orca-loop-kit</code>(<code>iwishash/orca-loop-kit</code>)의 <code>install.sh</code>와 <code>/setup-orca-loop</code> 스킬로 한다.
+    예시 저장소 <code>acme/todo-app</code>와 예시 출력은 설명용이다.<br>
+    2판 2026-10-11 (초판 2026-10-08) · 실제 저장소에서 티켓 19건을 돌린 실측을 반영했다(바뀐 곳은 부록 E).
+    Orca CLI 플래그와 응답 형식은 버전에 따라 다를 수 있으니 <code>orca --help</code>로 확인한다(2판 확인 버전 Orca 1.4.223).
+  </div>
+</div>
+
+<!-- ============ 1 ============ -->
+<section>
+<h2>1. 개요</h2>
+<div class="dense">
+<h3>1.1 해결하려는 문제</h3>
+<p>코딩 에이전트(Claude Code 등)는 잘 정의된 작업 하나를 사람보다 빨리 구현한다. 그런데 작업이 여러 개가 되면 병목은 에이전트가 아니라 <b>에이전트를 돌리는 사람과 작업 방식</b>에 생긴다. 대화형으로 한 세션에서 여러 작업을 이어 가면 다음 문제가 반복된다.</p>
+<table>
+  <tr><th style="width:4%">#</th><th style="width:26%">문제</th><th>증상</th></tr>
+  <tr><td>P1</td><td><b>사람이 병목이다</b></td><td>에이전트는 티켓 하나를 몇십 분이면 끝내지만, 다음 티켓을 주고 결과를 확인하고 PR을 여는 일에 사람이 계속 붙어 있어야 한다. 사람이 자리를 비우면(밤, 회의, 다른 일) 에이전트도 멈춘다. 에이전트 시간 5시간짜리 일이 달력으로는 며칠이 된다.</td></tr>
+  <tr><td>P2</td><td><b>긴 세션은 오염된다</b></td><td>한 세션에서 티켓을 이어 가면 앞 티켓의 가정, 임시 파일, 커밋하지 않은 변경이 다음 티켓에 섞인다. <code>/implement</code>가 세션당 티켓 하나를 전제로 하는 이유지만, 매번 <code>/clear</code>하고 다시 시작하는 일도 사람 몫이다.</td></tr>
+  <tr><td>P3</td><td><b>한 체크아웃을 나눠 쓰면 사고가 난다</b></td><td>사람과 에이전트, 또는 에이전트 둘이 같은 디렉터리에서 일하면 <code>git stash</code>·<code>--amend</code>·<code>checkout</code> 하나가 상대의 작업을 지운다. 테스트 결과도 누구 변경 때문인지 알 수 없다.</td></tr>
+  <tr><td>P4</td><td><b>무엇이 끝났는지 대화 안에만 남는다</b></td><td>어느 티켓이 어디까지 됐는지가 채팅 기록에만 있다. 다른 사람은 다시 읽어야 알고, 세션을 잃으면 같이 사라진다.</td></tr>
+  <tr><td>P5</td><td><b>검증 없이 병합하게 된다</b></td><td>에이전트가 "테스트 통과했다"고 말하면 믿고 합치기 쉽다. 사람이 PR마다 CI를 기다려 확인하는 것은 P1을 다시 만든다.</td></tr>
+  <tr><td>P6</td><td><b>멈추면 처음부터다</b></td><td>에이전트가 질문하고 멈추거나 세션이 끊기면, 어디까지 했는지 복원하기 어려워 다시 시작하게 된다.</td></tr>
+</table>
+
+<p>이 방식은 위 여섯 가지를 다음 장치로 푼다. 각 장치는 뒤 장에서 자세히 다룬다.</p>
+<table>
+  <tr><th style="width:30%">장치</th><th>푸는 문제</th><th style="width:14%">장</th></tr>
+  <tr><td>티켓을 <b>GitHub 이슈 + 라벨 + 선행 관계</b>로 쓴다</td><td>P4 — 상태가 GitHub에만 있다. P1 — 루프가 다음 할 일을 스스로 고른다.</td><td>5</td></tr>
+  <tr><td>루프 스크립트가 <b>사람 대신 다음 티켓을 집어 워커에 준다</b></td><td>P1 — 사람은 티켓을 준비해 두고 자리를 비운다.</td><td>6, 7</td></tr>
+  <tr><td>티켓마다 <b>새 워크트리 + 새 에이전트 프로세스</b></td><td>P2 — 컨텍스트와 작업 디렉터리가 매번 비어 있다. P3 — 메인 체크아웃과 다른 워커를 건드리지 않는다.</td><td>2</td></tr>
+  <tr><td><b>CI 녹색일 때만 병합</b>, 실패는 제한 횟수 수리 후 사람에게. 워커가 못 돌리는 무거운 검증은 <b>병합 직후 루프가 한 번</b> 돌린다</td><td>P5 — 병합 판정을 에이전트 말이 아니라 CI와 루프가 한다.</td><td>7, 11</td></tr>
+  <tr><td>멈추면 <b>워크트리를 남기고</b> 상태판에 표시</td><td>P6 — 어디서 왜 멈췄는지 그대로 남아 이어받을 수 있다.</td><td>10</td></tr>
+  <tr><td>스킬(<code>/to-tickets</code>·<code>tdd</code>·<code>ticket-review</code>·<code>pr</code>)이 <b>티켓 품질과 구현 규율</b>을 맞추고, 구현 절차는 <b>저장소가 소유한 <code>implement</code> 스킬 한 곳</b>에 둔다</td><td>P5의 바탕 — 테스트 먼저, 자체 리뷰, 근거가 있는 PR 본문. 사람이 직접 돌릴 때와 무인 루프가 같은 절차를 쓴다.</td><td>3, 8</td></tr>
+</table>
+
+<h3>1.2 이 방식이 맞지 않는 경우</h3>
+<ul>
+  <li><b>결정이 남아 있는 작업.</b> 워커는 질문할 수 없다. 설계·사업 결정이 필요한 일은 먼저 사람이 결정해 티켓에 적어야 한다(<code>/grill-with-docs</code>가 이 단계를 돕는다).</li>
+  <li><b>크고 모호한 작업.</b> 한 PR 크기로 쪼개지지 않는 일은 루프에 넣지 않는다. 쪼개는 것이 <code>/to-tickets</code>의 일이다.</li>
+  <li><b>PR에서 CI가 돌지 않는 저장소.</b> 루프는 CI 결과로만 병합을 판단한다. CI가 없으면 자동 병합의 근거가 없다(<code>--no-merge</code>로 PR까지만 쓸 수는 있다). 문서만 바뀐 PR처럼 CI를 일부러 건너뛰는 경로는 루프에 알려 줄 수 있다(<code>CI_SKIP_REGEX</code>, 6장).</li>
+  <li><b>동시에 수십 개를 돌려야 하는 경우.</b> 이 루프는 직렬이다. 병렬이 필요하면 12장 FAQ의 <code>/implement-spec</code>을 본다.</li>
+</ul>
+
+</div>
+<h3 style="break-before: page; margin-top: 0">1.3 작업 방식</h3>
+<p>이 가이드는 다음 작업 방식을 처음부터 갖추고 운영하는 방법을 다룬다.</p>
+<ol>
+  <li>사람이 Claude Code와 대화하며 기능을 정리하고, <b>mattpocock 스킬</b>(<code>/to-spec</code>, <code>/to-tickets</code>, <code>/triage</code>)로 작업을 <b>GitHub 이슈 여러 개</b>로 쪼갠다. 이슈 사이의 순서는 GitHub의 선행 관계(blocked by)로 건다.</li>
+  <li><b>루프 스크립트</b> <code>ticket-loop.sh</code>가 준비된 이슈를 순서대로 하나씩 집는다. 이슈마다 <b>Orca 워크트리</b>를 새로 만들고, 그 안에서 Claude Code를 띄워 <code>/implement</code>를 시킨다(워크트리와 Orca 자체는 2장).</li>
+  <li>워커(그 Claude Code)가 테스트 우선으로 구현하고 자체 리뷰를 거쳐 PR을 연다. 루프는 CI가 통과하면 병합하고, (설정했다면) 병합된 기본 브랜치로 무거운 검증을 한 번 돌린 뒤, 워크트리를 지우고 다음 이슈로 간다.</li>
+  <li>한 묶음이 끝나면 사람이 PR 본문과 루프 로그의 티켓별 요약 줄을 읽고 <code>/retro</code>로 환경(스킬·규칙·검사)을 고친다. 다음 묶음은 고친 환경에서 돈다.</li>
+</ol>
+
+<figure>
+<svg viewBox="0 0 720 360" width="88%" style="display:block;margin:0 auto" xmlns="http://www.w3.org/2000/svg" font-family="NanumGothic, Noto Sans CJK KR, Apple SD Gothic Neo, sans-serif" font-size="12">
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#5b6270"/>
+    </marker>
+  </defs>
+  <style>
+    .box { fill:#fff; stroke:#2457c5; stroke-width:1.4; }
+    .gh { fill:#f4f6f8; stroke:#8a93a3; }
+    .bad { fill:#fbeee8; stroke:#b4441c; }
+    .good { fill:#e6f4ec; stroke:#1f7a4d; }
+    .t { fill:#1c1f24; text-anchor:middle; }
+    .s { fill:#5b6270; text-anchor:middle; font-size:10.5px; }
+    .ln { stroke:#5b6270; stroke-width:1.3; fill:none; marker-end:url(#a); }
+    .lb { fill:#5b6270; font-size:10.5px; }
+  </style>
+  <rect class="box gh" x="10" y="20" width="150" height="56" rx="8"/>
+  <text class="t" x="85" y="44">① 대상 선택</text>
+  <text class="s" x="85" y="62">라벨 · 선행 · PR 확인</text>
+  <rect class="box" x="200" y="20" width="150" height="56" rx="8"/>
+  <text class="t" x="275" y="44">② Orca 워크트리 생성</text>
+  <text class="s" x="275" y="62">기본 브랜치 · setup 훅</text>
+  <rect class="box" x="390" y="20" width="150" height="56" rx="8"/>
+  <text class="t" x="465" y="44">③ /implement #N</text>
+  <text class="s" x="465" y="62">tdd → ticket-review → PR</text>
+  <rect class="box gh" x="580" y="20" width="130" height="56" rx="8"/>
+  <text class="t" x="645" y="44">④ PR 열림</text>
+  <text class="s" x="645" y="62">Closes #N · in-review</text>
+  <rect class="box gh" x="580" y="130" width="130" height="56" rx="8"/>
+  <text class="t" x="645" y="154">⑤ 충돌·CI 확인</text>
+  <text class="s" x="645" y="172">PR 체크 전부</text>
+  <rect class="box" x="390" y="130" width="150" height="56" rx="8"/>
+  <text class="t" x="465" y="154">수리 요청</text>
+  <text class="s" x="465" y="172">같은 워커 터미널에 전송</text>
+  <rect class="box good" x="580" y="240" width="130" height="56" rx="8"/>
+  <text class="t" x="645" y="264">⑥ 병합</text>
+  <text class="s" x="645" y="282">이슈 자동 닫힘</text>
+  <rect class="box good" x="390" y="240" width="150" height="56" rx="8"/>
+  <text class="t" x="465" y="264">⑦ 검증·정리</text>
+  <text class="s" x="465" y="282">병합 뒤 검증 · 삭제 · 요약</text>
+  <rect class="box bad" x="200" y="130" width="150" height="56" rx="8"/>
+  <text class="t" x="275" y="154">루프 중단</text>
+  <text class="s" x="275" y="172">워크트리 남김 · 알림</text>
+  <path class="ln" d="M160,48 H198"/>
+  <path class="ln" d="M350,48 H388"/>
+  <path class="ln" d="M540,48 H578"/>
+  <path class="ln" d="M645,76 V128"/>
+  <path class="ln" d="M580,150 H542"/><text class="lb" x="548" y="143">실패</text>
+  <path class="ln" d="M540,170 H578"/><text class="lb" x="546" y="186">재확인</text>
+  <path class="ln" d="M645,186 V238"/><text class="lb" x="652" y="216">통과</text>
+  <path class="ln" d="M580,268 H542"/>
+  <path class="ln" d="M390,268 H85 V78"/><text class="lb" x="160" y="262">다음 티켓 (대상 재계산)</text>
+  <path class="ln" d="M390,158 H352"/><text class="lb" x="353" y="182">또 실패</text>
+  <path class="ln" d="M465,76 V100 H275 V128" stroke-dasharray="4 3"/><text class="lb" x="290" y="96">PR 없이 멈춤 · 타임아웃 · Orca 끊김</text>
+</svg>
+<figcaption>그림 1. 티켓 한 건의 흐름. 회색은 GitHub, 파랑은 Orca·Claude Code, 초록은 성공 경로, 빨강은 사람이 이어받는 지점이다.</figcaption>
+</figure>
+
+<div class="dense">
+<h3>1.4 세 가지 설계 원칙</h3>
+<table>
+  <tr><th style="width:30%">원칙</th><th>뜻과 효과</th></tr>
+  <tr><td><b>티켓 하나 = 워크트리 하나 = 새 에이전트</b></td><td>메인 체크아웃을 건드리지 않고, 티켓마다 깨끗한 기본 브랜치에서 시작한다. 에이전트 컨텍스트도 매번 비어 있어서 앞 티켓의 가정이 다음 티켓으로 넘어가지 않는다.</td></tr>
+  <tr><td><b>상태는 GitHub에만 둔다</b></td><td>루프는 따로 상태 파일을 두지 않는다. 무엇이 끝났고 무엇이 남았는지는 이슈 라벨·열림 여부·PR로 판단한다. 그래서 <b>복구의 기본은 상태를 GitHub에 맞춰 놓고 루프를 다시 실행하는 것</b>이다(10장).</td></tr>
+  <tr><td><b>확실하면 병합하고, 애매하면 멈춘다</b></td><td>CI가 녹색일 때만 병합한다. 워커 질문, 수리 실패, 연결 끊김처럼 애매한 상황에서는 루프 전체를 멈추고 워크트리를 증거로 남긴다.</td></tr>
+</table>
+
+<h3>1.5 사람과 도구의 역할</h3>
+<table>
+  <tr><th style="width:22%">누가</th><th>하는 일</th></tr>
+  <tr><td>사람</td><td>요구사항 정리, 티켓 승인, 라벨 관리, 멈춘 티켓 이어받기, 병합된 결과 사후 검수, 회고(<code>/retro</code>)로 환경 고치기</td></tr>
+  <tr><td>mattpocock 스킬</td><td>스펙·티켓 작성 규칙, 구현 규율(TDD), 자체 리뷰(Standards·Spec 두 축), 회고. 구현 절차(<code>implement</code>)와 PR 본문 양식(<code>pr</code>)은 저장소가 소유한 사본을 쓴다(3장)</td></tr>
+  <tr><td>Orca</td><td>워크트리 격리, 에이전트 터미널 실행·관찰(<code>tui-idle</code>), 워크스페이스 상태 표시, setup 훅</td></tr>
+  <tr><td><code>ticket-loop.sh</code></td><td>대상 선택, 워커 기동, PR·CI 대기, 수리 지시, 병합, 병합 뒤 검증, 정리, 티켓별 요약 로그</td></tr>
+  <tr><td>GitHub + CI</td><td>단 하나의 상태 저장소이자 병합 여부를 가르는 판정자</td></tr>
+</table>
+</div>
+</section>
+
+<!-- ============ 2 ============ -->
+<section>
+<h2>2. 워크트리와 Orca</h2>
+<h3>2.1 git 워크트리란</h3>
+<p>보통 git 저장소 하나에는 작업 디렉터리가 하나 있고, 브랜치를 바꾸려면 <code>git checkout</code>으로 그 디렉터리의 파일을 통째로 갈아 끼운다. <b>워크트리</b>(<code>git worktree</code>)는 <b>같은 저장소에 작업 디렉터리를 여러 개</b> 두는 기능이다. 각 디렉터리는 서로 다른 브랜치를 체크아웃하고, 커밋·브랜치·원격 정보가 들어 있는 <code>.git</code> 데이터는 하나를 공유한다.</p>
+<pre><code>git worktree add ../todo-app-issue-41 -b issue-41 origin/main   # 새 디렉터리에 새 브랜치
+git worktree list                                                # 디렉터리 ↔ 브랜치 대응
+git worktree remove ../todo-app-issue-41                         # 디렉터리 삭제 (브랜치는 남는다)
+git worktree prune                                               # 사라진 디렉터리의 등록 정보 정리</code></pre>
+
+<figure>
+<svg viewBox="0 0 720 242" width="100%" xmlns="http://www.w3.org/2000/svg" font-family="NanumGothic, Noto Sans CJK KR, Apple SD Gothic Neo, sans-serif" font-size="12">
+  <style>
+    .wbox { fill:#fff; stroke:#2457c5; stroke-width:1.4; }
+    .wgit { fill:#f4f6f8; stroke:#8a93a3; stroke-width:1.4; }
+    .wt { fill:#1c1f24; text-anchor:middle; }
+    .ws { fill:#5b6270; text-anchor:middle; font-size:10.5px; }
+    .wl { stroke:#8a93a3; stroke-width:1.2; fill:none; stroke-dasharray:4 3; }
+    .mono { font-family: "NanumGothicCoding", "DejaVu Sans Mono", monospace; font-size:10.5px; }
+  </style>
+  <rect class="wgit" x="260" y="20" width="200" height="62" rx="8"/>
+  <text class="wt" x="360" y="44">공유 .git 데이터</text>
+  <text class="ws" x="360" y="62">커밋 · 브랜치 · 원격 · 스태시</text>
+
+  <rect class="wbox" x="20" y="140" width="190" height="68" rx="8"/>
+  <text class="wt" x="115" y="162">메인 체크아웃</text>
+  <text class="ws mono" x="115" y="180">~/src/todo-app</text>
+  <text class="ws" x="115" y="196">main · 사람이 쓴다</text>
+
+  <rect class="wbox" x="265" y="140" width="190" height="68" rx="8"/>
+  <text class="wt" x="360" y="162">워크트리 issue-41</text>
+  <text class="ws mono" x="360" y="180">~/orca/issue-41</text>
+  <text class="ws" x="360" y="196">issue-41-csv-rows · 워커 A</text>
+
+  <rect class="wbox" x="510" y="140" width="190" height="68" rx="8"/>
+  <text class="wt" x="605" y="162">워크트리 issue-43</text>
+  <text class="ws mono" x="605" y="180">~/orca/issue-43</text>
+  <text class="ws" x="605" y="196">issue-43-export-button · 워커 B</text>
+
+  <path class="wl" d="M300,82 L115,140"/>
+  <path class="wl" d="M360,82 L360,140"/>
+  <path class="wl" d="M420,82 L605,140"/>
+  <text class="ws" x="360" y="232">각 디렉터리가 다른 브랜치를 체크아웃한다 — 서로 파일을 건드리지 않는다</text>
+</svg>
+<figcaption>그림 2. 워크트리는 저장소 데이터를 공유하는 독립된 작업 디렉터리다. 같은 브랜치를 두 곳에 체크아웃할 수는 없다.</figcaption>
+</figure>
+
+<table>
+  <tr><th style="width:26%">성질</th><th>뜻</th></tr>
+  <tr><td>파일시스템 격리</td><td>한 워크트리에서 파일을 고치거나 테스트가 임시 파일을 만들어도 다른 워크트리에는 보이지 않는다.</td></tr>
+  <tr><td>저장소 데이터 공유</td><td>커밋은 즉시 다른 워크트리에서 보인다(<code>git log</code>, <code>git merge</code>). 복제(clone)와 달리 원격을 두 번 받지 않고, 디스크도 작업 파일만큼만 더 쓴다.</td></tr>
+  <tr><td>브랜치당 한 곳</td><td>같은 브랜치를 두 워크트리에 동시에 체크아웃할 수 없다. 메인 체크아웃이 <code>main</code>을 쓰고 있으면 워커는 <code>main</code>을 체크아웃하지 못한다. 그래서 워커 프롬프트가 "<code>main</code>을 체크아웃하지 말고 <code>origin/main</code>에서 브랜치를 만들라"고 한다.</td></tr>
+  <tr><td>추적되지 않는 파일은 없다</td><td>새 워크트리에는 Git이 추적하는 파일만 있다. <code>.env</code>, <code>node_modules/</code>, 빌드 산출물은 없으므로 setup 훅으로 만든다(4장 9단계).</td></tr>
+</table>
+
+<h3>2.2 이 조합에서 워크트리가 하는 일</h3>
+<table>
+  <tr><th style="width:28%">효과</th><th>설명</th></tr>
+  <tr><td><b>사람의 작업을 보호한다</b></td><td>워커는 메인 체크아웃을 전혀 건드리지 않는다. 루프가 도는 동안에도 사람은 자기 디렉터리에서 다른 브랜치 작업을 계속할 수 있다. 에이전트가 <code>git checkout</code>·<code>git stash</code>·<code>git reset</code>을 잘못 실행해도 피해는 그 워크트리 안에 머문다.</td></tr>
+  <tr><td><b>티켓마다 같은 출발점</b></td><td>워크트리는 매번 <code>origin/main</code> 최신 커밋에서 새로 만들어진다. 앞 티켓이 남긴 미커밋 변경, 임시 파일, 캐시가 다음 티켓에 섞이지 않는다. 재현 가능한 실행의 바탕이다.</td></tr>
+  <tr><td><b>에이전트 컨텍스트 격리</b></td><td>워크트리마다 Claude Code 프로세스가 새로 뜬다. 대화 맥락이 비어 있으니 앞 티켓에서 내린 잘못된 가정이 이어지지 않고, 컨텍스트 창이 티켓 하나에 온전히 쓰인다.</td></tr>
+  <tr><td><b>멈춘 자리가 그대로 남는다</b></td><td>루프가 멈추면 워크트리를 지우지 않는다. 커밋되지 않은 변경, 터미널 기록, 브랜치가 그 디렉터리에 그대로 있어 사람이 열어 보고 이어갈 수 있다(10장). 체크아웃 하나로 일했다면 다음 작업이 이 흔적을 덮어썼을 것이다.</td></tr>
+  <tr><td><b>필요하면 병렬로 넓힐 수 있다</b></td><td>이 루프는 직렬이지만, 워크트리 구조 자체는 동시에 여러 워커를 돌리는 데 쓰인다(<code>/implement-spec</code>, 12장 FAQ). 직렬에서 병렬로 갈 때 작업 방식을 바꿀 필요가 없다.</td></tr>
+  <tr><td><b>정리가 명확하다</b></td><td>티켓이 끝나면 디렉터리를 통째로 지운다. 반쯤 남은 상태가 없다.</td></tr>
+</table>
+<div class="note"><b>비용.</b> 워크트리마다 의존성 설치(<code>npm ci</code> 등)가 다시 일어나므로 setup 훅 시간과 디스크를 쓴다. 패키지 관리자의 전역 캐시(pnpm store, npm cache 등)를 쓰면 대부분 줄어든다. 디스크가 걱정되면 루프가 끝난 워크트리를 바로 지우는 기본 동작을 유지하고, <code>--no-merge</code>로 남긴 워크트리는 검토 후 바로 정리한다.</div>
+
+<h3>2.3 다른 도구와 비교했을 때 Orca의 강점</h3>
+<p>워크트리 자체는 git 기능이므로 어떤 도구로도 쓸 수 있다. 차이는 <b>"워크트리 만들기 → 에이전트 띄우기 → 상태 보기 → 지시 보내기 → 정리"를 얼마나 자동화할 수 있는가</b>에 있다. 무인 루프에는 이 다섯 가지가 전부 명령 한 줄로 되어야 한다.</p>
+<table>
+  <tr><th style="width:21%">필요한 것</th><th style="width:25%">터미널 + <code>git worktree</code> 직접</th><th style="width:25%">일반 IDE + 에이전트 확장<br><span class="small muted">(VS Code·Cursor·JetBrains 등)</span></th><th>Orca</th></tr>
+  <tr><td>워크트리 생성과 에이전트 기동</td><td>스크립트로 가능하나 디렉터리·브랜치·setup·에이전트 실행을 직접 엮어야 한다</td><td>창 하나가 체크아웃 하나다. 워커마다 창을 따로 열고 워크트리는 손으로 만든다</td><td><code>worktree create --agent claude --prompt …</code> 한 번에 디렉터리·브랜치·setup 훅·에이전트 기동·첫 프롬프트까지</td></tr>
+  <tr><td>에이전트가 멈췄는지 알기</td><td>PTY 출력을 직접 파싱해야 한다</td><td>사람이 화면을 봐야 안다. 외부에서 물어볼 방법이 보통 없다</td><td><code>terminal wait --for tui-idle</code>가 "입력을 기다리는 중"을 신호로 준다. 루프의 "PR 없이 멈춤" 판정이 이 신호에 기대고 있다</td></tr>
+  <tr><td>에이전트에 지시 보내기</td><td>tmux <code>send-keys</code> 같은 우회가 필요하다</td><td>사람이 채팅창에 입력한다</td><td><code>terminal send</code>로 보내고 수락 여부를 JSON으로 받는다(충돌·CI 수리 지시)</td></tr>
+  <tr><td>작업 상태판</td><td>없음</td><td>창 제목과 git 상태 정도</td><td>워크트리마다 카드: 상태(<code>todo</code>→<code>completed</code>), 코멘트, 연결된 이슈·PR, 읽지 않음 표시. 밤새 돌린 뒤 어디서 멈췄는지 사이드바에서 바로 보인다</td></tr>
+  <tr><td>스크립트 친화성</td><td>높음(전부 셸)</td><td>낮음. 확장 API는 있어도 에이전트 세션을 외부에서 제어하는 표면은 드물다</td><td>거의 모든 명령이 <code>--json</code>을 지원하고 <code>ok</code>/<code>error</code> 구조가 일정하다</td></tr>
+  <tr><td>여러 종류의 에이전트</td><td>각자 실행 방법을 알아야 한다</td><td>확장마다 다르다. 보통 한 제품에 묶인다</td><td>Claude Code, Codex, OpenCode, Pi 등을 같은 방식으로 띄운다. 워커를 바꿔도 루프는 그대로다</td></tr>
+  <tr><td>setup 훅</td><td>직접 작성</td><td>없음(태스크 설정으로 흉내)</td><td><code>orca.yaml</code>의 <code>scripts.setup</code>이 워크트리마다 실행된다. <code>ORCA_ROOT_PATH</code>·<code>ORCA_WORKTREE_PATH</code>로 메인 체크아웃의 파일을 복사한다</td></tr>
+  <tr><td>이어받기</td><td>디렉터리로 <code>cd</code>해서 에이전트를 다시 띄운다</td><td>그 디렉터리를 새 창으로 연다</td><td>사이드바 카드를 클릭하면 그 워크트리의 터미널이 그대로 열린다. 워커와 나눈 대화가 보인다</td></tr>
+</table>
+<p>요약하면, IDE는 <b>사람이 한 체크아웃에서 코드를 보는 도구</b>이고, Orca는 <b>여러 워크트리에서 도는 에이전트를 관리하는 도구</b>다. 이 루프가 Orca에서 가져다 쓰는 것은 결국 세 가지다. 한 번에 만드는 워크트리, <code>tui-idle</code> 신호, JSON으로 돌아오는 상태.</p>
+
+<h3>2.4 Orca를 쓸 때 알아 둘 제약</h3>
+<ul>
+  <li><b>데스크톱 앱이 켜져 있어야 한다.</b> CLI는 실행 중인 앱에 명령을 보낸다. 서버·CI에서 헤드리스로 돌리는 용도가 아니다. 앱이 꺼지면 루프는 멈추고(R4), 워크트리는 디스크에 남는다.</li>
+  <li><b>CLI 플래그는 버전을 탄다.</b> <code>--agent</code>·<code>--prompt</code>·<code>--setup</code> 같은 플래그는 비교적 최근에 들어왔다. <code>orca worktree create --help</code>로 확인하고, 없으면 워크트리를 만든 뒤 <code>terminal create</code>·<code>terminal send</code>로 나눠 한다.</li>
+  <li><b>응답 형식도 버전을 탄다 — exit 코드만 믿지 않는다.</b> Orca 1.4.223의 <code>terminal wait</code>는 기다리다 시간이 다 되면 <code>{"ok": false, "error": {"code": "timeout"}}</code>과 함께 <b>exit 1</b>을 돌려준다. exit 코드만 보면 "터미널에 닿지 못함"과 구별되지 않아, 초판 스크립트는 10분 넘게 일하던 워커를 두고 루프를 멈췄다. 2판 스크립트는 JSON의 <code>error.code</code>로 "아직 일하는 중"과 "닿지 못함"을 가른다(부록 D <code>terminal_idle</code>). Orca를 올린 뒤에는 <code>--max 1</code>로 한 번 지켜본다.</li>
+  <li><b>Linux에서는 <code>orca-ide</code>.</b> 4장 3단계 참고.</li>
+  <li><b><code>tui-idle</code>은 추정 신호다.</b> 화면 출력이 멈추고 입력 프롬프트가 보이는 상태를 감지한다. 긴 테스트가 출력 없이 돌면 잠시 idle로 보이고, PR을 여는 순간에는 GitHub에 PR이 보이기 전에 idle이 먼저 잡힌다(실제 운영에서 매 티켓 관찰). 루프가 "기동 후 2분 제외, idle 뒤 30초 쉬고 PR 재확인, 화면이 바뀌었으면 횟수 초기화, 연속 3회"로 판정하는 이유다.</li>
+  <li><b>에이전트 기동이 가끔 실패한다.</b> Orca가 셸에 기동 명령을 넣을 때 앞 글자가 빠져(<code>laude …</code>) 셸 프롬프트에 멈춘 일이 있었다(연속 4건). 루프는 배너가 90초 안에 보이지 않으면 한 번 다시 띄운다.</li>
+  <li><b>훅 설정은 저장소 파일보다 앱 설정이 먼저다.</b> 저장소에 <code>orca.yaml</code>을 커밋해도 앱 설정의 명령 출처가 기본값("Local only")이면 무시된다(4장 9단계).</li>
+</ul>
+</section>
+
+<!-- ============ 3 ============ -->
+<section>
+<h2>3. 구성 요소</h2>
+<h3>사용하는 mattpocock 스킬</h3>
+<table>
+  <tr><th style="width:24%">스킬</th><th style="width:14%">언제</th><th>역할</th></tr>
+  <tr><td><code>/setup-matt-pocock-skills</code></td><td>저장소당 1회</td><td>이슈 트래커(GitHub), 분류 라벨, 도메인 문서 위치를 정해 <code>docs/agents/</code> 아래 설정 파일과 <code>CLAUDE.md</code>의 <code>## Agent skills</code> 블록을 만든다. 다른 엔지니어링 스킬이 이 설정을 읽는다.</td></tr>
+  <tr><td><code>/grill-with-docs</code>, <code>/grill-me</code></td><td>기획</td><td>요구사항을 집요하게 캐물어 결정되지 않은 부분을 드러낸다. 용어집·ADR도 함께 다듬는다.</td></tr>
+  <tr><td><code>/to-spec</code></td><td>기획</td><td>대화를 스펙 이슈 하나로 정리해 트래커에 올린다(<span class="label">ready-for-agent</span> 라벨이 붙는다, 5장 주의 참고).</td></tr>
+  <tr><td><code>/to-tickets</code></td><td>분해</td><td>스펙을 독립적으로 검증 가능한 세로 조각(vertical slice) 티켓으로 쪼갠다. 선행 관계는 GitHub 기본 기능(blocked by)으로 걸고, <span class="label">ready-for-agent</span>를 붙여 발행한다.</td></tr>
+  <tr><td><code>/triage</code></td><td>상시</td><td>들어온 이슈를 분류해 상태 라벨을 붙이고, 에이전트가 바로 일할 수 있는 브리프를 쓴다.</td></tr>
+  <tr><td><code>/implement</code> <span class="tag g">저장소 소유</span></td><td>워커</td><td>티켓을 읽고 구현한다. 선행 확인 → 브랜치 → <code>tdd</code> → 검증 → 커밋 → <code>ticket-review</code> 반영 → PR → 라벨까지 <b>절차 전체가 이 파일 하나</b>에 있다. upstream 사본을 저장소에 복사해 고쳐 쓴다(부록 B).</td></tr>
+  <tr><td><code>tdd</code></td><td>워커</td><td>정한 테스트 지점(seam)에서 red → green 사이클로 구현한다.</td></tr>
+  <tr><td><code>ticket-review</code><br><span class="small muted">(upstream 이름 <code>code-review</code>)</span></td><td>워커</td><td>기준점 이후 변경을 Standards(저장소 코딩 표준 + 코드 스멜 기준)와 Spec(이슈 요구와 일치하는가) 두 축으로, 병렬 서브에이전트가 검토한다. Claude Code 내장 <code>/code-review</code>와 이름이 겹쳐 바꿔 들인다(4장 5단계).</td></tr>
+  <tr><td><code>pr</code> <span class="tag g">저장소 소유</span></td><td>워커</td><td>PR 본문 양식. upstream 양식(Summary · Evidence · Merge Danger)은 사람이 여는 PR용이다. 루프 PR은 사람이 <b>나중에</b> 인수 조건·테스트 지점·검증 못 한 것·남은 판단만 골라 읽으므로 그 순서로 고정한 사본을 쓴다(부록 B).</td></tr>
+  <tr><td><code>/retro</code></td><td>묶음 끝</td><td>세션 기록과 루프 로그를 읽고 환경(탐색 단서, 자동 검사, 코딩 표준, 도구 비용) 개선 후보를 낸다. 루프 운영의 피드백 고리다.</td></tr>
+</table>
+<div class="note"><b>왜 <code>implement</code>·<code>pr</code>을 저장소가 소유하나.</b> 초판은 절차를 루프의 워커 프롬프트(7개 규칙)에 적었다. 그러자 사람이 대화형으로 <code>/implement</code>를 쓸 때와 무인 워커가 받는 절차가 둘로 갈라졌고, 한쪽만 고치는 일이 생겼다. 2판은 절차를 <code>implement</code> 스킬 한 곳에 두고, 프롬프트에는 "질문하지 마라·막히면 코멘트하고 멈춰라"처럼 <b>무인 실행에서만 참인 것</b>만 남긴다(8장).</div>
+
+<h3>나머지 구성 요소</h3>
+<table>
+  <tr><th style="width:24%">구성 요소</th><th>역할</th></tr>
+  <tr><td><b>Orca</b> (데스크톱 앱 + CLI)</td><td>여러 코딩 에이전트를 각자의 git 워크트리에서 나란히 돌리는 오케스트레이터다. 루프는 CLI로 워크트리를 만들고(<code>worktree create --agent claude --prompt …</code>), 터미널이 입력을 기다리는 상태인지 확인하며(<code>terminal wait --for tui-idle</code>), 수리 지시를 보낸다(<code>terminal send</code>). 워크스페이스 카드 상태(<code>todo</code>·<code>in-progress</code>·<code>in-review</code>·<code>completed</code>)와 코멘트도 갱신한다.</td></tr>
+  <tr><td><b>Claude Code</b></td><td>Orca가 워크트리마다 띄우는 워커. 저장소의 <code>CLAUDE.md</code>·스킬·<code>.claude/settings.json</code>을 읽는다.</td></tr>
+  <tr><td><b>gh</b> / <b>jq</b> / <b>git</b></td><td>이슈·PR 조회, CI 대기, 병합, 라벨 정리, JSON 처리, 브랜치 정리</td></tr>
+  <tr><td><b>CI</b> (예: GitHub Actions)</td><td>PR마다 도는 체크. 루프가 병합 여부를 판단하는 유일한 기준이다. 체크가 하나도 없으면 루프는 병합하지 않는다(<code>CI_SKIP_REGEX</code>에 맞는 PR만 예외).</td></tr>
+  <tr><td><b><code>ticket-loop.sh</code></b></td><td>위 전부를 엮는 bash 스크립트(부록 D). 저장소의 <code>scripts/</code>에 두고 쓴다.</td></tr>
+  <tr><td><b>저장소 파일</b></td><td><code>.claude/skills/</code>(벤더링한 스킬), <code>.claude/settings.json</code>(<code>deny</code>), <code>orca.yaml</code>(setup 훅), <code>.orca-loop/worker-rules.md</code>(무인 전용 규칙), <code>docs/agents/</code>(트래커·라벨·도메인 설정), 코딩 표준 문서. 워커는 <code>origin/main</code>의 것만 보므로 <b>바꾸면 먼저 병합</b>한다.</td></tr>
+</table>
+
+<h3>라벨과 Orca 상태가 바뀌는 시점</h3>
+<table>
+  <tr><th style="width:24%">시점</th><th>GitHub 이슈</th><th>Orca 워크스페이스</th></tr>
+  <tr><td>대기</td><td><span class="label">ready-for-agent</span></td><td>—</td></tr>
+  <tr><td>워크트리 생성</td><td>워커가 자기를 담당자로 단다</td><td><code>in-progress</code> · "티켓 루프: /implement N 진행 중"</td></tr>
+  <tr><td>PR 열림</td><td><span class="label">in-review</span> 추가, 인수 조건 체크</td><td><code>in-review</code> · PR 번호 연결</td></tr>
+  <tr><td>병합</td><td>닫힘(<code>Closes #N</code>), <span class="label">in-review</span> 제거</td><td><code>completed</code> → 워크트리 삭제</td></tr>
+  <tr><td>루프 중단</td><td>그대로</td><td><code>todo</code> + 읽지 않음 점 · "루프 중단: … 확인 필요"</td></tr>
+</table>
+</section>
+
+<!-- ============ 4 ============ -->
+<section>
+<h2>4. 환경 구축과 설치</h2>
+<p>아래 순서대로 한 번 해 두면 된다. 각 단계 끝의 "확인"이 통과하면 다음 단계로 간다. 예시는 macOS(Homebrew)와 Ubuntu 기준이다.</p>
+<div class="ok"><b>키트로 줄이기.</b> 1~3단계(도구·로그인·Orca 설치)를 마쳤다면 나머지는 <code>orca-loop-kit</code>이 대부분 한다. 저장소 루트에서 <code>bash &lt;(gh api repos/iwishash/orca-loop-kit/contents/install.sh -H "Accept: application/vnd.github.raw")</code>를 실행하면 4·5·7단계, 2단계의 git 자격 증명, 10단계의 <code>deny</code>, 13단계의 파일 배치가 끝난다. 이어서 Claude Code에서 <code>/setup-matt-pocock-skills</code>(6단계)와 <code>/setup-orca-loop</code>(8·9·11·12단계)를 실행하고 PR을 병합한다. 사람이 손으로 할 것은 9단계의 Orca 앱 설정뿐이다. 아래 단계는 키트가 하는 일의 설명이자, 키트 없이 할 때의 절차다.</div>
+
+<div class="step"><div class="n">1</div><div class="b">
+<p><b>기본 도구</b> — git, GitHub CLI, jq, Node.js(스킬 설치용 <code>npx</code>), Claude Code.</p>
+<pre><code># macOS
+brew install git gh jq node
+# Ubuntu
+sudo apt install -y git jq nodejs npm   # gh는 cli.github.com 안내에 따라 apt 저장소 추가 후 설치
+
+# Claude Code (공식 설치 안내를 따른다. npm 예)
+npm install -g @anthropic-ai/claude-code
+claude          # 처음 한 번 실행해 로그인</code></pre>
+<p class="small muted">확인: <code>git --version && gh --version && jq --version && claude --version</code></p>
+</div></div>
+
+<div class="step"><div class="n">2</div><div class="b">
+<p><b>GitHub 로그인</b> — 루프가 이슈 편집, PR 병합, 원격 브랜치 삭제를 하므로 쓰기 권한이 필요하다.</p>
+<pre><code>gh auth login          # GitHub.com → HTTPS → 브라우저 로그인
+gh auth status         # 로그인 계정과 토큰 범위 확인
+gh auth setup-git      # git push도 gh 토큰을 쓰게 한다(아래 주의)</code></pre>
+<div class="warn"><b>무인 <code>git push</code>가 출력 없이 멈출 수 있다.</b> macOS의 시스템·Homebrew git 설정에는 <code>credential.helper = osxkeychain</code>이 들어 있다. 무인 워커 세션은 키체인 확인 창을 띄우지 못해 <code>git push</code>가 아무 출력 없이 기다린다(<code>git fetch</code>는 정상이라 알아채기 어렵다). 루프에서는 워커가 "PR 직전 idle"로 보이다가 멈춤 판정을 받는다. 전역이면 <code>gh auth setup-git</code>, 저장소 범위로만 하려면 메인 체크아웃에서 <code>git config --local credential.helper '!gh auth git-credential'</code>(워크트리가 설정을 공유한다). 이미 멈춘 push는 죽이고 <code>GIT_TERMINAL_PROMPT=0 git -c credential.helper= -c 'credential.helper=!gh auth git-credential' push -u origin &lt;브랜치&gt;</code>로 다시 한다.</div>
+</div></div>
+
+<div class="step"><div class="n">3</div><div class="b">
+<p><b>Orca 설치와 CLI 등록</b></p>
+<pre><code># macOS
+brew install --cask stablyai/orca/orca
+# Linux: onorca.dev/download 또는 GitHub Releases의 AppImage
+#        (Arch: yay -S stably-orca-bin)</code></pre>
+<p>Orca를 실행하고 <b>Settings → General → Orca CLI</b>에서 CLI를 등록한다.</p>
+<div class="warn"><b>Linux 주의.</b> Linux에서 <code>orca</code>는 보통 GNOME 스크린리더(<code>/usr/bin/orca</code>)를 가리킨다. Orca 터미널 밖에서는 <code>orca-ide</code>를 쓴다. <code>ticket-loop.sh</code>는 Linux에서 기본으로 <code>orca-ide</code>를 고르고, <code>ORCA_CLI</code> 환경변수로 바꿀 수 있다. 이 문서의 <code>orca</code>는 Linux에서는 <code>orca-ide</code>로 읽는다.</div>
+<p class="small muted">확인: <code>orca repo list --json</code>이 JSON을 돌려준다(앱이 꺼져 있으면 <code>orca open --json</code>으로 켠다).</p>
+</div></div>
+
+<div class="step"><div class="n">4</div><div class="b">
+<p><b>저장소를 Orca에 등록</b> — 루프는 git remote(<code>github.com/소유자/저장소</code>)로 Orca 저장소를 찾는다.</p>
+<pre><code>cd ~/src/todo-app
+orca repo add --path "$(pwd)" --json
+orca repo list --json | jq '.result.repos[] | {id, key: .gitRemoteIdentity.canonicalKey}'</code></pre>
+<p class="small muted">확인: 목록에 <code>"key": "github.com/acme/todo-app"</code>가 보인다.</p>
+</div></div>
+
+<div class="step"><div class="n">5</div><div class="b">
+<p><b>mattpocock 스킬 설치</b> — 아래 두 방법 중 <b>하나만</b> 쓴다. 둘 다 설치하면 스킬이 두 벌이 된다.</p>
+<pre><code># (가) Claude Code 플러그인 — 자동 업데이트
+claude plugin install mattpocock-skills@claude-plugins-official
+
+# (나) 저장소에 파일로 복사 — 팀이 같은 버전을 쓰도록 커밋할 수 있다, 수동 업데이트
+npx skills@latest add mattpocock/skills -a claude-code   # 설치할 스킬을 물으면 전부 고른다
+npx skills@latest update      # 나중에 업데이트할 때</code></pre>
+<p>무인 루프에서는 <b>(나)</b>를 권한다. 워커 워크트리는 저장소를 그대로 체크아웃하므로, 커밋된 <code>.claude/skills/</code>가 모든 워커에 똑같이 적용된다. 루프 도중 자동 업데이트로 스킬 동작이 바뀌지도 않는다. 플러그인 방식(가)은 루프를 돌리는 컴퓨터 사용자 환경에 설치돼 있어야 하고, 클라우드 세션 같은 다른 환경에서는 버전이 달라질 수 있다.</p>
+<p>(나)로 들인 뒤 세 가지를 손본다. 직접 하기 번거로우면 이 셋을 하는 동기화 스크립트를 저장소에 두고, upstream 커밋·버전을 매니페스트 파일(예: <code>.claude/skills/.mattpocock.json</code>)에 남긴다.</p>
+<table>
+  <tr><th style="width:28%">할 일</th><th>이유</th></tr>
+  <tr><td><code>code-review</code> → <code>ticket-review</code>로 이름 바꾸기(다른 스킬 본문의 참조도 함께)</td><td>Claude Code에 내장 <code>/code-review</code> 명령이 있다. 같은 이름이면 워커가 어느 쪽을 부르는지 흔들린다.</td></tr>
+  <tr><td><code>implement</code>·<code>pr</code>을 <b>저장소 소유</b>로 표시하고 동기화에서 빼기</td><td>저장소의 브랜치 규칙·검증 명령·PR 양식을 넣어 고쳐 쓰는 파일이다(부록 B). 동기화가 덮어쓰면 절차가 사라진다. upstream이 바뀌면 변경 내역을 보고 손으로 옮긴다.</td></tr>
+  <tr><td>버전은 태그가 아니라 <b>커밋</b>으로 기록하기</td><td>upstream 기본 브랜치에는 마지막 태그 뒤 아직 출시되지 않은 변경이 쌓여 있다. "1.3.1"만 적으면 실제 내용과 다를 수 있다.</td></tr>
+</table>
+<p class="small muted">확인: Claude Code에서 <code>/</code>를 누르면 <code>/implement</code>, <code>/to-tickets</code>, <code>/setup-matt-pocock-skills</code>가 보이고, 같은 스킬이 두 벌 뜨지 않는다.</p>
+</div></div>
+
+<div class="step"><div class="n">6</div><div class="b">
+<p><b>저장소 설정</b> — 저장소 루트에서 Claude Code를 열고 실행한다.</p>
+<pre><code>/setup-matt-pocock-skills</code></pre>
+<p>질문에는 이렇게 답한다: 이슈 트래커 → <b>GitHub</b>, 분류 라벨 → 기본값(<span class="label">needs-triage</span> <span class="label">needs-info</span> <span class="label">ready-for-agent</span> <span class="label">ready-for-human</span> <span class="label">wontfix</span>), 도메인 문서 → 단일 컨텍스트(루트 <code>GLOSSARY.md</code> + <code>docs/adr/</code>). 결과로 다음 파일이 생긴다.</p>
+<pre><code>docs/agents/issue-tracker.md   # gh로 이슈를 읽고 쓰는 규칙
+docs/agents/triage-labels.md   # 역할 → 실제 라벨 이름
+docs/agents/domain.md          # 용어집·ADR 위치
+CLAUDE.md                      # "## Agent skills" 블록 추가</code></pre>
+<p><code>docs/agents/issue-tracker.md</code> 끝에 트래커 관례를 한 단락 덧붙인다. 구현 절차 자체는 <code>implement</code> 스킬(부록 B)에 두고, 여기에는 트래커에 관한 사실만 둔다.</p>
+<pre><code>## 티켓 작업 관례
+- 마일스톤 = 스펙 이슈 1건 + 하위 이슈(sub-issue) 티켓 `T&lt;NN&gt;: …`.
+- 티켓마다 최신 기본 브랜치에서 `issue-&lt;N&gt;-&lt;slug&gt;` 브랜치를 만든다.
+- PR 본문은 `Closes #&lt;N&gt;`으로 시작한다. PR을 열면 이슈에 `in-review` 라벨을 붙인다.
+- 선행 관계는 GitHub 기본 기능(blocked by)으로 건다. 시작 가능 여부는 선행 이슈 목록
+  (`gh api repos/{owner}/{repo}/issues/N/dependencies/blocked_by`)에서 열린 것을 세어 판단한다.
+  요약 값 `issue_dependencies_summary.blocked_by`는 선행 이슈가 닫힌 뒤에도 한동안 옛 값을 준다.</code></pre>
+<p>같은 단계에서 <code>CLAUDE.md</code>를 <b>짧게</b> 유지한다. 워커는 티켓마다 새로 뜨면서 <code>CLAUDE.md</code>를 매번 처음부터 읽는다. 코딩 관례·아키텍처·스택 설명은 별도 문서(예: <code>CODING_STANDARDS.md</code>, <code>docs/agents/architecture.md</code>)로 빼고 <code>CLAUDE.md</code>에는 "필요할 때 읽을 곳" 포인터만 둔다. 코딩 표준 문서는 <code>ticket-review</code>의 Standards 축이 읽는다.</p>
+</div></div>
+
+<div class="step"><div class="n">7</div><div class="b">
+<p><b>GitHub 라벨 만들기</b> — 이미 있으면 <code>--force</code>가 색·설명만 갱신한다.</p>
+<pre><code>gh label create ready-for-agent --color 0E8A16 --description "에이전트가 바로 구현 가능" --force
+gh label create ready-for-human --color FBCA04 --description "사람이 구현"            --force
+gh label create needs-info      --color D93F0B --description "정보 부족"              --force
+gh label create needs-triage    --color C5DEF5 --description "분류 필요"              --force
+gh label create wontfix         --color FFFFFF --description "하지 않음"              --force
+gh label create in-review       --color 5319E7 --description "PR 열림"                --force</code></pre>
+</div></div>
+
+<div class="step"><div class="n">8</div><div class="b">
+<p><b>CI 준비</b> — PR에서 도는 체크가 최소 하나 있어야 한다. 루프는 PR에 체크가 15분 안에 나타나지 않으면 병합하지 않고 멈춘다. Node 프로젝트 예시:</p>
+<pre><code># .github/workflows/ci.yml
+name: CI
+on: { pull_request: { branches: [main] } }
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: npm }
+      - run: npm ci
+      - run: npm run lint
+      - run: npm test</code></pre>
+<p class="small muted">브랜치 보호에서 필수 리뷰를 켜 두면 <code>gh pr merge</code>가 거절된다. 그때는 <code>--no-merge</code>로 운영하거나 보호 규칙을 조정한다.</p>
+<p><b>문서만 바뀐 PR은 CI를 건너뛰고 싶다면</b> 워크플로에 경로 필터를 두고, 같은 판정을 루프에도 알려 준다. 알려 주지 않으면 루프는 붙지 않는 체크를 15분 기다리다 멈춘다(R7).</p>
+<pre><code># .github/workflows/ci.yml
+on:
+  pull_request:
+    branches: [main]
+    paths-ignore: ["docs/**", ".claude/**", ".orca-loop/**", "**/*.md"]
+
+# 루프 실행 시 — 바뀐 파일이 전부 이 정규식에 맞으면 체크 없이 병합한다
+export CI_SKIP_REGEX='^(docs/|\.claude/|\.orca-loop/)|\.md$'</code></pre>
+<p class="small muted">두 목록은 손으로 맞춘다. 테스트가 문서를 문자열로 읽는다면(예: 문서 내용을 검사하는 테스트) 그 문서는 제외 목록에서 빼야 한다. 맞추기 번거로우면 워크플로 파일을 읽어 판정하는 작은 스크립트를 두고 루프의 <code>ci_expected</code>를 그것으로 바꾼다.</p>
+</div></div>
+
+<div class="step"><div class="n">9</div><div class="b">
+<p><b>워크트리 setup 훅 (<code>orca.yaml</code>)</b> — 새 워크트리에는 Git에 없는 파일(<code>.env</code> 등)과 의존성이 없다. 저장소 루트의 <code>orca.yaml</code>에 setup 스크립트를 두면 Orca가 워크트리를 만들 때마다 실행한다. 이때 <code>ORCA_ROOT_PATH</code>(메인 체크아웃)와 <code>ORCA_WORKTREE_PATH</code>(새 워크트리) 환경변수를 쓸 수 있다.</p>
+<pre><code># orca.yaml
+scripts:
+  setup: |
+    npm ci
+    # 개발용 비밀값은 메인 체크아웃에서 복사한다 (운영 값이 든 파일은 두지 않는다)
+    [ -f "$ORCA_ROOT_PATH/.env.local" ] &amp;&amp; cp "$ORCA_ROOT_PATH/.env.local" "$ORCA_WORKTREE_PATH/.env.local" || true
+# 에이전트가 setup이 끝난 뒤에 시작하도록
+setupAgentStartupPolicy: wait-for-setup</code></pre>
+<div class="warn"><b>앱 설정을 바꿔야 이 파일이 쓰인다.</b> Orca의 <b>Settings → Projects → &lt;저장소&gt; → Worktree Hooks → Advanced (Command source &amp; orca.yaml)</b>에서 Command Source를 <b>"orca.yaml only"</b>로 고르고, 같은 섹션의 <b>"Wait for setup to complete before starting agent"</b>를 켠다(설정 검색창에 <code>orca.yaml</code>을 치면 바로 나온다). 기본값 "Local only"는 저장소의 <code>orca.yaml</code>을 무시하고 앱에 저장된 로컬 명령만 쓴다.</div>
+<div class="warn"><b>운영 자격 증명은 넣지 않는다.</b> 워커는 사람 확인 없이 명령을 실행한다. 메인 체크아웃의 <code>.env*</code>에는 개발·테스트용 값만 둔다. 더 안전하게 하려면 복사 전에 내용을 검사한다. 예: DB 주소가 개발용 호스트 하나만 가리킬 때만 복사하고, 다른 호스트가 섞이면 복사하지 않는다.</div>
+</div></div>
+
+<div class="step"><div class="n">10</div><div class="b">
+<p><b>Claude Code 무인 권한</b> — 워커가 권한 확인 창에서 멈추면 루프는 "PR 없이 멈춤"으로 판단한다. 실제 운영에서 Orca는 Claude Code 워커를 <code>claude --dangerously-skip-permissions</code>로 띄웠다(Orca 에이전트 설정에서 확인한다). 이 모드에서는 권한 창이 뜨지 않는 대신 <b><code>deny</code> 목록이 유일한 방어선</b>이다. 저장소의 <code>.claude/settings.json</code> 예시:</p>
+<pre><code>{
+  "permissions": {
+    "deny": [
+      "Bash(gh pr merge:*)",
+      "Bash(git push --force:*)", "Bash(git push -f:*)",
+      "Bash(git push origin main:*)",
+      "Read(./.env.production)"
+    ]
+  }
+}</code></pre>
+<p class="small muted"><code>deny</code>는 대화형 세션에도 적용된다. 사람이 병합할 때는 터미널에서 직접 <code>gh pr merge</code>를 실행한다(Claude Code 안이면 <code>! gh pr merge …</code>). 권한 모드를 쓰지 않는 실행기라면 <code>allow</code>에 테스트·린트·<code>gh issue</code>·<code>gh pr create</code> 같은 명령을 미리 넣고, <code>--max 1</code> 첫 실행 때 워커가 어디서 묻는지 보고 보강한다.</p>
+</div></div>
+
+<div class="step"><div class="n">11</div><div class="b">
+<p><b>워커 규칙 파일 (<code>.orca-loop/worker-rules.md</code>)</b> — <b>무인 워커에게만</b> 필요한 프로젝트 규칙을 적는다. 사람이 대화형으로 쓸 때도 참인 절차는 <code>implement</code> 스킬(12단계)에 둔다. 루프는 이 파일이 있으면 워커 프롬프트에 "이 규칙도 따르라"를 덧붙인다. 커밋해 두어야 워크트리에도 생긴다.</p>
+<pre><code># 워커 규칙 (ticket-loop)
+- 검증은 두 층이다. 수시에는 타입 검사(`npm run typecheck`)와 단일 테스트 파일
+  (`npm test -- &lt;파일&gt;`)만 돌린다. 전체 묶음(`npm run verify` = lint → 전체 테스트 → build)은
+  첫 커밋 직전 1회, 리뷰 반영 커밋 직전 1회만 돌린다.
+- E2E·통합 테스트는 돌리지 말고 PR 본문에 "미실행 — 루프가 병합 뒤 실행"이라고 적는다.
+- DB 마이그레이션을 새로 만들면 번호가 기본 브랜치의 마지막 번호 다음인지 확인한다.
+  개발 DB에만 적용하고 결과를 PR 본문에 적는다. 운영 DB에는 연결하지 않는다.
+- 프로젝트 의존성을 쓰는 임시 스크립트는 워크트리 안 `scripts/`에 두고 커밋 전에 지운다
+  (저장소 밖 임시 폴더에서는 모듈 해석이 실패한다).
+- 화면 확인용 스크린샷은 작게(폭 400px 이하) 한 장만 찍는다.
+- CI를 통과시키려고 테스트를 건너뛰거나 지우지 않는다.</code></pre>
+<div class="note"><b>검증을 두 층으로 나누는 이유.</b> 규칙이 "수시로 테스트, 마지막에 전체"뿐이던 실제 운영에서 워커는 티켓당 전체 테스트를 1~9번, build를 2~8번 돌렸다. 시간과 토큰이 그만큼 든다. lint·전체 테스트·build를 한 명령(<code>verify</code>)으로 묶고 "몇 번, 언제"를 숫자로 정해 두면 줄어든다. 간헐적으로 실패하는 테스트가 있으면 "단독으로 다시 돌려 판별하라"처럼 판별법도 여기에 적는다.</div>
+</div></div>
+
+<div class="step"><div class="n">12</div><div class="b">
+<p><b><code>implement</code>·<code>pr</code> 스킬을 저장소에 맞추기</b> — 5단계에서 저장소 소유로 남긴 두 스킬을 고친다. 부록 B의 예시를 바탕으로 기본 브랜치 이름, 검증 명령, 마이그레이션 규칙, PR 본문 양식을 이 저장소의 것으로 바꾼다. 무인이든 대화형이든 <code>/implement N</code> 한 번으로 "브랜치 → TDD → 검증 → 리뷰 → PR → 라벨"이 같은 순서로 일어나야 한다.</p>
+<p class="small muted">확인: 메인 체크아웃에서 작은 티켓 하나로 <code>/implement N</code>을 대화형으로 돌려 본다. 질문이 나오는 지점이 곧 무인 워커가 멈출 지점이다. 답을 스킬이나 <code>worker-rules.md</code>에 적는다.</p>
+</div></div>
+
+<div class="step"><div class="n">13</div><div class="b">
+<p><b>루프 스크립트 배치와 드라이런</b></p>
+<pre><code>mkdir -p scripts &amp;&amp; cp /경로/ticket-loop.sh scripts/ &amp;&amp; chmod +x scripts/ticket-loop.sh
+echo '/.orca-loop/*.log' &gt;&gt; .gitignore      # 루프 로그는 커밋하지 않는다(규칙 파일만 커밋)
+git add .gitignore orca.yaml .claude .orca-loop/worker-rules.md scripts/ticket-loop.sh docs/agents CLAUDE.md
+git commit -m "chore: 티켓 무인 루프 환경" &amp;&amp; git push
+bash scripts/ticket-loop.sh --dry-run</code></pre>
+<p class="small muted">확인: 저장소, 기준 브랜치, 라벨이 한 줄 찍히고 대상 목록(또는 "처리할 티켓이 없습니다")이 나온다. 오류가 나면 표 4-1을 본다.</p>
+</div></div>
+
+<h3>표 4-1. 설치 확인 체크리스트</h3>
+<table>
+  <tr><th style="width:5%">✓</th><th style="width:40%">항목</th><th>실패할 때 메시지 / 조치</th></tr>
+  <tr><td>☐</td><td>Orca CLI·gh·jq·git이 PATH에 있다</td><td>"orca(-ide) 이(가) 없습니다" → 3단계 CLI 등록</td></tr>
+  <tr><td>☐</td><td>저장소가 Orca에 등록돼 있다</td><td>"Orca에 … 저장소가 없습니다" → 4단계</td></tr>
+  <tr><td>☐</td><td>스킬과 <code>docs/agents/</code> 설정이 <b>기본 브랜치에 병합돼</b> 있다</td><td>워커가 "트래커 설정이 없다"고 하면 6단계 후 push. 워커는 <code>origin/main</code>의 파일만 본다</td></tr>
+  <tr><td>☐</td><td><code>implement</code>·<code>pr</code>이 저장소 소유 사본이고, <code>code-review</code>가 <code>ticket-review</code>로 바뀌었다</td><td>5·12단계</td></tr>
+  <tr><td>☐</td><td>라벨 6개가 있다</td><td><code>gh label list</code></td></tr>
+  <tr><td>☐</td><td>PR에서 CI가 돈다(경로 필터를 쓰면 <code>CI_SKIP_REGEX</code>도 맞췄다)</td><td>빈 PR을 하나 열어 체크가 뜨는지 본다</td></tr>
+  <tr><td>☐</td><td>워크트리 setup이 성공한다</td><td>Orca 앱 설정이 "orca.yaml only"인지 보고, 워크트리를 직접 하나 만들어 setup 출력을 확인한다</td></tr>
+  <tr><td>☐</td><td>무인 세션의 <code>git push</code>가 멈추지 않는다</td><td><code>git config --get-all credential.helper</code>에 <code>osxkeychain</code>만 있으면 2단계 주의대로 바꾼다</td></tr>
+  <tr><td>☐</td><td>워커가 권한을 묻지 않는다</td><td><code>--max 1</code> 첫 실행 때 Orca 터미널을 지켜본다</td></tr>
+</table>
+</section>
+
+<!-- ============ 5 ============ -->
+<section>
+<h2>5. 티켓 준비</h2>
+<h3>루프가 집는 조건</h3>
+<p>자동 선택 모드는 다음을 <b>모두</b> 만족하는 열린 이슈만 집는다.</p>
+<table>
+  <tr><th style="width:36%">조건</th><th>설명</th></tr>
+  <tr><td><span class="label">ready-for-agent</span> 라벨 (<code>READY_LABEL</code>)</td><td>사람이 할 일은 <span class="label">ready-for-human</span>, 정보가 부족하면 <span class="label">needs-info</span>로 두면 루프가 건드리지 않는다.</td></tr>
+  <tr><td>(선택) 범위 라벨 (<code>--label</code>, <code>SCOPE_LABEL</code>)</td><td>예: <code>--label bug</code>, <code>--label v2.0</code>. 이번 실행을 특정 묶음으로 좁힌다.</td></tr>
+  <tr><td>(선택) 스펙의 하위 이슈 (<code>--parent</code>, <code>SPEC_ISSUE</code>)</td><td>예: <code>--parent 40</code>. 스펙 이슈 하나에 딸린 티켓만 돈다. 마일스톤 하나를 돌릴 때 가장 많이 쓴다.</td></tr>
+  <tr><td><span class="label">in-review</span> 라벨이 <b>없음</b></td><td>이미 PR 단계인 티켓은 뺀다.</td></tr>
+  <tr><td>담당자 <b>없음</b></td><td>워커는 시작할 때 자기를 담당자로 단다. 진행 중이던 티켓, 사람이 맡은 티켓을 다시 집지 않는다.</td></tr>
+  <tr><td>하위 이슈 <b>없음</b></td><td>하위 이슈를 가진 이슈는 스펙으로 보고 건너뛴다. <code>/to-spec</code>이 스펙 이슈에도 <span class="label">ready-for-agent</span>를 붙이기 때문이다.</td></tr>
+  <tr><td>열린 선행 이슈 0개</td><td>선행 이슈 목록(<code>/issues/N/dependencies/blocked_by</code>)에서 <code>state == "open"</code>인 것을 센다. 요약 값 <code>issue_dependencies_summary.blocked_by</code>는 선행 이슈가 닫힌 뒤에도 한동안 옛 값을 돌려준 적이 있어 쓰지 않는다.</td></tr>
+  <tr><td><code>issue-N-</code>로 시작하는 열린 PR 없음</td><td>사람이 먼저 PR을 연 티켓과 겹치지 않게 한다.</td></tr>
+</table>
+
+<h3>처리 순서</h3>
+<p>제목에서 <code>ORDER_REGEX</code>(기본 <code>^T(?&lt;n&gt;[0-9]+)</code>, 예 <code>T03: …</code>)로 순번을 뽑아 오름차순으로 정렬한다. 순번이 없는 이슈는 그 뒤에 이슈 번호 순으로 온다. 그리고 <b>티켓 하나를 끝낼 때마다 대상을 다시 계산</b>한다. 그래서 T04가 T02·T03에 막혀 있어도, 둘이 병합되면 다음 계산에서 T04가 풀려 이어서 처리된다.</p>
+
+<h3>스킬로 티켓을 만들 때의 요령</h3>
+<ul>
+  <li><b><code>/to-tickets</code>에 제목 형식과 부모를 지정한다.</b> "제목은 <code>T01: …</code> 형식, 스펙 #40의 하위 이슈로" 하고 요청하면 처리 순서가 분명해지고 <code>--parent 40</code>으로 묶어 돌릴 수 있다.</li>
+  <li><b>스펙 이슈의 <span class="label">ready-for-agent</span>는 떼지 않아도 된다.</b> 루프는 하위 이슈가 있는 이슈를 건너뛴다(초판은 떼어야 했다). 떼어도 문제없다.</li>
+  <li><b>선행 관계를 GitHub 기능으로 건다.</b> 본문에 "#41 다음"이라고만 쓰면 루프는 모른다. to-tickets가 선행 관계를 걸었는지 이슈 오른쪽 "Relationships"에서 확인한다.</li>
+  <li><b>결정은 티켓을 만들기 전에 커밋한다.</b> <code>/grill-with-docs</code>에서 나온 용어·ADR을 기본 브랜치에 병합해 두어야 워커가 본다. 워커는 대화 맥락 없이 <code>origin/main</code>만 읽는다.</li>
+</ul>
+
+<h3>무인 실행에 맞는 티켓</h3>
+<table>
+  <tr><th style="width:30%">조건</th><th>이유</th></tr>
+  <tr><td>인수 조건이 체크박스 목록이다</td><td>워커가 이 목록으로 테스트 지점을 고르고, PR을 열 때 충족한 항목을 체크한다.</td></tr>
+  <tr><td>결정이 이미 내려져 있다</td><td>워커는 질문할 수 없다. 결정이 필요한 티켓은 <span class="label">ready-for-human</span>이나 <span class="label">needs-info</span>로 둔다.</td></tr>
+  <tr><td>PR 하나 크기다</td><td>구현·리뷰·CI 수리까지 기본 4시간(<code>TICKET_TIMEOUT_SEC</code>) 안에 끝나야 한다.</td></tr>
+  <tr><td>세로 조각이다</td><td>각 티켓이 혼자서 테스트로 검증된다(to-tickets의 기본 원칙). 다른 티켓이 끝나야 테스트가 통과하는 티켓은 무인 병합에 맞지 않는다.</td></tr>
+  <tr><td>용어·결정의 근거가 저장소에 있다</td><td><code>GLOSSARY.md</code>, <code>docs/adr/</code>. 워커는 대화 맥락 없이 저장소만 본다.</td></tr>
+</table>
+
+<div class="warn"><b>번호를 직접 지정하면 일부 조건을 건너뛴다.</b> <code>ticket-loop.sh 42</code>처럼 번호를 주면 라벨·담당자는 보지 않는다. 대신 선행 이슈가 열려 있거나 PR이 이미 있으면, 그 티켓만 건너뛰지 않고 <b>루프 전체를 멈춘다</b>.</div>
+<div class="note"><b>급한 티켓 끼워 넣기.</b> 제목을 <code>T00: …</code>으로 하고 <span class="label">ready-for-agent</span>를 붙인다. 루프는 지금 티켓을 끝낸 뒤 대상을 다시 계산하므로 그 티켓을 다음에 집는다. <code>--parent</code>로 돌리는 중이면 그 스펙의 하위 이슈로도 건다.</div>
+</section>
+
+<!-- ============ 6 ============ -->
+<section>
+<h2>6. 루프 실행</h2>
+<pre><code>bash scripts/ticket-loop.sh --parent 40 --dry-run   # 스펙 #40의 티켓 중 지금 집을 수 있는 것
+bash scripts/ticket-loop.sh --parent 40 --max 1     # 1건만 시험
+bash scripts/ticket-loop.sh --parent 40             # 스펙 #40 전부 (끝낼 때마다 대상 재계산)
+bash scripts/ticket-loop.sh                         # 준비된 티켓 전부
+bash scripts/ticket-loop.sh --label bug --max 3     # 라벨로 좁혀 3건
+bash scripts/ticket-loop.sh 41 45                   # 지정한 이슈만, 적은 순서대로
+bash scripts/ticket-loop.sh --no-merge 44           # CI 통과까지만, 병합은 사람이
+POST_MERGE_CMD="npm ci &amp;&amp; npm run test:e2e" POST_MERGE_COPY=".env.local" POST_MERGE_PORT=3000 \
+  bash scripts/ticket-loop.sh --parent 40           # 병합마다 E2E를 기본 브랜치로 한 번</code></pre>
+
+<table>
+  <tr><th style="width:24%">옵션</th><th>동작</th></tr>
+  <tr><td><code>N ...</code></td><td>처리할 이슈 번호. 생략하면 자동 선택한다.</td></tr>
+  <tr><td><code>--parent N</code></td><td>스펙 이슈 #N의 하위 이슈만 대상으로 한다.</td></tr>
+  <tr><td><code>--label L</code></td><td><span class="label">ready-for-agent</span>에 더해 라벨 L도 요구한다.</td></tr>
+  <tr><td><code>--dry-run</code></td><td>대상만 출력하고 끝낸다. 잠금도 잡지 않고 로그 파일도 쓰지 않는다.</td></tr>
+  <tr><td><code>--max N</code></td><td>N건 처리 후 멈춘다.</td></tr>
+  <tr><td><code>--no-merge</code></td><td>CI 통과 후 병합하지 않고 워크트리를 남긴 채 다음 티켓으로 간다. 그 티켓에 막힌 티켓은 병합 전까지 풀리지 않는다.</td></tr>
+  <tr><td><code>--skip-post-merge</code></td><td><code>POST_MERGE_CMD</code>가 설정돼 있어도 이번 실행에서는 돌리지 않는다(포트를 비울 수 없을 때 등).</td></tr>
+</table>
+
+<table>
+  <tr><th style="width:24%">환경변수</th><th style="width:24%">기본값</th><th>의미</th></tr>
+  <tr><td><code>ORCA_CLI</code></td><td><code>orca</code> (Linux <code>orca-ide</code>)</td><td>Orca CLI 실행 파일</td></tr>
+  <tr><td><code>SPEC_ISSUE</code></td><td>(없음)</td><td><code>--parent</code> 기본값</td></tr>
+  <tr><td><code>READY_LABEL</code></td><td><code>ready-for-agent</code></td><td>대상 라벨</td></tr>
+  <tr><td><code>SCOPE_LABEL</code></td><td>(없음)</td><td>함께 요구할 라벨(<code>--label</code> 기본값)</td></tr>
+  <tr><td><code>IN_REVIEW_LABEL</code></td><td><code>in-review</code></td><td>PR이 열린 티켓의 라벨</td></tr>
+  <tr><td><code>BRANCH_PREFIX</code></td><td><code>issue-</code></td><td>이슈 브랜치 접두사(<code>issue-N-slug</code>)</td></tr>
+  <tr><td><code>BASE_BRANCH</code></td><td>저장소 기본 브랜치</td><td>워크트리 기준이자 PR 대상</td></tr>
+  <tr><td><code>ORDER_REGEX</code></td><td><code>^T(?&lt;n&gt;[0-9]+)</code></td><td>제목에서 순번을 뽑는 정규식(그룹 이름 <code>n</code>)</td></tr>
+  <tr><td><code>WORKER_RULES_FILE</code></td><td><code>.orca-loop/worker-rules.md</code></td><td>워커에게 따르게 할 프로젝트 규칙</td></tr>
+  <tr><td><code>AGENT</code></td><td><code>claude</code></td><td>Orca 에이전트 ID</td></tr>
+  <tr><td><code>AGENT_BANNER_REGEX</code></td><td><code>Claude Code|Opus|Sonnet|Fable|Haiku</code></td><td>에이전트가 떴는지 확인할 화면 문구(정규식)</td></tr>
+  <tr><td><code>AGENT_RESTART_CMD</code></td><td><code>claude --dangerously-skip-permissions</code></td><td>기동 실패 시 셸에서 다시 띄울 명령. 워커 프롬프트가 인자로 붙는다. Orca가 워커를 띄우는 방식과 같게 맞춘다</td></tr>
+  <tr><td><code>TICKET_TIMEOUT_SEC</code></td><td><code>14400</code> (4시간)</td><td>티켓 한 건 전체 제한 시간</td></tr>
+  <tr><td><code>MERGE_METHOD</code></td><td><code>merge</code></td><td><code>merge</code> | <code>squash</code> | <code>rebase</code></td></tr>
+  <tr><td><code>REPAIR_ROUNDS</code></td><td><code>1</code></td><td>충돌·CI 수리를 합친 허용 횟수</td></tr>
+  <tr><td><code>CI_SKIP_REGEX</code></td><td>(없음)</td><td>바뀐 파일이 전부 이 정규식(ERE)에 맞으면 CI가 안 붙는 게 정상인 PR로 보고 체크 없이 병합한다. 워크플로의 <code>paths-ignore</code>와 맞춘다(4장 8단계)</td></tr>
+  <tr><td><code>POST_MERGE_CMD</code></td><td>(없음 = 끔)</td><td>병합 뒤 기본 브랜치에서 한 번 돌릴 명령. 실패하면 루프가 멈춘다(7장 6단계)</td></tr>
+  <tr><td><code>POST_MERGE_COPY</code></td><td>(없음)</td><td>그 전에 메인 체크아웃에서 복사할 파일(공백 구분), 예 <code>.env.local</code></td></tr>
+  <tr><td><code>POST_MERGE_PORT</code></td><td>(없음)</td><td>그 명령이 쓰는 포트. 지정하면 비기를 최대 10분 기다린다</td></tr>
+  <tr><td><code>POST_MERGE_WORKTREE</code></td><td><code>~/.cache/ticket-loop/&lt;owner-repo&gt;/post-merge</code></td><td>병합 뒤 검증을 돌릴 전용 워크트리. 저장소 밖에 두고 재사용한다</td></tr>
+  <tr><td><code>LOG_FILE</code></td><td><code>.orca-loop/loop-MMDD.log</code></td><td>진행 로그. 복구와 회고의 1차 자료다. <code>/dev/null</code>이면 끈다</td></tr>
+</table>
+<p class="small muted">저장소마다 고정할 값은 <code>.orca-loop/loop.env</code>에 <code>CI_SKIP_REGEX="${CI_SKIP_REGEX:-^docs/}"</code> 꼴로 적어 커밋한다. 루프가 시작할 때 읽고, 실행할 때 준 환경변수가 이긴다.</p>
+
+<h3>스크립트 내부 상수</h3>
+<table>
+  <tr><th style="width:30%">상수</th><th style="width:18%">값</th><th>의미</th></tr>
+  <tr><td><code>IDLE_WAIT_MS</code></td><td>10분</td><td>워커가 입력 대기 상태가 되기를 한 번 기다리는 상한</td></tr>
+  <tr><td><code>IDLE_STRIKES</code></td><td>3</td><td>PR 없이 연속 3번 대기 상태면 "멈춤"으로 본다</td></tr>
+  <tr><td><code>STARTUP_GRACE_SEC</code></td><td>120</td><td>기동 직후 2분은 대기 상태를 세지 않는다(프롬프트 처리 전에도 대기로 잡힌다)</td></tr>
+  <tr><td><code>AGENT_START_WAIT_SEC</code></td><td>90</td><td>에이전트 배너가 보이기를 기다리는 상한. 넘기면 한 번 다시 띄우고, 또 넘기면 멈춘다</td></tr>
+  <tr><td><code>CI_APPEAR_TIMEOUT_SEC</code></td><td>15분</td><td>PR에 체크가 나타나기를 기다리는 상한</td></tr>
+</table>
+
+<h3>어디서 실행하나</h3>
+<p>루프 자체는 평범한 셸 프로세스다. 워커 터미널은 Orca가 관리하지만, 루프 셸은 그렇지 않으므로 루프를 띄운 터미널이 닫히면 루프도 죽는다(워커는 계속 일한다 — R1). 권장은 <b>메인 체크아웃의 Orca 터미널</b>에서 실행하는 것이다. Orca 앱이 켜져 있는 동안 그 터미널이 유지되고, 루프와 워커들이 한 화면에서 보이며, Orca가 꺼지면 어차피 루프도 멈춘다(2.4). 별도 터미널 앱에서 돌릴 때만 tmux가 필요하다.</p>
+<pre><code># 권장: Orca 사이드바에서 메인 체크아웃(루트 워크트리)을 열고 그 터미널에서
+bash scripts/ticket-loop.sh --parent 40          # 로그는 기본으로 .orca-loop/loop-MMDD.log
+# 또는 CLI로 메인 체크아웃에 터미널을 하나 띄워 실행
+orca terminal create --worktree id:&lt;repoId&gt;::&lt;메인 체크아웃 경로&gt; \
+  --command "bash scripts/ticket-loop.sh --parent 40" --json
+
+# 외부 터미널 앱(iTerm, GNOME Terminal 등)에서 돌릴 때만
+tmux new -s loop                                   # 창을 닫아도 세션이 남는다
+
+# 노트북이면 어느 쪽이든 잠자기 방지를 앞에 붙인다
+caffeinate -is bash scripts/ticket-loop.sh         # macOS
+systemd-inhibit bash scripts/ticket-loop.sh        # Linux</code></pre>
+<p>로그는 <code>[YYYY-MM-DD HH:MM:SS]</code> 형식으로 시작한다. macOS(<code>osascript</code>)나 Linux(<code>notify-send</code>)에서는 티켓 완료·루프 중단·종료 때 데스크톱 알림이 뜬다. 같은 저장소에서는 루프가 하나만 돌도록 잠금(<code>.git/ticket-loop.lock</code>)을 건다. 루프를 도는 중에 스크립트 파일이 바뀌면 bash가 엉뚱한 줄을 읽으므로, 스크립트를 고칠 일이 있으면 사본으로 돌린다.</p>
+</section>
+
+<!-- ============ 7 ============ -->
+<section>
+<h2>7. 티켓 한 건의 생애</h2>
+
+<div class="step"><div class="n">1</div><div class="b">
+<p><b>워크트리 생성.</b> 기본 브랜치를 fetch한 뒤 다음 한 번의 호출로 워크트리를 만들고 Claude Code를 띄워 워커 프롬프트(부록 B)를 보낸다. <code>orca.yaml</code> setup 훅이 먼저 돈다.</p>
+<pre><code>orca worktree create --repo id:&lt;repoId&gt; --name issue-N --no-parent \
+  --base-branch origin/main --issue N --agent claude --prompt "…" --comment "…" --json</code></pre>
+<p>응답에서 워크트리 ID(<code>&lt;repoId&gt;::&lt;경로&gt;</code>)와 에이전트 터미널 핸들을 받아 둔다. 워크스페이스 상태는 <code>in-progress</code>가 된다. 이어서 터미널 화면에 에이전트 배너(<code>AGENT_BANNER_REGEX</code>)가 보이는지 90초까지 확인하고, 안 보이면 입력 줄을 지우고 <code>AGENT_RESTART_CMD "&lt;워커 프롬프트&gt;"</code>로 한 번 다시 띄운다. 그래도 안 뜨면 멈춘다.</p></div></div>
+
+<div class="step"><div class="n">2</div><div class="b">
+<p><b>PR 대기.</b> <code>issue-N-</code>으로 시작하는 열린 PR이 생길 때까지 반복한다.</p>
+<ul>
+  <li>PR이 생기면 워커가 라벨·체크박스 정리를 마치도록 한 번 더 대기 상태를 기다린 뒤 다음 단계로 간다.</li>
+  <li>PR 없이 워커가 대기 상태면(기동 후 2분 제외) 30초 쉬고 <b>PR부터 다시 본다</b>. PR을 여는 순간에는 GitHub에 PR이 보이기 전에 대기 상태가 먼저 잡히기 때문이다(이렇게 넘어간 횟수를 "idle 오판"으로 세어 티켓 요약에 남긴다). 그래도 PR이 없으면 터미널 화면을 지난번과 비교해, 바뀌었으면 그사이 일한 것이므로 횟수를 0으로 되돌리고, 그 위에 1회를 센다. 연속 3회면 <b>PR 없이 멈춤</b>으로 루프를 멈춘다. 워커가 계속 출력 중이면 횟수를 0으로 되돌린다.</li>
+  <li>Orca 터미널에 닿지 못하면(앱 종료 등) 즉시 멈춘다. 대기 상태를 10분 기다리다 시간이 다 된 것(워커가 아직 일하는 중)은 닿지 못한 것과 구별해 계속 기다린다(2.4). 티켓 제한 시간을 넘기면 타임아웃으로 멈춘다.</li>
+</ul></div></div>
+
+<div class="step"><div class="n">3</div><div class="b">
+<p><b>충돌 확인.</b> PR의 병합 가능 여부(<code>mergeable</code>)를 본다. 계산 중(<code>UNKNOWN</code>)이면 10초 간격으로 최대 6번 다시 본다. 충돌(<code>CONFLICTING</code>)이면 같은 워커 터미널에 "기본 브랜치를 병합해 충돌을 해결하고, 테스트·lint 후 push하라"고 보낸다.</p></div></div>
+
+<div class="step"><div class="n">4</div><div class="b">
+<p><b>CI 대기.</b> 바뀐 파일이 전부 <code>CI_SKIP_REGEX</code>에 맞으면 체크를 기다리지 않고 병합으로 넘어간다(병합 뒤 검증도 건너뛴다). 그 밖에는 체크가 나타나기를 최대 15분 기다린 뒤 <code>gh pr checks --watch --fail-fast</code>로 끝까지 본다. 실패하면 워커에게 "<code>gh pr checks</code>·<code>gh run view --log-failed</code>로 원인을 보고 고쳐 push하라"고 보낸다. 수리 뒤에도 PR의 head 커밋이 그대로면(새 push 없음) 멈춘다. 충돌·CI 수리는 합쳐서 <code>REPAIR_ROUNDS</code>회까지다.</p></div></div>
+
+<div class="step"><div class="n">5</div><div class="b">
+<p><b>병합.</b> <code>gh pr merge --&lt;MERGE_METHOD&gt;</code>. 5초 뒤에도 이슈가 열려 있으면 직접 닫고 코멘트를 남긴다. <span class="label">in-review</span>를 지운다.</p></div></div>
+
+<div class="step"><div class="n">6</div><div class="b">
+<p><b>병합 뒤 검증 (선택).</b> <code>POST_MERGE_CMD</code>가 있으면 병합된 기본 브랜치를 저장소 밖 전용 워크트리에 받아(<code>POST_MERGE_COPY</code> 파일을 복사하고, <code>POST_MERGE_PORT</code>가 비기를 기다린 뒤) 그 명령을 한 번 돌린다. 로그는 <code>.orca-loop/post-merge-N.log</code>. 실패하면 이 티켓의 정리와 요약까지 마친 뒤 루프를 멈춘다. 기본 브랜치가 깨진 채로 다음 티켓을 쌓지 않기 위해서다(R10).</p>
+<div class="note"><b>왜 워커가 아니라 루프가 돌리나.</b> 실제 서버·공유 개발 DB·고정 포트를 쓰는 통합·E2E 테스트는 워커가 돌리면 다른 워커나 사람의 개발 서버와 부딪힌다. 그래서 워커 규칙은 "돌리지 말고 미실행이라고 적어라"였다. 그 결과 실제 운영에서 PR 16건이 모두 "로컬에서 확인 필요"로 병합됐고, 어느 단계에서도 통합 테스트가 돌지 않아 기본 브랜치의 통합 스위트가 깨진 채 배포까지 갔다. 루프는 직렬이므로 병합 직후가 부딪힘 없이 돌릴 수 있는 유일한 지점이다.</div></div></div>
+
+<div class="step"><div class="n">7</div><div class="b">
+<p><b>정리와 요약.</b> 워크스페이스를 <code>completed</code>로 표시하고 <code>orca worktree rm --force</code>로 지운다. 이어서 <code>git worktree prune</code>을 하고, 로컬의 이슈 브랜치와 Orca가 워크트리용으로 만든 브랜치(설정에 따라 <code>issue-N</code> 또는 <code>&lt;git 사용자&gt;/issue-N</code>, 워크트리를 만든 직후 기록해 둔다), 원격의 이슈 브랜치를 지운다. 마지막으로 로그에 한 줄을 남긴다.</p>
+<pre class="out">[2026-10-08 22:36:14] #42 요약: 벽시계 54분, PR #46, CI 261초, 수리 0회, idle 오판 1회, 병합 뒤 검증 통과 212초</pre>
+<p class="small muted">이 줄들이 <code>/retro</code>의 1차 자료다. 오래 걸린 티켓, 수리가 잦은 티켓, idle 오판이 많은 티켓을 찾아 원인을 본다.</p></div></div>
+
+<div class="step"><div class="n">8</div><div class="b">
+<p><b>다음 티켓.</b> 자동 선택이면 대상을 다시 계산한다. 이번 실행에서 이미 처리한 티켓은 GitHub 반영이 늦어도 다시 집지 않는다. 대상이 없거나 <code>--max</code>에 닿으면 "완료: N건"을 남기고 끝난다.</p></div></div>
+
+<div class="note"><b>구현 메모.</b> 루프 안에서 실행하는 <code>gh</code>·<code>orca</code>·<code>git</code>이 표준 입력을 읽으면 남은 티켓 목록을 삼켜 버린다. 그래서 대상 목록은 변수에 담고, 티켓마다 표준 입력을 닫고(<code>&lt;/dev/null</code>) 실행한다. 스크립트를 고칠 때 이 구조를 유지한다.</div>
+</section>
+
+<!-- ============ 8 ============ -->
+<section>
+<h2>8. 워커 안에서 일어나는 일</h2>
+<p>워커는 Orca 워크트리 안에서 도는 평범한 Claude Code 세션이다. 받는 프롬프트는 <code>/implement N</code>에 <b>무인 실행에서만 참인 문장 몇 개</b>를 붙인 것이다(부록 B-1). 할 일의 순서는 프롬프트가 아니라 저장소의 <code>implement</code> 스킬이 정한다.</p>
+<table>
+  <tr><th style="width:18%">어디에</th><th style="width:40%">무엇을</th><th>왜 거기에</th></tr>
+  <tr><td><b>워커 프롬프트</b><br><span class="small muted">루프가 만든다</span></td><td>질문하지 말고 스스로 결정해 끝까지. PR은 병합하지 마라. 진행이 불가능하면(열린 선행 이슈 포함) 이슈에 이유를 코멘트하고 PR 없이 멈춰라. 규칙 파일도 따르라.</td><td>사람이 대화형으로 <code>/implement</code>를 쓸 때는 참이 아닌 것들이다. 질문하면 대기 상태가 되고 루프가 멈춘다. 멈출 때 남긴 코멘트가 사람이 이어받는 출발점이다.</td></tr>
+  <tr><td><b><code>implement</code> 스킬</b><br><span class="small muted">저장소 소유</span></td><td>티켓 읽기·상태 확인 → 열린 선행 이슈 확인(목록 기준) → <code>origin/&lt;base&gt;</code>에서 <code>issue-N-&lt;slug&gt;</code> 브랜치·담당자 지정 → 용어집·ADR 읽기 → <code>tdd</code>(seam은 스스로 정함) → 2단 검증 → 커밋(<code>#N</code>) → <code>ticket-review</code> 반영 → <code>pr</code> 양식으로 PR → 인수 조건 체크·<span class="label">in-review</span> → 병합하지 않음</td><td>무인이든 대화형이든 같은 절차다. 한 곳에 두어야 고칠 때 둘이 갈라지지 않는다.</td></tr>
+  <tr><td><b><code>worker-rules.md</code></b></td><td>검증 명령과 횟수, 돌리지 말 무거운 테스트, 마이그레이션 규칙, 임시 파일·스크린샷 규칙, 간헐 실패 판별법</td><td>프로젝트마다 다르고 자주 바뀐다. 회고 결과가 가장 많이 들어가는 곳이다.</td></tr>
+  <tr><td><b><code>CLAUDE.md</code>·코딩 표준·<code>docs/agents/</code></b></td><td>저장소 사실, 코딩 관례, 트래커 관례</td><td>워커는 저장소만 본다. 대화 맥락이 없다.</td></tr>
+</table>
+
+<h3>프롬프트를 줄인 이유 (초판과 다른 점)</h3>
+<p>초판의 워커 프롬프트는 위 <code>implement</code> 절차를 7개 규칙으로 다시 적었다. 실제로 돌려 보니 다음 문제가 생겼다.</p>
+<ul>
+  <li><b>둘이 갈라진다.</b> 리뷰 스킬 이름을 바꾸거나 PR 양식을 고칠 때 스킬과 프롬프트 중 한쪽만 고쳐졌다. 워커는 둘이 어긋나면 어느 쪽을 따를지 스스로 정한다.</li>
+  <li><b>대화형과 무인이 다르게 동작한다.</b> 사람이 손으로 <code>/implement</code>를 돌렸을 때는 프롬프트의 규칙이 없으니, 브랜치·라벨 처리가 달라졌다.</li>
+  <li><b>매 티켓 같은 긴 문장을 다시 보낸다.</b> 터미널 한 줄 입력이라 길수록 깨지기 쉽다(재기동 경로에서 따옴표가 문제가 된다).</li>
+</ul>
+<p>그래서 절차는 스킬로 옮기고, 프롬프트에는 "사람이 없다"는 사실에서 나오는 문장만 남겼다. 스킬에서 <code>tdd</code>의 seam 확인 단계를 건너뛰라고 명시하는 것도 같은 이유다. 원래 <code>tdd</code>는 seam을 사용자와 합의하는데, 그 확인을 스킬이 직접 대체해 두면 무인이든 대화형이든 질문 없이 진행된다.</p>
+<div class="note">워커가 반복해서 같은 곳에서 멈추거나 같은 실수를 하면, 그 답을 어디에 적을지 위 표로 고른다. 무인일 때만 필요하면 <code>worker-rules.md</code>, 사람이 할 때도 필요하면 <code>implement</code> 스킬, 리뷰가 잡아야 할 관례면 코딩 표준 문서, 기계적으로 잡을 수 있으면 린트·테스트 같은 자동 검사다.</div>
+</section>
+
+<!-- ============ 9 ============ -->
+<section>
+<h2>9. 실전 시나리오</h2>
+<p>예시 저장소 <code>acme/todo-app</code>(Node 웹 앱)에 4장 설치를 마친 상태에서 시작한다. 출력은 설명용 예시다.</p>
+
+<div class="scenario">
+<h4><span class="tag">S1</span>새 기능을 기획부터 병합까지 — "할 일 목록 CSV 내보내기"</h4>
+
+<div class="step"><div class="n">1</div><div class="b">
+<p><b>요구사항 다듬기</b> (메인 체크아웃, 대화형 Claude Code)</p>
+<pre><code>/grill-with-docs 할 일 목록을 CSV로 내보내는 기능. 필터 적용 상태 그대로, 최대 1만 행.</code></pre>
+<p>열 순서, 날짜 형식, 수식 주입 방어, 권한 같은 결정이 나오면 그 자리에서 정한다. 용어는 <code>GLOSSARY.md</code>, 되돌리기 어려운 결정은 <code>docs/adr/</code>에 남는다. 브랜치로 커밋해 PR로 기본 브랜치에 병합한다. 워커는 원격 기본 브랜치에서 시작하므로 <b>병합까지 해야</b> 워커가 본다(기본 브랜치 직접 push는 4장 10단계 <code>deny</code>가 막는다).</p></div></div>
+
+<div class="step"><div class="n">2</div><div class="b">
+<p><b>스펙 이슈 만들기</b></p>
+<pre><code>/to-spec</code></pre>
+<p>스펙 이슈 #40이 생긴다. 이 이슈에도 <span class="label">ready-for-agent</span>가 붙지만, 하위 이슈가 생기면 루프가 알아서 건너뛴다.</p></div></div>
+
+<div class="step"><div class="n">3</div><div class="b">
+<p><b>티켓으로 쪼개기</b></p>
+<pre><code>/to-tickets #40 — 제목은 "T01: …" 형식, #40의 하위 이슈로 만들어 줘.</code></pre>
+<p>제안된 목록과 선행 관계를 검토해 승인하면 다음처럼 발행된다.</p>
+<table>
+  <tr><th style="width:12%">이슈</th><th>제목</th><th style="width:22%">선행</th></tr>
+  <tr><td>#41</td><td>T01: 필터 조건으로 할 일을 CSV 행으로 직렬화</td><td>—</td></tr>
+  <tr><td>#42</td><td>T02: <code>GET /api/todos/export</code> 응답</td><td>#41</td></tr>
+  <tr><td>#43</td><td>T03: 목록 화면 "내보내기" 버튼</td><td>#41</td></tr>
+  <tr><td>#44</td><td>T04: 1만 행 초과 시 안내와 문서 갱신</td><td>#42, #43</td></tr>
+</table></div></div>
+
+<div class="step"><div class="n">4</div><div class="b">
+<p><b>점검</b></p>
+<pre><code>gh issue list --label ready-for-agent
+bash scripts/ticket-loop.sh --parent 40 --dry-run</code></pre>
+<pre class="out">[2026-10-08 21:00:03] skip #42 (T02: GET /api/todos/export 응답): 선행 이슈 열림
+[2026-10-08 21:00:04] skip #43 (T03: 목록 화면 "내보내기" 버튼): 선행 이슈 열림
+[2026-10-08 21:00:04] skip #44 (T04: 1만 행 초과 시 안내와 문서 갱신): 선행 이슈 열림
+[2026-10-08 21:00:04] 저장소 acme/todo-app / 기준 브랜치 main / 라벨 ready-for-agent / 스펙 #40의 하위 이슈
+[2026-10-08 21:00:04] 병합 뒤 검증: 끔
+[2026-10-08 21:00:04] 대상(현재 선행 이슈가 모두 닫힌 것):
+  #41	T01: 필터 조건으로 할 일을 CSV 행으로 직렬화</pre>
+<p>지금 집을 수 있는 건 #41뿐이다. 나머지는 #41이 병합되면 차례로 풀린다.</p></div></div>
+
+<div class="step"><div class="n">5</div><div class="b">
+<p><b>한 건만 시험 실행</b> — 처음이거나 규칙을 바꾼 직후라면 꼭 한다.</p>
+<pre><code>bash scripts/ticket-loop.sh --parent 40 --max 1</code></pre>
+<p>Orca 사이드바에 <code>issue-41</code> 카드가 <code>in-progress</code>로 나타난다. 터미널을 열어 워커가 권한을 묻지 않는지, 테스트를 먼저 쓰는지, PR 본문이 기대한 모양인지 본다. 막힌 곳이 있으면 <code>implement</code> 스킬, <code>.claude/settings.json</code>, <code>worker-rules.md</code> 중 맞는 곳을 고쳐 기본 브랜치에 병합한다(8장 끝 표).</p></div></div>
+
+<div class="step"><div class="n">6</div><div class="b">
+<p><b>나머지 무인 실행</b></p>
+<pre><code># 메인 체크아웃의 Orca 터미널에서 (로그는 .orca-loop/loop-1008.log)
+caffeinate -is bash scripts/ticket-loop.sh --parent 40</code></pre>
+<pre class="out">[2026-10-08 21:42:10] === #42 T02: GET /api/todos/export 응답 ===
+[2026-10-08 21:42:12] #42: 워크트리 r-7f3::/Users/me/orca/issue-42 / 터미널 term-19
+[2026-10-08 22:31:40] #42: PR #46 열림
+[2026-10-08 22:31:41] #42: CI 대기 (PR #46)
+[2026-10-08 22:36:02] #42: CI 통과
+[2026-10-08 22:36:05] #42: PR #46 병합됨
+[2026-10-08 22:36:14] #42 요약: 벽시계 54분, PR #46, CI 261초, 수리 0회, idle 오판 1회, 병합 뒤 검증 건너뜀
+[2026-10-08 22:36:12] === #43 T03: 목록 화면 "내보내기" 버튼 ===
+...
+[2026-10-09 00:58:31] 완료: 3건</pre></div></div>
+
+<div class="step"><div class="n">7</div><div class="b">
+<p><b>사후 검수와 마무리</b></p>
+<pre><code>gh pr list --state merged --limit 10
+grep "요약:" .orca-loop/loop-1008.log               # 티켓별 한 줄
+gh issue close 40 --comment "하위 티켓 #41–#44 병합으로 완료"</code></pre>
+<p>PR마다 본문의 "남은 판단 사항"과 "검증하지 못한 것"을 읽고, 필요하면 후속 티켓을 만든다(<code>/to-tickets</code> 또는 직접 이슈 작성 → <span class="label">ready-for-agent</span>). 그다음 <code>/retro</code>에 로그와 PR들을 주고 환경 개선 후보를 받는다. 고친 스킬·규칙·검사는 PR로 병합해 다음 묶음부터 쓴다.</p></div></div>
+</div>
+
+<div class="scenario">
+<h4><span class="tag">S2</span>버그 백로그 정리</h4>
+<ol>
+  <li>새로 들어온 이슈를 분류한다: <code>/triage 새 이슈들 정리해 줘</code>. 재현과 수정 방향이 분명한 버그는 브리프와 함께 <span class="label">bug</span> + <span class="label">ready-for-agent</span>가 된다. 애매한 것은 <span class="label">needs-info</span>로 간다.</li>
+  <li>버그만 골라 보기: <code>bash scripts/ticket-loop.sh --label bug --dry-run</code></li>
+  <li>몇 건씩 끊어 처리한다: <code>bash scripts/ticket-loop.sh --label bug --max 3</code></li>
+  <li>버그 수정 PR은 재현 테스트가 "실패 → 통과"로 바뀐 근거가 "테스트 지점"·"검증" 절에 있는지 본다.</li>
+</ol>
+</div>
+
+<div class="scenario">
+<h4><span class="tag">S3</span>위험한 변경은 사람이 병합</h4>
+<p>DB 스키마, 인증, 결제처럼 되돌리기 어려운 티켓은 CI 통과까지만 자동으로 하고 병합은 사람이 한다.</p>
+<pre><code>bash scripts/ticket-loop.sh --no-merge 51           # CI 녹색까지, 워크트리는 남는다
+gh pr view 52 --web                                 # 사람이 검토 (PR 번호는 로그에 찍힌다)
+gh pr merge 52 --merge                              # 승인 후 병합 → #51 닫힘
+gh issue edit 51 --remove-label in-review
+orca worktree rm --worktree id:&lt;워크트리ID&gt; --force --json   # ID는 로그 또는 orca worktree list --json
+git worktree prune; git branch -D issue-51 issue-51-&lt;slug&gt;; git push origin --delete issue-51-&lt;slug&gt;</code></pre>
+<p>이런 티켓을 평소에도 자동 병합에서 빼고 싶으면 <span class="label">ready-for-human</span>으로 두거나, 별도 라벨(예: <span class="label">needs-human-merge</span>)을 붙여 <code>SCOPE_LABEL</code> 실행을 나눈다.</p>
+</div>
+
+<div class="scenario">
+<h4><span class="tag">S4</span>야간 무인 실행과 아침 점검</h4>
+<ol>
+  <li>퇴근 전: <code>--dry-run</code>으로 대상을 확인하고, 메인 체크아웃의 Orca 터미널에서 잠자기 방지를 붙여 실행한다. Orca 앱은 켜 둔다. 병합 뒤 검증이 포트를 쓰면 그 포트의 개발 서버를 꺼 둔다.</li>
+  <li>도중에 급한 티켓을 끼워 넣으려면 그 이슈에 <span class="label">ready-for-agent</span>와 앞선 순번 제목(예: <code>T00: …</code>)을 준다. 루프는 지금 티켓을 끝낸 뒤 대상을 다시 계산하므로 그 티켓을 다음에 집는다.</li>
+  <li>아침 점검:
+<pre><code>tail -n 30 .orca-loop/loop-1008.log                    # 마지막 줄이 "완료"인가 "ERROR"인가
+grep "요약:" .orca-loop/loop-1008.log                  # 티켓별 한 줄
+gh pr list --state merged --limit 20                   # 밤새 병합된 것
+gh issue list --label in-review                        # PR 단계에 남은 것
+orca worktree list --json | jq -r '.. | .id? // empty | strings | select(contains("::"))'   # 남은 워크트리</code></pre></li>
+  <li>"ERROR"로 끝났다면 10장 절차를 따른다.</li>
+</ol>
+</div>
+</section>
+
+<!-- ============ 10 ============ -->
+<section>
+<h2>10. 중단과 복구</h2>
+<h3>10.1 복구의 원칙</h3>
+<ul>
+  <li><b>루프에는 기억이 없다.</b> 다시 실행하면 GitHub 상태만 보고 대상을 정한다. 복구는 "멈춘 티켓을 GitHub에서 정리된 상태(끝남 / PR 단계 / 미착수)로 만든 뒤 루프를 다시 실행"하는 일이다.</li>
+  <li><b>워크트리는 증거다.</b> 루프는 멈출 때 워크트리를 지우지 않는다. 워커의 커밋, 터미널 기록, 이슈 코멘트가 남아 있다. 확인하기 전에 지우지 않는다.</li>
+  <li><b>진행 중이던 티켓을 정리하지 않고 재실행하지 않는다.</b> 워커가 담당자를 달아 둔 티켓은 루프가 건너뛰므로 같은 일을 두 번 하지는 않는다. 하지만 그 티켓에 막힌 티켓은 계속 풀리지 않고, 담당자를 달기 전에 멈춘 티켓은 같은 이름의 워크트리를 다시 만들려다 실패한다. 먼저 PR 단계까지 마무리하거나 폐기한다.</li>
+</ul>
+
+<h3>10.2 상태 진단</h3>
+<p>멈춘 티켓 번호는 로그의 마지막 <code>=== #N …</code> 줄에서 찾는다. 아래 함수를 셸에 붙여 넣거나 <code>scripts/ticket-state.sh</code>로 저장해 두고 <code>ticket_state N</code>으로 한눈에 본다.</p>
+<pre><code>ticket_state() {
+  local n="$1" p="${BRANCH_PREFIX:-issue-}$1-"
+  echo "== 이슈";  gh issue view "$n" --json state,labels,assignees \
+    -q '"\(.state) | 라벨: \([.labels[].name]|join(", ")) | 담당: \([.assignees[].login]|join(", "))"'
+  echo "== 열린 선행 이슈"; gh api "repos/{owner}/{repo}/issues/$n/dependencies/blocked_by" \
+    --jq '.[] | select(.state == "open") | "  #\(.number) \(.title)"'
+  echo "== PR";    gh pr list --state all --limit 100 --json number,state,headRefName \
+    | jq -r --arg p "$p" '.[] | select(.headRefName|startswith($p)) | "#\(.number) \(.state) \(.headRefName)"'
+  echo "== 원격 브랜치"; git ls-remote --heads origin "refs/heads/${p}*"
+  echo "== 워크트리";    git worktree list | grep -E "/${BRANCH_PREFIX:-issue-}$n( |-)" || echo "(없음)"
+  echo "== 루프 잠금";   ls -d "$(git rev-parse --path-format=absolute --git-common-dir)/ticket-loop.lock" 2&gt;/dev/null || echo "(없음)"
+}</code></pre>
+
+<h3>10.3 상태 판정표</h3>
+<table>
+  <tr><th style="width:4%">#</th><th style="width:19%">이슈</th><th style="width:15%">PR</th><th style="width:12%">워크트리</th><th style="width:22%">뜻</th><th>할 일</th></tr>
+  <tr><td>A</td><td>열림, 담당 없음</td><td>없음</td><td>없음</td><td>아직 시작 전</td><td>그대로 루프 실행</td></tr>
+  <tr><td>B</td><td>열림, 담당 있음</td><td>없음</td><td>있음</td><td>구현 중이거나 PR 없이 멈춤</td><td>Orca 터미널 확인 → R2 (아직 일하는 중이면 PR이 열리기를 기다렸다가 E로)</td></tr>
+  <tr><td>C</td><td>열림</td><td>없음</td><td>없음, 원격 브랜치 있음</td><td>워크트리만 지워짐(사람이 지웠거나 디스크 정리)</td><td>원격 브랜치에서 워크트리를 다시 만들어 이어가거나(R2-a″) 브랜치를 지우고 A로</td></tr>
+  <tr><td>D</td><td>열림, in-review</td><td>열림, CI 실패·충돌·미확인</td><td>있음</td><td>PR 단계에서 중단</td><td>R3</td></tr>
+  <tr><td>E</td><td>열림, in-review</td><td>열림, CI 녹색</td><td>있음</td><td>병합만 남음(<code>--no-merge</code> 포함)</td><td>R3의 4–6단계(병합·정리)</td></tr>
+  <tr><td>F</td><td>닫힘</td><td>병합됨</td><td>있음</td><td>병합 후 정리 실패</td><td>R5</td></tr>
+  <tr><td>G</td><td>열림</td><td>병합됨</td><td>—</td><td>본문에 <code>Closes</code> 누락</td><td><code>gh issue close N</code>, <span class="label">in-review</span> 제거, 워크트리·브랜치 정리(R5) → 루프 재실행</td></tr>
+  <tr><td>H</td><td>열림</td><td>닫힘(병합 안 됨)</td><td>있음/없음</td><td>버린 시도</td><td>R2-b(처음부터 다시)</td></tr>
+</table>
+
+<h3>10.4 중단 지점별 복구 절차</h3>
+
+<h4><span class="tag r">R1</span>루프 프로세스가 죽었다 (Ctrl-C, 루프 터미널 닫힘, 노트북 잠자기)</h4>
+<p>워커는 Orca 안에서 계속 일하고 있을 수 있다. 루프만 없어진 상태다.</p>
+<ol>
+  <li><b>잠금 확인.</b> Ctrl-C나 오류로 끝났다면 잠금이 이미 풀려 있다. 강제 종료·전원 차단이면 남아 있을 수 있다. <code>pgrep -fl ticket-loop</code>로 실행 중인 루프가 없음을 확인한 뒤 <code>rmdir .git/ticket-loop.lock</code>.</li>
+  <li><b>멈춘 티켓 찾기.</b> 로그의 마지막 <code>=== #N</code> 줄을 보고 <code>ticket_state N</code>을 실행한다.</li>
+  <li><b>판정표대로 처리.</b> 대개 B(아직 구현 중)나 D·E(PR 단계)다. B라면 Orca 터미널에서 워커가 아직 일하는지 본다. 일하는 중이면 PR이 열리기를 기다린다.</li>
+  <li><b>재실행.</b> 그 티켓이 끝난 상태(F·G → 정리 후)나 PR 단계(D·E)가 되면 <code>bash scripts/ticket-loop.sh</code>로 다시 시작한다. PR 단계에 남겨 둔 채 재실행해도 루프는 PR이 열린 티켓을 건너뛰므로 안전하다. 다만 그 티켓에 막힌 티켓은 병합 전까지 풀리지 않으니, 가능하면 R3로 병합까지 끝내고 재실행한다.</li>
+</ol>
+
+<h4><span class="tag r">R2</span>워커가 PR 없이 멈췄다 ("워커가 PR 없이 멈췄습니다" / 타임아웃)</h4>
+<p>먼저 로그에 찍힌 워커 출력 마지막 25줄과 <b>이슈 코멘트</b>(<code>gh issue view N --comments</code>)를 읽는다. 원인은 대개 질문, 권한 창, 진행 불가 판단, 너무 큰 티켓 중 하나다. 워커 꼬리가 셸 프롬프트(<code>$</code>)라면 에이전트가 뜨지 않은 것이다(R9). 꼬리가 <code>git push</code>에서 출력 없이 멈춰 있으면 자격 증명 확인 창을 기다리는 것이다(4장 2단계 주의). 그다음 세 갈래 중 하나를 고른다.</p>
+<table>
+  <tr><th style="width:22%">갈래</th><th>절차</th></tr>
+  <tr><td><b>a. 워커를 이어서 일하게 한다</b><br><span class="small muted">워커 판단이 대체로 맞고 답 하나가 빠졌을 때</span></td><td>Orca에서 <code>issue-N</code> 워크트리 터미널을 열어 질문에 답하거나 지시를 입력한다. 권한 창이면 허용한다(그리고 4장 10단계 허용 목록에 추가). PR이 열리면 E/D 상태가 되고, R3로 마무리한 뒤 재실행한다.<br>CLI로 보낼 때: <code>orca terminal send --terminal &lt;핸들&gt; --text "…" --enter --json</code></td></tr>
+  <tr><td><b>a′. 같은 워크트리에서 새 워커로 이어간다</b><br><span class="small muted">워크트리는 있는데 터미널이 없어졌을 때(R4)</span></td><td><code>orca terminal create --worktree id:&lt;워크트리ID&gt; --command "claude --dangerously-skip-permissions" --json</code>로 에이전트를 다시 띄운다. <code>terminal wait --for tui-idle</code>로 준비를 확인한 뒤 다음을 보낸다: "이슈 #N 작업을 이어서 해라. <code>git log origin/main..HEAD</code>와 <code>git status</code>로 진행 상황을 파악하고, 남은 인수 조건을 구현한 뒤 implement 스킬의 나머지 단계(리뷰·PR·라벨)를 따라 PR까지 열어라. 질문하지 마라."</td></tr>
+  <tr><td><b>a″. 원격 브랜치에서 워크트리를 다시 만든다</b><br><span class="small muted">워크트리가 사라지고 push된 브랜치만 남았을 때(C 상태)</span></td><td>
+<pre><code>orca worktree create --repo id:&lt;repoId&gt; --name issue-N --no-parent \
+  --base-branch origin/issue-N-&lt;slug&gt; --issue N --agent claude --json \
+  --prompt "이슈 #N 작업을 이어서 해라. 먼저 \`git checkout issue-N-&lt;slug&gt;\`로 원격 브랜치를 받고, \`git log origin/main..HEAD\`로 진행 상황을 파악한 뒤 남은 인수 조건을 구현하고 PR까지 열어라. 질문하지 마라."</code></pre>
+push되지 않은 작업은 이미 잃었다. 워크트리 안의 커밋이 push 전이었다면 그만큼은 다시 해야 한다.</td></tr>
+  <tr><td><b>b. 처음부터 다시</b><br><span class="small muted">방향이 틀렸거나 티켓을 고쳐야 할 때</span></td><td>
+<pre><code>gh pr close &lt;PR&gt; --delete-branch 2&gt;/dev/null || true   # PR이 있었다면
+git push origin --delete issue-N-&lt;slug&gt; 2&gt;/dev/null || true
+gh issue edit N --remove-label in-review --remove-assignee @me
+orca worktree rm --worktree id:&lt;워크트리ID&gt; --force --json
+# 이슈 본문 보강(결정 추가, 범위 축소, 쪼개기) 후
+bash scripts/ticket-loop.sh N</code></pre></td></tr>
+  <tr><td><b>c. 사람에게 넘긴다</b><br><span class="small muted">결정이 필요하거나 무인에 맞지 않을 때</span></td><td><code>gh issue edit N --remove-label ready-for-agent --add-label ready-for-human</code>. 워크트리는 사람이 이어 쓰거나 지운다. 이 티켓에 막힌 다른 티켓은 이 티켓이 닫힐 때까지 기다린다. 나머지는 <code>bash scripts/ticket-loop.sh</code>로 계속한다.</td></tr>
+</table>
+
+<h4><span class="tag r">R3</span>PR은 열렸는데 병합되지 않았다 (CI 실패·충돌 수리 소진, 루프가 먼저 죽음)</h4>
+<ol>
+  <li>원인을 본다: <code>gh pr checks &lt;PR&gt;</code>, <code>gh run view --log-failed</code>, <code>gh pr view &lt;PR&gt; --json mergeable</code>.</li>
+  <li>워크트리에서 고친다. 직접 고쳐도 되고, 워커 터미널에 지시해도 된다. 충돌이면 <code>git fetch origin &amp;&amp; git merge origin/main</code>. 테스트·lint 후 같은 브랜치에 push한다.</li>
+  <li>CI를 끝까지 본다: <code>gh pr checks &lt;PR&gt; --watch --fail-fast</code>.</li>
+  <li>병합: <code>gh pr merge &lt;PR&gt; --merge</code>. 이슈가 닫혔는지 확인하고, 안 닫혔으면 <code>gh issue close N</code>.</li>
+  <li>정리: <code>gh issue edit N --remove-label in-review</code>, <code>orca worktree rm --worktree id:&lt;ID&gt; --force --json</code>, <code>git worktree prune</code>, <code>git branch -D issue-N issue-N-&lt;slug&gt;</code>, <code>git push origin --delete issue-N-&lt;slug&gt;</code>.</li>
+  <li>재실행: <code>bash scripts/ticket-loop.sh</code>.</li>
+</ol>
+<div class="warn">CI를 통과시키려고 테스트를 건너뛰거나 지우지 않는다. 빈 커밋으로 CI를 다시 돌리지도 않는다. 실패는 원인을 고친다. 정말 일시적인 실패(러너 손실 등)라면 GitHub에서 그 작업만 한 번 다시 실행한다.</div>
+
+<h4><span class="tag r">R4</span>Orca 앱이 꺼졌다 / 컴퓨터가 재부팅됐다 ("Orca 터미널 … 에 닿지 못했습니다")</h4>
+<ol>
+  <li>Orca를 다시 켠다(<code>orca open --json</code>). 워크트리는 디스크에 그대로 있다. 다만 워커 프로세스와 그 대화 맥락은 사라졌다.</li>
+  <li><code>ticket_state N</code>과 워크트리 안의 <code>git status</code>·<code>git log</code>로 어디까지 됐는지 본다. 커밋되지 않은 변경도 남아 있을 수 있다.</li>
+  <li>PR이 이미 있으면 R3로 간다. 없으면 R2-a′(새 워커로 이어가기)나 R2-b(처음부터)를 고른다.</li>
+  <li>재부팅이었다면 루프 잠금이 남았을 수 있다(R1 1단계).</li>
+</ol>
+
+<h4><span class="tag r">R5</span>병합은 됐는데 정리가 안 됐다 ("워크트리 삭제 실패 — 수동 정리 필요")</h4>
+<p>이슈가 닫혔으므로 루프를 다시 실행해도 안전하다. 남은 것만 지운다: <code>orca worktree rm --worktree id:&lt;ID&gt; --force --json</code>, <code>git worktree prune</code>, <code>git branch -D issue-N issue-N-&lt;slug&gt;</code>(두 번째는 워커 브랜치, 첫 번째는 Orca가 워크트리용으로 만든 브랜치), <code>git push origin --delete issue-N-&lt;slug&gt;</code>, <code>gh issue edit N --remove-label in-review</code>.</p>
+
+<h4><span class="tag r">R6</span>GitHub 인증 만료·네트워크 오류로 루프가 죽었다</h4>
+<p><code>gh auth status</code> → 필요하면 <code>gh auth login</code>. 그다음 R1과 같다. 마지막 티켓의 상태를 진단하고, 판정표대로 정리한 뒤 재실행한다. 루프가 병합 직후에 죽었다면 F 상태일 가능성이 크다.</p>
+
+<h4><span class="tag r">R7</span>"체크가 등록되지 않았습니다"</h4>
+<p>워크플로가 PR 이벤트에서 돌지 않는 경우다(트리거 브랜치 불일치, Actions 비활성, 경로 필터). 워크플로에 경로 필터(<code>paths-ignore</code>)를 두었다면 루프의 <code>CI_SKIP_REGEX</code>가 같은 경로를 덮는지 본다. 워크플로는 건너뛰는데 루프는 기다리면 이 메시지가 난다. 원인을 고쳐 기본 브랜치에 반영한다. 그 PR은 기본 브랜치를 병합해 push하면 체크가 붙는다(정말 CI가 필요 없는 PR이었다면 사람이 병합한다). 그 뒤 R3로 마무리한다.</p>
+
+<h4><span class="tag r">R8</span>"다른 루프가 실행 중입니다"</h4>
+<p>정말 다른 루프가 돌고 있으면 끝나기를 기다린다(같은 저장소에서 두 루프를 돌리지 않는다). <code>pgrep -fl ticket-loop</code> 결과가 비어 있으면 강제 종료로 남은 잠금이므로 <code>rmdir "$(git rev-parse --git-common-dir)/ticket-loop.lock"</code>.</p>
+<h4><span class="tag r">R9</span>"에이전트가 터미널 … 에서 뜨지 않습니다"</h4>
+<p>워크트리는 만들어졌지만 에이전트가 두 번 다 뜨지 않았다. Orca에서 그 워크트리 터미널을 열어 무엇이 찍혔는지 본다. 흔한 원인은 Claude Code 미설치·로그인 만료, setup 훅 실패(<code>setupAgentStartupPolicy: wait-for-setup</code>이면 setup이 끝나야 에이전트가 뜬다), 에이전트 배너가 <code>AGENT_BANNER_REGEX</code>와 맞지 않는 경우(다른 에이전트나 배너 형식 변경)다. 원인을 고친 뒤 워크트리를 지우고(R2-b) 그 티켓부터 다시 돌린다.</p>
+
+<h4><span class="tag r">R10</span>"병합 뒤 검증이 실패했습니다" / "포트 … 이 비지 않았다"</h4>
+<p>PR은 이미 병합돼 이슈가 닫혔고 워커 워크트리도 정리됐다(F 상태와 같다). 기본 브랜치가 무거운 검증을 못 넘긴 것이다. <code>.orca-loop/post-merge-N.log</code> 꼬리를 읽고, 검증 워크트리(<code>~/.cache/ticket-loop/&lt;owner-repo&gt;/post-merge</code>)에서 실패한 테스트 하나만 다시 돌려 재현한다. 수정은 새 브랜치 + PR로 한다(티켓이면 <code>T00:</code>으로 끼워 넣는다). 병합한 뒤 루프를 다시 실행한다.</p>
+<ul>
+  <li><b>이번 티켓 탓이 아닐 수 있다.</b> 공유 개발 DB의 데이터가 바뀌어 테스트 전제가 깨졌을 수 있다("X가 없다"를 전제로 0건을 단언하는 테스트 등). 제품 버그로 단정하기 전에 전제부터 확인한다.</li>
+  <li><b>포트 메시지</b>면 루프가 도는 동안 그 포트에 띄운 개발 서버를 끄고 다시 실행하거나, 이번에는 <code>--skip-post-merge</code>로 돈다.</li>
+</ul>
+
+</section>
+
+<section>
+<h3>10.5 따라 해 보기 — S1 도중 두 번 멈췄을 때</h3>
+
+<div class="scenario">
+<h4><span class="tag r">상황 1</span>T03(#43) 진행 중 노트북을 덮었다</h4>
+<p>아침에 Orca의 메인 체크아웃 터미널을 보니 루프가 끝나 있다(잠자기로 셸이 멈췄다가 깨어나면서 Orca 호출이 실패했다). 로그 끝:</p>
+<pre class="out">[2026-10-08 23:05:12] === #43 T03: 목록 화면 "내보내기" 버튼 ===
+[2026-10-08 23:05:14] #43: 워크트리 r-7f3::/Users/me/orca/issue-43 / 터미널 term-23</pre>
+<div class="step"><div class="n">1</div><div class="b"><p>잠금과 프로세스 확인</p>
+<pre><code>pgrep -fl ticket-loop || echo "루프 없음"
+ls -d .git/ticket-loop.lock 2&gt;/dev/null &amp;&amp; rmdir .git/ticket-loop.lock</code></pre></div></div>
+<div class="step"><div class="n">2</div><div class="b"><p>상태 진단</p>
+<pre><code>ticket_state 43</code></pre>
+<pre class="out">== 이슈
+OPEN | 라벨: ready-for-agent, in-review | 담당: me
+== PR
+#48 OPEN issue-43-export-button
+== 원격 브랜치
+9c1e…	refs/heads/issue-43-export-button
+== 워크트리
+/Users/me/orca/issue-43  9c1e2ab [issue-43-export-button]
+== 루프 잠금
+(없음)</pre>
+<p>판정표 D 또는 E다. 루프가 죽은 사이에도 워커가 PR #48을 열었다.</p></div></div>
+<div class="step"><div class="n">3</div><div class="b"><p>CI 확인 후 병합·정리 (R3)</p>
+<pre><code>gh pr checks 48 --watch --fail-fast &amp;&amp; gh pr merge 48 --merge
+gh issue view 43 --json state -q .state          # CLOSED
+gh issue edit 43 --remove-label in-review
+orca worktree rm --worktree "id:r-7f3::/Users/me/orca/issue-43" --force --json
+git worktree prune; git branch -D issue-43 issue-43-export-button
+git push origin --delete issue-43-export-button</code></pre></div></div>
+<div class="step"><div class="n">4</div><div class="b"><p>재개 — #43이 닫혔으므로 #44의 선행이 모두 풀렸다.</p>
+<pre><code>bash scripts/ticket-loop.sh --parent 40</code></pre></div></div>
+</div>
+
+<div class="scenario">
+<h4><span class="tag r">상황 2</span>T04(#44) 워커가 질문하고 멈췄다</h4>
+<pre class="out">[2026-10-09 09:58:40] #44: 워커 idle, PR 없음 (3/3)
+[2026-10-09 09:58:40] #44: 워커 출력 꼬리 ---
+  1만 행 초과 시 동작이 티켓에 두 가지로 읽힙니다: (1) 처음 1만 행만 내보내고 안내,
+  (2) 내보내기를 거부하고 필터를 좁히라고 안내. 어느 쪽으로 할까요?
+[2026-10-09 09:58:41] ERROR: #44: 워커가 PR 없이 멈췄습니다 (질문·실패 가능). Orca에서 issue-44 워크트리를 확인하세요.</pre>
+<div class="step"><div class="n">1</div><div class="b"><p>결정한다. 티켓이 모호했던 것이므로 <b>이슈에도 결정을 남긴다</b>. 그래야 사후 검수 때 근거가 보인다.</p>
+<pre><code>gh issue comment 44 --body "결정: 1만 행 초과면 거부하고 필터를 좁히라고 안내한다(부분 내보내기 안 함)."</code></pre></div></div>
+<div class="step"><div class="n">2</div><div class="b"><p>R2-a: Orca에서 <code>issue-44</code> 터미널을 열고 답한다.</p>
+<pre><code>(2)로 해라. 이슈 #44 코멘트에도 적어 두었다. 질문하지 말고 PR까지 끝내라.</code></pre></div></div>
+<div class="step"><div class="n">3</div><div class="b"><p>PR이 열리면 R3로 CI를 확인하고 병합·정리한다. 남은 대상이 없으면 루프를 다시 돌릴 필요도 없다. <code>bash scripts/ticket-loop.sh --dry-run</code>이 "처리할 티켓이 없습니다"라고 하면 끝이다.</p></div></div>
+<div class="step"><div class="n">4</div><div class="b"><p>재발 방지: 같은 종류의 모호함이 또 나오면 <code>/to-tickets</code> 단계에서 걸러지도록, 스펙이나 <code>GLOSSARY.md</code>·ADR에 결정을 남긴다.</p></div></div>
+</div>
+</section>
+
+<!-- ============ 11 ============ -->
+<section>
+<h2>11. 안전 장치와 운영 수칙</h2>
+<h3>루프가 지키는 것</h3>
+<ul>
+  <li><b>CI가 녹색일 때만 병합한다.</b> 체크가 하나라도 실패하면(<code>--fail-fast</code>) 병합하지 않는다. 체크가 아예 없어도 병합하지 않는다. 예외는 바뀐 파일이 전부 <code>CI_SKIP_REGEX</code>에 맞는 PR뿐이다.</li>
+  <li><b>기본 브랜치가 깨지면 쌓지 않는다.</b> 병합 뒤 검증이 실패하면 다음 티켓으로 가지 않고 멈춘다.</li>
+  <li><b>수리 횟수에 상한이 있다.</b> 기본 1회 고쳐 보게 하고, 그래도 안 되면 사람에게 넘긴다.</li>
+  <li><b>워커는 병합하지 않는다.</b> 프롬프트로 지시하고 권한으로도 막는다(4장 10단계).</li>
+  <li><b>멈추면 증거를 남긴다.</b> 워크트리, 워커 출력 꼬리, Orca 카드의 읽지 않음 표시와 코멘트.</li>
+  <li><b>저장소당 루프 하나.</b> 잠금 디렉터리로 동시 실행을 막는다.</li>
+  <li><b>한 실행 안에서 같은 티켓을 두 번 처리하지 않는다.</b> 담당자가 있는 티켓도 집지 않는다.</li>
+  <li><b>남긴 기록으로 회고할 수 있다.</b> 티켓마다 요약 한 줄과, 멈췄다면 워커 출력 꼬리가 로그에 남는다.</li>
+</ul>
+
+<h3>사람이 지킬 것</h3>
+<table>
+  <tr><th style="width:42%">하지 말 것</th><th>이유</th></tr>
+  <tr><td>같은 저장소에서 루프를 두 개 돌리기(다른 컴퓨터 포함)</td><td>잠금은 한 체크아웃 안에서만 통한다. 두 루프가 같은 티켓을 집을 수 있다.</td></tr>
+  <tr><td>루프가 도는 동안 기본 브랜치에 직접 커밋</td><td>진행 중인 PR에 예상하지 못한 충돌을 만든다. 사람 작업도 PR로 올린다.</td></tr>
+  <tr><td>메인 체크아웃 <code>.env</code>에 운영 자격 증명 두기</td><td>setup 훅이 워커에 복사하고, 워커는 확인 없이 명령을 실행한다.</td></tr>
+  <tr><td>CI를 통과시키려고 테스트를 건너뛰거나 지우기</td><td>무인 병합의 유일한 판정 기준을 스스로 무너뜨린다.</td></tr>
+  <tr><td>결정이 필요한 티켓에 <span class="label">ready-for-agent</span> 붙이기</td><td>워커는 질문할 수 없다. 멈추거나 추측한다.</td></tr>
+  <tr><td>진행 중인 티켓을 정리하지 않고 루프 재실행</td><td>같은 티켓을 다시 집는다(10.1).</td></tr>
+  <tr><td>확인하지 않고 멈춘 워크트리 지우기</td><td>커밋되지 않은 작업과 원인 단서가 사라진다.</td></tr>
+  <tr><td>루프가 도는 동안 <code>POST_MERGE_PORT</code>에 개발 서버 띄우기</td><td>병합 뒤 검증이 10분 기다리다 멈춘다.</td></tr>
+  <tr><td>스킬·규칙 파일을 고치고 병합하지 않은 채 루프 실행</td><td>워커는 <code>origin/main</code>의 파일만 본다. 고친 내용이 적용되지 않는다.</td></tr>
+</table>
+
+<h3>권장 운영 리듬</h3>
+<ol>
+  <li>기획: <code>/grill-with-docs</code> → 결정 문서 병합 → <code>/to-spec</code> → <code>/to-tickets</code>(하위 이슈, <code>T&lt;NN&gt;</code>)</li>
+  <li>준비 확인: <code>--parent &lt;스펙&gt; --dry-run</code></li>
+  <li>규칙을 바꾼 직후에는 <code>--max 1</code>로 지켜보기</li>
+  <li>무인 실행: 메인 체크아웃의 Orca 터미널 + 잠자기 방지</li>
+  <li>점검: 로그 끝, <code>요약:</code> 줄, 남은 워크트리, <span class="label">in-review</span> 이슈 → 멈췄으면 10장</li>
+  <li>사후 검수: PR의 "남은 판단 사항"·"검증하지 못한 것" → 후속 티켓, 스펙 이슈 닫기</li>
+  <li>회고: <code>/retro</code> → 스킬·<code>worker-rules.md</code>·자동 검사·스크립트를 PR로 고친다 → 다음 묶음</li>
+</ol>
+</section>
+
+<!-- ============ 12 ============ -->
+<section>
+<h2>12. FAQ</h2>
+<p><b>Q. 병렬로 여러 티켓을 동시에 돌릴 수는 없나?</b><br>
+이 루프는 의도적으로 직렬이다. 앞 티켓이 병합된 기본 브랜치에서 다음 티켓을 시작하므로 충돌과 중복 구현이 적다. 병렬이 필요하면 mattpocock의 <code>/implement-spec</code>을 쓴다. 이 스킬은 하나의 통합 브랜치에서 실행 가능한 티켓들을 서브에이전트로 동시에 처리한다. 대신 병합 시점과 리뷰를 사람이 더 챙겨야 한다.</p>
+
+<p><b>Q. 병합 전에 꼭 사람이 보고 싶다.</b><br>
+<code>--no-merge</code>로 돌린다(S3). 또는 브랜치 보호에서 필수 리뷰를 켠다. 그러면 <code>gh pr merge</code>가 거절돼 루프가 멈추고, 그 지점부터 R3로 이어받는다.</p>
+
+<p><b>Q. E2E·통합 테스트처럼 무거운 검증은?</b><br>
+CI에서 돌릴 수 있으면 CI에 넣는 편이 가장 낫다. 병합 전에 걸러진다. 실제 개발 DB·고정 포트가 필요해 CI에 못 넣는다면, 워커에게는 돌리지 말고 PR에 "미실행 — 루프가 병합 뒤 실행"으로 적으라고 <code>worker-rules.md</code>에 쓰고, 루프의 <code>POST_MERGE_CMD</code>로 병합마다 한 번 돌린다(7장 6단계). "미실행"이라고만 적고 아무 데서도 돌리지 않으면 깨진 채로 쌓인다(실제로 그랬다).</p>
+
+<p><b>Q. 워커가 시간과 토큰을 너무 많이 쓴다.</b><br>
+실측에서 가장 컸던 것은 반복 검증과 큰 화면 캡처였다. ① 검증을 두 층으로 나눠 전체 묶음을 정해진 두 번만 돌린다(4장 11단계). ② 스크린샷은 작게 한 장. ③ <code>CLAUDE.md</code>를 포인터로 줄인다. 워커는 티켓마다 새로 읽는다. ④ "새 API를 추가하면 이 테스트와 이 문서도 바꾼다" 같은 함께 바꿀 목록을 문서로 두고 <code>implement</code>가 먼저 읽게 하면, 실패를 하나씩 겪으며 찾는 왕복이 줄어든다. 루프 로그의 티켓별 요약 줄로 어느 티켓이 오래 걸렸는지 보고 <code>/retro</code>로 원인을 찾는다.</p>
+
+<p><b>Q. 워커 모델이나 Claude Code 옵션을 바꾸려면?</b><br>
+<code>worktree create --agent claude</code>는 Orca에 설정된 실행기를 쓰고, 호출마다 플래그를 넘기지 않는다. 모델·권한 같은 설정은 저장소의 <code>.claude/settings.json</code>이나 Orca의 에이전트 설정에서 바꾼다.</p>
+
+<p><b>Q. GitLab이나 다른 트래커에서도 쓸 수 있나?</b><br>
+스킬은 GitLab·로컬 파일 트래커도 지원한다. 하지만 이 루프 스크립트는 <code>gh</code>와 GitHub의 선행 관계 API를 쓴다. 다른 트래커에서는 대상 선택(<code>candidates</code>, <code>blocked_by</code>), PR 조회, 병합 함수를 그 트래커 CLI로 바꿔야 한다.</p>
+
+<p><b>Q. Codex 같은 다른 에이전트를 워커로 쓸 수 있나?</b><br>
+<code>AGENT=codex</code>로 바꿀 수 있다. 다만 워커 프롬프트가 Claude Code의 슬래시 명령(<code>/implement</code>)과 스킬 이름을 쓰므로, 그 에이전트에도 같은 스킬을 설치해야 한다(mattpocock 스킬은 Codex 플러그인도 제공한다). 슬래시 명령 문법이 다르면 <code>worker_prompt</code>도 손본다.</p>
+
+<p><b>Q. 클라우드(웹) Claude Code에서 루프를 돌릴 수 있나?</b><br>
+아니다. 루프는 로컬에서 실행 중인 Orca 앱과 CLI, 로컬 <code>gh</code> 로그인을 전제로 한다.</p>
+
+<p><b>Q. 루프가 만든 PR의 품질이 들쭉날쭉하다.</b><br>
+대개 티켓 품질 문제다. 인수 조건이 구체적인지, 결정이 문서에 있는지, 티켓이 PR 하나 크기인지 본다. 반복되는 지적은 저장소의 코딩 표준 문서(<code>CODING_STANDARDS.md</code> 등)로 옮긴다. <code>ticket-review</code>의 Standards 축이 그 문서를 읽는다. 패턴이 기계적이면(금지된 API, import 모양, 파일 위치) 문서보다 린트 규칙이나 테스트로 만드는 편이 확실하다.</p>
+</section>
+
+<!-- ============ 13 ============ -->
+<section>
+<h2>13. 부록</h2>
+<h3>A. 명령 치트시트</h3>
+<table>
+  <tr><th style="width:38%">하고 싶은 일</th><th>명령</th></tr>
+  <tr><td>대상 미리보기</td><td><code>bash scripts/ticket-loop.sh --parent 40 --dry-run</code></td></tr>
+  <tr><td>한 건만 시험</td><td><code>bash scripts/ticket-loop.sh --parent 40 --max 1</code></td></tr>
+  <tr><td>스펙 하나 전부 (잠자기 방지)</td><td><code>caffeinate -is bash scripts/ticket-loop.sh --parent 40</code></td></tr>
+  <tr><td>준비된 것 전부</td><td><code>bash scripts/ticket-loop.sh</code></td></tr>
+  <tr><td>특정 티켓만</td><td><code>bash scripts/ticket-loop.sh 41 45</code></td></tr>
+  <tr><td>버그만 3건</td><td><code>bash scripts/ticket-loop.sh --label bug --max 3</code></td></tr>
+  <tr><td>병합은 사람이</td><td><code>bash scripts/ticket-loop.sh --no-merge</code></td></tr>
+  <tr><td>병합마다 E2E</td><td><code>POST_MERGE_CMD="npm ci &amp;&amp; npm run test:e2e" bash scripts/ticket-loop.sh</code></td></tr>
+  <tr><td>티켓별 요약 보기</td><td><code>grep "요약:" .orca-loop/loop-MMDD.log</code></td></tr>
+  <tr><td>열린 선행 이슈 수</td><td><code>gh api repos/OWNER/REPO/issues/N/dependencies/blocked_by --jq '[.[] | select(.state == "open")] | length'</code></td></tr>
+  <tr><td>티켓 상태 한눈에</td><td><code>ticket_state N</code> (10.2)</td></tr>
+  <tr><td>PR 체크 / 실패 로그</td><td><code>gh pr checks PR --watch</code> / <code>gh run view --log-failed</code></td></tr>
+  <tr><td>Orca 워크트리 목록</td><td><code>orca worktree list --json</code></td></tr>
+  <tr><td>워커 터미널 읽기 / 보내기</td><td><code>orca terminal read --terminal H --json</code> / <code>orca terminal send --terminal H --text "…" --enter --json</code></td></tr>
+  <tr><td>새 에이전트로 이어가기</td><td><code>orca terminal create --worktree id:ID --command "claude --dangerously-skip-permissions" --json</code></td></tr>
+  <tr><td>워크트리 삭제</td><td><code>orca worktree rm --worktree id:ID --force --json</code> 후 <code>git worktree prune</code></td></tr>
+  <tr><td>남은 잠금 해제</td><td><code>rmdir "$(git rev-parse --git-common-dir)/ticket-loop.lock"</code></td></tr>
+  <tr><td>멈춘 push 다시 하기</td><td><code>GIT_TERMINAL_PROMPT=0 git -c credential.helper= -c 'credential.helper=!gh auth git-credential' push -u origin BR</code></td></tr>
+</table>
+
+<h3>B-1. 워커 프롬프트 원문 (N=41)</h3>
+<pre><code>/implement 41 — 무인 루프(ticket-loop.sh)에서 실행 중이다. 사람이 답할 수 없으니 질문(AskUserQuestion)하지 말고 스스로 결정해 끝까지 진행해라. PR은 병합하지 마라 — 루프가 CI 뒤에 병합한다. 진행이 불가능하면(열린 선행 이슈 포함) 이슈 #41에 이유를 코멘트로 남기고 PR 없이 멈춰라. 저장소의 .orca-loop/worker-rules.md 규칙도 따라라.</code></pre>
+<p class="small muted">한 줄로 보낸다. TUI에서는 줄바꿈이 곧 제출이다. 마지막 문장은 규칙 파일이 있을 때만 붙는다. 절차는 아래 B-2 스킬에 있다. 프로젝트에 따라 "스키마를 바꾸면 개발 DB에만 적용하라, 운영에는 연결하지 마라"처럼 환경 판단 결과를 한 문장 더 붙일 수 있다(스크립트의 <code>worker_prompt</code>).</p>
+
+<h3>B-2. <code>implement</code> 스킬 예시 (<code>.claude/skills/implement/SKILL.md</code>, 저장소 소유)</h3>
+<p class="small muted">upstream <code>implement</code>를 바탕으로 무인 실행에 필요한 절차를 채운 것이다. <code>main</code>, <code>npm run verify</code>, 라벨 이름을 저장소에 맞게 바꾼다.</p>
+<pre class="script"><code>---
+name: implement
+description: "Implement a piece of work based on a spec or set of tickets."
+disable-model-invocation: true
+---
+
+&lt;!-- Project-owned: the skill sync skips this file. Based on upstream mattpocock/skills
+`implement` (&lt;version&gt;, &lt;commit&gt;); when upstream changes it, port the change by hand. --&gt;
+
+Implement the work described by the user in the spec or tickets. The tracker is described
+in `docs/agents/issue-tracker.md`.
+
+If the user passes only a number `N`, it is GitHub issue #N. Run
+`gh issue view N --json number,title,body,labels,state,comments` and state its title back.
+Stop if it is closed, or labelled `needs-info`, `ready-for-human` or `wontfix`. If the issue
+is a sub-issue, read the parent spec too.
+
+Before starting, check the issue has no open blockers: count the open ones in the blocker
+list (`gh api repos/{owner}/{repo}/issues/N/dependencies/blocked_by --jq '[.[] | select(.state == "open")] | length'`
+is `0`). Do not use `issue_dependencies_summary.blocked_by`: it keeps an old count for a
+while after a blocker closes. If it has open blockers, stop and name them.
+
+Create the branch from the remote tip, never by checking out `main` (another worktree may
+hold it): `git fetch origin &amp;&amp; git checkout -b issue-&lt;N&gt;-&lt;slug&gt; origin/main`.
+Assign the issue to yourself (`gh issue edit N --add-assignee @me`).
+
+Read `GLOSSARY.md` and the ADRs in `docs/adr/` that touch the area, and use the glossary's
+terms in code, tests and the PR.
+
+Call the Skill tool with "tdd" where possible. Do not ask the user to confirm the seams:
+this overrides the confirmation step in `tdd`. Choose the seams yourself from the ticket's
+acceptance criteria and the existing tests around the code you touch, then proceed. List
+the seams you tested in the pull request body.
+
+While working, run only the typecheck and single test files. Run the full bundle
+`npm run verify` (lint, full test suite, build) exactly twice: once right before the first
+commit and once right before the review-fix commit.
+
+Commit your work to the issue branch, mentioning `#N` in the commit message. Then call the
+Skill tool with "ticket-review", with `origin/main` as the fixed point and issue #N as the
+spec. Fix every hard violation and every Spec finding in a follow-up commit; list the
+remaining judgement calls in the pull request body.
+
+Push the branch and open a pull request into `main` with `gh pr create --base main`. Call
+the Skill tool with "pr" for the body's shape. Tick the met acceptance criteria in the issue
+body and add the `in-review` label to the issue. Do not merge the pull request.</code></pre>
+
+<h3>B-3. <code>pr</code> 스킬 예시 (<code>.claude/skills/pr/SKILL.md</code>, 저장소 소유)</h3>
+<pre class="script"><code>---
+name: pr
+description: "Use when writing a PR body."
+---
+
+Write the PR body in this order. Skip no section; write "없음" when a section is empty.
+
+```markdown
+Closes #N
+
+## 인수 조건
+- [x] &lt;이슈의 인수 조건을 그대로, 충족한 것만 체크&gt;
+- [ ] &lt;충족하지 못한 것과 이유&gt;
+
+## 테스트 지점(seam)
+- `tests/&lt;file&gt;` — &lt;무엇을 고정하는지 한 줄&gt;
+
+## 검증
+- `npm run verify` &lt;결과&gt;, 마이그레이션 &lt;적용/없음&gt;
+
+## 검증하지 못한 것
+- E2E 미실행 — 루프가 병합 뒤 실행 / 브라우저 수동 확인 없음 / ...
+
+## 남은 판단 사항
+- &lt;리뷰가 남긴 판단, 스펙에 없어 택한 해석&gt;
+```
+
+Add `## 되돌리기` only for a one-way door (schema data change, auth, money, production
+config): say what reverting the PR cannot undo and what to do instead.
+Keep each bullet to one or two sentences. No screenshots unless the ticket is visual.</code></pre>
+
+<h3>C. 수리 프롬프트 원문</h3>
+<pre><code>[충돌] PR #P 이 main과 충돌한다. `git fetch origin &amp;&amp; git merge origin/main`으로 충돌을 해결하고 테스트·lint를 다시 돌린 뒤 같은 브랜치에 push해라. 질문하지 말고 끝까지 해라.
+[CI]   PR #P 의 CI가 실패했다. `gh pr checks P` 와 `gh run view --log-failed` 로 원인을 보고 고친 뒤 테스트·lint를 다시 돌리고 같은 브랜치에 push해라. 테스트를 건너뛰거나 지우지 마라. 질문하지 말고 끝까지 해라.</code></pre>
+<p class="small muted">마이그레이션처럼 번호가 겹칠 수 있는 파일이 있으면 충돌 프롬프트에 "번호가 겹치면 네 것을 지우고 다음 번호로 다시 만들어라"를 더한다.</p>
+
+<h3>D. <code>ticket-loop.sh</code> 전문 (2판)</h3>
+<p class="small muted">이 문서와 함께 배포되는 파일과 같다. 저장소의 <code>scripts/ticket-loop.sh</code>로 복사해 쓴다. 의존 도구: bash, git 2.31 이상, gh, jq, Orca CLI, (병합 뒤 검증에 포트를 쓰면) lsof.</p>
+<pre class="script"><code>#!/usr/bin/env bash
+set -euo pipefail
+
+# ticket-loop.sh — GitHub 이슈 티켓을 Orca 워크트리에서 한 건씩 무인 처리한다.
+# 가이드: 「Orca 티켓 무인 루프 가이드북」 2판 (orca-loop-kit docs/). 이 파일은 orca-loop-kit이 관리한다 — 고치면 키트에서 고친다.
+#
+# 티켓 하나당:
+#   1. 기본 브랜치에서 Orca 워크트리를 새로 만들고 에이전트(Claude Code)에 `/implement N`을 보낸다
+#      (티켓마다 새 프로세스라 컨텍스트가 비어 있다)
+#   2. 워커가 `&lt;BRANCH_PREFIX&gt;N-&lt;slug&gt;` 브랜치로 PR을 열 때까지 기다린다
+#   3. CI를 기다리고, 충돌·CI 실패는 같은 워커에 REPAIR_ROUNDS회까지 고치게 한다
+#   4. PR을 병합한다 → 본문의 `Closes #N`으로 이슈가 닫힌다
+#   5. (선택) 병합된 기본 브랜치로 POST_MERGE_CMD를 한 번 돌린다 — 워커가 못 돌리는 무거운 검증. 실패하면 멈춘다
+#   6. 워크트리·브랜치를 지우고, 티켓 요약 한 줄을 로그에 남기고, 다음 티켓으로 간다(자동 선택이면 대상 재계산)
+#
+# 사용법:
+#   ticket-loop.sh                     # 준비된 티켓 전부
+#   ticket-loop.sh --parent 40         # 스펙 이슈 #40의 하위 이슈만
+#   ticket-loop.sh --label bug         # 라벨로 좁히기(SCOPE_LABEL과 같다)
+#   ticket-loop.sh 12 15               # 지정한 이슈만, 적은 순서대로(라벨은 보지 않는다)
+#   ticket-loop.sh --dry-run           # 대상 목록만 출력
+#   ticket-loop.sh --max 1             # 최대 1건
+#   ticket-loop.sh --no-merge 12       # CI 통과까지만, 병합은 사람이
+#   ticket-loop.sh --skip-post-merge   # POST_MERGE_CMD를 이번 실행에서 끈다
+#
+# 전제: Orca 앱 실행 중, Orca CLI 등록, `gh auth status` 로그인, 저장소 안에서 실행.
+# 진행 로그는 기본으로 .orca-loop/loop-MMDD.log에 덧붙인다(.gitignore에 /.orca-loop/*.log 권장).
+# 티켓마다 "#N 요약: …" 한 줄(벽시계·PR·CI 소요·수리·idle 오판·병합 뒤 검증)을 남겨 /retro가 읽는다.
+# 저장소별 설정은 .orca-loop/loop.env에 둔다(있으면 읽는다). 그 파일은 `VAR="${VAR:-값}"` 꼴로 써서
+# 실행할 때 준 환경변수가 이기게 한다. 예: CI_SKIP_REGEX="${CI_SKIP_REGEX:-^docs/}"
+#
+# 환경변수(선택):
+#   ORCA_CLI            Orca CLI 실행 파일 (기본: ORCA_CLI_COMMAND → Linux면 orca-ide → orca)
+#   SPEC_ISSUE          --parent 기본값
+#   SCOPE_LABEL         함께 요구할 라벨(--label 기본값)
+#   READY_LABEL         대상 라벨 (기본 ready-for-agent)
+#   IN_REVIEW_LABEL     PR이 열린 티켓 라벨 (기본 in-review)
+#   BRANCH_PREFIX       이슈 브랜치 접두사 (기본 issue-)
+#   BASE_BRANCH         기준 브랜치 (기본: 저장소 기본 브랜치)
+#   ORDER_REGEX         제목에서 순번을 뽑는 정규식, 이름 있는 그룹 n (기본 ^T(?&lt;n&gt;[0-9]+))
+#   WORKER_RULES_FILE   워커가 추가로 따를 규칙 파일 (기본 .orca-loop/worker-rules.md)
+#   AGENT               Orca 에이전트 ID (기본 claude)
+#   AGENT_BANNER_REGEX  에이전트가 떴는지 확인할 화면 문구 (기본: Claude Code 배너·모델명)
+#   AGENT_RESTART_CMD   에이전트가 뜨지 않았을 때 셸에서 다시 띄울 명령. 프롬프트는 인자로 붙는다
+#                       (기본 claude --dangerously-skip-permissions — Orca가 워커를 띄우는 방식과 같게)
+#   TICKET_TIMEOUT_SEC  티켓 한 건 제한 시간 (기본 14400 = 4시간)
+#   MERGE_METHOD        merge | squash | rebase (기본 merge)
+#   REPAIR_ROUNDS       충돌·CI 수리 횟수 합계 (기본 1)
+#   CI_SKIP_REGEX       바뀐 파일이 전부 이 정규식(ERE)에 맞으면 CI가 안 붙는 게 정상인 PR로 보고 체크 없이 병합한다.
+#                       ci.yml의 paths-ignore와 같게 맞춘다 (기본 없음 = 모든 PR에서 체크를 기다린다)
+#   POST_MERGE_CMD      병합 뒤 기본 브랜치에서 돌릴 명령, 예 "npm ci &amp;&amp; npm run test:e2e" (기본 없음 = 끔)
+#   POST_MERGE_COPY     POST_MERGE_CMD 전에 메인 체크아웃에서 복사할 파일들(공백 구분), 예 ".env.local"
+#   POST_MERGE_PORT     POST_MERGE_CMD가 쓰는 포트. 지정하면 비기를 기다린다(기본 없음)
+#   POST_MERGE_WORKTREE POST_MERGE_CMD를 돌릴 워크트리 (기본 ~/.cache/ticket-loop/&lt;owner-repo&gt;/post-merge, 저장소 밖)
+#   LOG_FILE            진행 로그 파일 (기본 .orca-loop/loop-MMDD.log, /dev/null이면 끔)
+#
+# 멈추는 조건(루프 종료, 워크트리는 조사용으로 남긴다):
+#   - 워커가 PR 없이 멈춤(질문·실패) / 티켓 타임아웃 / Orca 터미널 끊김 / 에이전트 기동 실패
+#   - 수리 REPAIR_ROUNDS회 뒤에도 CI 실패 또는 충돌
+#   - 병합 뒤 POST_MERGE_CMD 실패, 또는 POST_MERGE_PORT가 10분 안에 비지 않음
+# 자동 선택은 선행 이슈가 열렸거나, PR이 이미 있거나, 담당자가 있거나, 하위 이슈를 가진(스펙) 이슈를 건너뛴다.
+
+LOOP_ENV="$(git rev-parse --show-toplevel 2&gt;/dev/null || pwd)/.orca-loop/loop.env"
+# shellcheck source=/dev/null
+[[ ! -f "$LOOP_ENV" ]] || source "$LOOP_ENV"
+
+if [[ -n "${ORCA_CLI:-}" ]]; then :
+elif [[ -n "${ORCA_CLI_COMMAND:-}" ]]; then ORCA_CLI="$ORCA_CLI_COMMAND"
+elif [[ "$(uname -s)" == "Linux" ]]; then ORCA_CLI="orca-ide"   # Linux의 orca는 GNOME 스크린리더다
+else ORCA_CLI="orca"
+fi
+PARENT="${SPEC_ISSUE:-}"
+SCOPE_LABEL="${SCOPE_LABEL:-}"
+READY_LABEL="${READY_LABEL:-ready-for-agent}"
+IN_REVIEW_LABEL="${IN_REVIEW_LABEL:-in-review}"
+BRANCH_PREFIX="${BRANCH_PREFIX:-issue-}"
+BASE_BRANCH="${BASE_BRANCH:-}"
+ORDER_REGEX="${ORDER_REGEX:-^T(?&lt;n&gt;[0-9]+)}"
+WORKER_RULES_FILE="${WORKER_RULES_FILE:-.orca-loop/worker-rules.md}"
+AGENT="${AGENT:-claude}"
+AGENT_BANNER_REGEX="${AGENT_BANNER_REGEX:-Claude Code|Opus|Sonnet|Fable|Haiku}"
+AGENT_RESTART_CMD="${AGENT_RESTART_CMD:-claude --dangerously-skip-permissions}"
+TICKET_TIMEOUT_SEC="${TICKET_TIMEOUT_SEC:-14400}"
+MERGE_METHOD="${MERGE_METHOD:-merge}"
+REPAIR_ROUNDS="${REPAIR_ROUNDS:-1}"
+CI_SKIP_REGEX="${CI_SKIP_REGEX:-}"
+POST_MERGE_CMD="${POST_MERGE_CMD:-}"
+POST_MERGE_COPY="${POST_MERGE_COPY:-}"
+POST_MERGE_PORT="${POST_MERGE_PORT:-}"
+POST_MERGE_WORKTREE="${POST_MERGE_WORKTREE:-}"
+LOG_FILE="${LOG_FILE:-.orca-loop/loop-$(date +%m%d).log}"
+IDLE_WAIT_MS=600000       # tui-idle 1회 대기 상한
+IDLE_STRIKES=3            # PR 없이 연속 idle이면 멈춤으로 본다
+IDLE_RECHECK_SEC=30
+STARTUP_GRACE_SEC=120     # 기동 직후에는 프롬프트 처리 전에도 idle로 잡힌다
+AGENT_START_WAIT_SEC=90   # 에이전트 배너가 보이기까지 기다리는 상한(1회), 넘기면 한 번 다시 띄운다
+CI_APPEAR_TIMEOUT_SEC=900
+PORT_WAIT_SEC=600
+
+DRY_RUN=0
+NO_MERGE=0
+POST_MERGE=1
+MAX=0
+TICKETS=()
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --dry-run) DRY_RUN=1 ;;
+    --no-merge) NO_MERGE=1 ;;
+    --skip-post-merge) POST_MERGE=0 ;;
+    --max) MAX="$2"; shift ;;
+    --parent) PARENT="${2#\#}"; shift ;;
+    --label) SCOPE_LABEL="$2"; shift ;;
+    --help|-h) awk 'NR &gt; 2 &amp;&amp; /^#/ { on = 1; sub(/^# ?/, ""); print; next } on { exit }' "$0"; exit 0 ;;
+    -*) echo "unknown option: $1" &gt;&amp;2; exit 2 ;;
+    *) TICKETS+=("${1#\#}") ;;
+  esac
+  shift
+done
+[[ -n "$POST_MERGE_CMD" ]] || POST_MERGE=0
+
+# --dry-run은 로그를 남기지 않는다(목록 확인만). 실행 로그는 다음 /retro가 읽는 1차 자료다.
+if [[ $DRY_RUN -eq 0 &amp;&amp; "$LOG_FILE" != "/dev/null" ]]; then
+  mkdir -p "$(dirname "$LOG_FILE")"
+  exec 2&gt; &gt;(tee -a "$LOG_FILE" &gt;&amp;2)
+fi
+
+log() { printf '[%s] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*" &gt;&amp;2; }
+notify() {
+  if command -v osascript &gt;/dev/null 2&gt;&amp;1; then
+    osascript -e "display notification \"$2\" with title \"$1\"" &gt;/dev/null 2&gt;&amp;1 || true
+  elif command -v notify-send &gt;/dev/null 2&gt;&amp;1; then
+    notify-send "$1" "$2" &gt;/dev/null 2&gt;&amp;1 || true
+  fi
+}
+die() { log "ERROR: $*"; notify "티켓 루프 중단" "$*"; exit 1; }
+
+for tool in "$ORCA_CLI" gh jq git; do
+  command -v "$tool" &gt;/dev/null 2&gt;&amp;1 || die "${tool} 이(가) 없습니다."
+done
+
+ROOT="$(git rev-parse --show-toplevel)"
+MAIN_WT="$(git worktree list --porcelain | sed -n '1s/^worktree //p')"
+# 루프는 저장소당 하나만 — 두 루프가 같은 티켓을 집지 않게 한다
+LOCK_DIR="$(cd "$ROOT" &amp;&amp; git rev-parse --path-format=absolute --git-common-dir)/ticket-loop.lock"
+if [[ $DRY_RUN -eq 0 ]]; then
+  mkdir "$LOCK_DIR" 2&gt;/dev/null || die "다른 루프가 실행 중입니다 (${LOCK_DIR}). 실행 중인 루프가 없으면(pgrep -fl ticket-loop) 그 디렉터리를 지우세요."
+  trap 'rmdir "$LOCK_DIR" 2&gt;/dev/null || true' EXIT
+fi
+
+OWNER_REPO="$(gh repo view --json nameWithOwner -q .nameWithOwner)"
+[[ -n "$BASE_BRANCH" ]] || BASE_BRANCH="$(gh repo view --json defaultBranchRef -q .defaultBranchRef.name)"
+REPO_ID="$("$ORCA_CLI" repo list --json \
+  | jq -r --arg key "github.com/${OWNER_REPO}" \
+      '.result.repos[] | select(.gitRemoteIdentity.canonicalKey == $key) | .id' | head -n1)"
+[[ -n "$REPO_ID" ]] || die "Orca에 ${OWNER_REPO} 저장소가 없습니다. '${ORCA_CLI} repo add --path ${ROOT} --json'으로 등록하세요."
+
+# ---------- GitHub 조회 ----------
+
+# 열린 선행 이슈 수. issue_dependencies_summary.blocked_by는 선행 이슈가 닫힌 뒤에도
+# 최대 ~20분 옛 값을 돌려준 실측이 있어, 목록에서 열린 것만 센다.
+blocked_by() {
+  gh api "repos/${OWNER_REPO}/issues/$1/dependencies/blocked_by" --paginate \
+    --jq '[.[] | select(.state == "open")] | length' 2&gt;/dev/null | awk '{s += $1} END {print s + 0}'
+}
+
+# 하위 이슈 수 — 스펙 이슈(/to-spec이 ready-for-agent를 붙인다)를 티켓처럼 집지 않게 한다
+sub_issue_count() { gh api "repos/${OWNER_REPO}/issues/$1" --jq '.sub_issues_summary.total // 0'; }
+
+open_pr_for() {
+  gh pr list --state open --json number,headRefName \
+    | jq -r --arg p "${BRANCH_PREFIX}$1-" 'map(select(.headRefName | startswith($p))) | .[0].number // empty'
+}
+
+issue_title() { gh issue view "$1" --json title -q .title; }
+
+candidates() {
+  # READY_LABEL(+SCOPE_LABEL)(+PARENT의 하위 이슈), IN_REVIEW_LABEL 없음, 제목 순번 → 이슈 번호 순
+  local list kids
+  local args=(--label "$READY_LABEL" --state open --limit 200 --json number,title,labels,assignees)
+  [[ -z "$SCOPE_LABEL" ]] || args+=(--label "$SCOPE_LABEL")
+  list="$(gh issue list "${args[@]}")"
+  if [[ -n "$PARENT" ]]; then
+    kids="$(gh api "repos/${OWNER_REPO}/issues/${PARENT}/sub_issues" --paginate --jq '[.[].number]' | jq -s 'add // []')"
+    list="$(jq --argjson kids "$kids" 'map(select(.number as $n | $kids | index($n)))' &lt;&lt;&lt;"$list")"
+  fi
+  jq -r --arg re "$ORDER_REGEX" --arg rv "$IN_REVIEW_LABEL" '
+      map(select((.labels | map(.name) | index($rv)) == null))
+      | map(. + {o: ([.title | capture($re) | .n] | first)})
+      | sort_by([(if .o then 0 else 1 end), ((.o // .number) | tonumber)])
+      | .[] | "\(.number)\t\(.assignees | length)\t\(.title)"' &lt;&lt;&lt;"$list"
+}
+
+pick_targets() {
+  if [[ ${#TICKETS[@]} -gt 0 ]]; then
+    for n in "${TICKETS[@]}"; do printf '%s\t%s\n' "${n}" "$(issue_title "${n}")"; done
+    return
+  fi
+  local n assignees title
+  while IFS=$'\t' read -r n assignees title; do
+    [[ -n "${n}" ]] || continue
+    if [[ "${assignees}" != "0" ]]; then log "skip #${n} (${title}): 담당자 있음(진행 중이거나 사람이 맡음)"; continue; fi
+    if [[ "$(sub_issue_count "${n}")" != "0" ]]; then log "skip #${n} (${title}): 하위 이슈가 있는 스펙 이슈"; continue; fi
+    if [[ "$(blocked_by "${n}")" != "0" ]]; then log "skip #${n} (${title}): 선행 이슈 열림"; continue; fi
+    if [[ -n "$(open_pr_for "${n}")" ]]; then log "skip #${n} (${title}): PR 이미 열림"; continue; fi
+    printf '%s\t%s\n' "${n}" "${title}"
+  done &lt; &lt;(candidates)
+}
+
+# ---------- Orca ----------
+
+orca_json() { "$ORCA_CLI" "$@" --json; }
+
+terminal_idle() {
+  # 반환 0: idle 확인, 1: 타임아웃(아직 작업 중), 3: Orca 터미널에 닿지 못함(앱 종료 등)
+  # `orca terminal wait`는 타임아웃이면 {ok:false, error.code:"timeout"}과 함께 exit 1을 돌려준다(Orca 1.4.223 실측).
+  # exit 코드만 보면 "닿지 못함"으로 오판해 일하는 워커를 두고 루프가 죽는다 — JSON으로 가른다.
+  local out
+  out="$(orca_json terminal wait --terminal "$1" --for tui-idle --timeout-ms "$2" 2&gt;/dev/null)" || true
+  [[ -n "$out" ]] || return 3
+  jq -e '.result.wait.satisfied == true' &lt;&lt;&lt;"$out" &gt;/dev/null 2&gt;&amp;1 &amp;&amp; return 0
+  [[ "$(jq -r '.error.code // empty' &lt;&lt;&lt;"$out" 2&gt;/dev/null)" == "timeout" ]] &amp;&amp; return 1
+  return 3
+}
+
+terminal_tail() {
+  orca_json terminal read --terminal "$1" | jq -r '.result.terminal.tail[]?' | tail -n 25
+}
+
+send_prompt() {
+  orca_json terminal send --terminal "$1" --text "$2" --enter --wait-submit 15 \
+    | jq -e '.result.send.accepted == true' &gt;/dev/null \
+    || die "프롬프트 전송이 수락되지 않았습니다 (terminal $1)"
+}
+
+worker_prompt() {
+  # 한 줄로 보낸다 — TUI에서는 줄바꿈이 곧 제출이다.
+  # 절차(선행 확인·브랜치·seam·리뷰·PR 본문·라벨·병합 금지)는 저장소의 implement 스킬이 단일 진실이다.
+  # 여기에는 무인 실행에서만 참인 것만 둔다 — 질문 금지, 막히면 코멘트 후 멈춤, 규칙 파일.
+  local n="$1" rules=""
+  [[ ! -f "$ROOT/$WORKER_RULES_FILE" ]] || rules=" 저장소의 ${WORKER_RULES_FILE} 규칙도 따라라."
+  printf '%s' "/implement ${n} — 무인 루프(ticket-loop.sh)에서 실행 중이다. 사람이 답할 수 없으니 질문(AskUserQuestion)하지 말고 스스로 결정해 끝까지 진행해라. PR은 병합하지 마라 — 루프가 CI 뒤에 병합한다. 진행이 불가능하면(열린 선행 이슈 포함) 이슈 #${n}에 이유를 코멘트로 남기고 PR 없이 멈춰라.${rules}"
+}
+
+# 에이전트가 실제로 떴는지 확인한다. Orca가 셸에 기동 명령을 넣을 때 앞 글자가 빠져
+# (`laude …`) 셸 프롬프트에 멈춘 실측이 있다(4연속). 배너가 안 보이면 입력 줄을 지우고 한 번 다시 띄운다.
+agent_banner_seen() { terminal_tail "$1" 2&gt;/dev/null | grep -Eq "$AGENT_BANNER_REGEX"; }
+
+ensure_agent_started() {
+  local n="$1" handle="$2" i attempt promptfile
+  for attempt in 1 2; do
+    for i in $(seq 1 $(( AGENT_START_WAIT_SEC / 3 ))); do
+      agent_banner_seen "${handle}" &amp;&amp; return 0
+      sleep 3
+    done
+    [[ $attempt -eq 1 ]] || break
+    log "#${n}: 에이전트가 뜨지 않음 — 터미널에서 다시 띄운다"
+    promptfile="$(mktemp "${TMPDIR:-/tmp}/ticket-loop-prompt-${n}.XXXXXX")"
+    worker_prompt "${n}" &gt; "${promptfile}"
+    orca_json terminal send --terminal "${handle}" --text $'\x03' &gt;/dev/null || true   # Ctrl-C로 입력 줄 비움
+    sleep 1
+    orca_json terminal send --terminal "${handle}" --text "${AGENT_RESTART_CMD} \"\$(cat ${promptfile})\"" --enter &gt;/dev/null \
+      || die "#${n}: 재기동 명령 전송 실패"
+  done
+  die "#${n}: 에이전트가 터미널 ${handle}에서 뜨지 않습니다"
+}
+
+# PR이 생길 때까지(또는 워커가 멈출 때까지) 기다린다. 성공 시 PR 번호를 stdout에 쓴다.
+# 반환: 0 PR 열림, 1 PR 없이 멈춤, 2 타임아웃, 3 Orca 터미널 끊김
+wait_for_pr() {
+  local n="$1" handle="$2" deadline="$3" strikes=0 pr started idle last_screen="" screen
+  started="$(date +%s)"
+  while :; do
+    pr="$(open_pr_for "${n}")"
+    if [[ -n "${pr}" ]]; then
+      # PR 직후 라벨·체크박스 정리까지 끝나도록 한 번 더 idle을 기다린다
+      terminal_idle "${handle}" "$IDLE_WAIT_MS" || true
+      echo "${pr}"; return 0
+    fi
+    [[ "$(date +%s)" -lt "$deadline" ]] || return 2
+    idle=0; terminal_idle "${handle}" "$IDLE_WAIT_MS" || idle=$?
+    [[ $idle -ne 3 ]] || return 3
+    if [[ $idle -eq 0 ]]; then
+      if [[ $(( $(date +%s) - started )) -lt $STARTUP_GRACE_SEC ]]; then sleep "$IDLE_RECHECK_SEC"; continue; fi
+      # PR을 연 직후에는 idle이 PR 조회보다 먼저 잡힌다(매 티켓 실측) — 잠깐 뒤 PR부터 다시 본다
+      sleep "$IDLE_RECHECK_SEC"
+      [[ -z "$(open_pr_for "${n}")" ]] || { IDLE_FALSE_POSITIVES=$((IDLE_FALSE_POSITIVES + 1)); continue; }
+      # 지난 idle 이후 화면이 바뀌었으면 그사이 일했다는 뜻 — 연속 횟수를 새로 센다
+      screen="$(terminal_tail "${handle}" | cksum | cut -d' ' -f1)"
+      if [[ "$screen" != "$last_screen" ]]; then strikes=0; last_screen="$screen"; fi
+      strikes=$((strikes + 1))
+      log "#${n}: 워커 idle, PR 없음 (${strikes}/${IDLE_STRIKES})"
+      [[ ${strikes} -lt $IDLE_STRIKES ]] || return 1
+      sleep "$IDLE_RECHECK_SEC"
+    else
+      strikes=0
+    fi
+  done
+}
+
+# 수리 프롬프트를 보내고 워커가 다시 idle이 될 때까지 기다린다
+repair() {
+  local handle="$1" text="$2" deadline="$3" idle
+  send_prompt "${handle}" "$text"
+  while :; do
+    idle=0; terminal_idle "${handle}" "$IDLE_WAIT_MS" || idle=$?
+    [[ $idle -ne 0 ]] || return 0
+    [[ $idle -ne 3 ]] || die "Orca 터미널 ${handle} 에 닿지 못했습니다 (Orca 앱 종료?)"
+    [[ "$(date +%s)" -lt "$deadline" ]] || return 1
+  done
+}
+
+# ---------- CI · 병합 ----------
+
+wait_checks_appear() {
+  local pr="$1" until=$(( $(date +%s) + CI_APPEAR_TIMEOUT_SEC ))
+  while [[ "$(gh pr checks "${pr}" --json name --jq 'length' 2&gt;/dev/null || echo 0)" == "0" ]]; do
+    [[ "$(date +%s)" -lt "$until" ]] || return 1
+    sleep 30
+  done
+}
+
+ci_passed() {
+  wait_checks_appear "$1" || { log "PR #$1: 체크가 등록되지 않았습니다"; return 1; }
+  gh pr checks "$1" --watch --fail-fast &gt;/dev/null   # 끝날 때까지 블록, 실패 시 비0
+}
+
+pr_head_sha() { gh pr view "$1" --json headRefOid -q .headRefOid; }
+
+# 반환 0: CI가 도는 PR, 1: 바뀐 파일이 전부 CI_SKIP_REGEX에 맞아 체크가 안 붙는 게 정상인 PR.
+# 판정이 안 되면 0(기다리는 쪽).
+ci_expected() {
+  local files
+  [[ -n "$CI_SKIP_REGEX" ]] || return 0
+  files="$(gh pr diff "$1" --name-only 2&gt;/dev/null)" || return 0
+  [[ -n "$files" ]] || return 0
+  grep -Evq "$CI_SKIP_REGEX" &lt;&lt;&lt;"$files"
+}
+
+mergeable_state() {
+  # MERGEABLE | CONFLICTING | UNKNOWN(계산 중)
+  local pr="$1" s i
+  for i in 1 2 3 4 5 6; do
+    s="$(gh pr view "${pr}" --json mergeable -q .mergeable)"
+    [[ "$s" == "UNKNOWN" ]] || { echo "$s"; return; }
+    sleep 10
+  done
+  echo "UNKNOWN"
+}
+
+# ---------- 병합 뒤 검증 ----------
+# 워커가 돌리기 어려운 검증(실제 서버·공유 DB·고정 포트를 쓰는 통합·E2E 테스트)을 병합된 기본 브랜치로
+# 한 번 돌린다. 루프는 직렬이라 여기서 돌리면 워커끼리 부딪히지 않는다. 저장소 밖 전용 워크트리를 쓴다.
+
+port_in_use() { lsof -nP -iTCP:"$1" -sTCP:LISTEN &gt;/dev/null 2&gt;&amp;1; }
+
+post_merge_worktree_path() {
+  if [[ -n "$POST_MERGE_WORKTREE" ]]; then printf '%s' "$POST_MERGE_WORKTREE"; return; fi
+  printf '%s/.cache/ticket-loop/%s/post-merge' "$HOME" "${OWNER_REPO//\//-}"
+}
+
+# 반환 0: 통과, 1: 실패(로그 꼬리를 남긴다)
+run_post_merge() {
+  local n="$1" wt logfile started f port_deadline
+  wt="$(post_merge_worktree_path)"
+  if [[ ! -d "$wt/.git" &amp;&amp; ! -f "$wt/.git" ]]; then
+    mkdir -p "$(dirname "$wt")"
+    git -C "$ROOT" worktree add -q --detach "$wt" "origin/${BASE_BRANCH}" || { log "#${n}: 병합 뒤 검증 워크트리 생성 실패 (${wt})"; return 1; }
+  fi
+  git -C "$ROOT" fetch -q origin "$BASE_BRANCH"
+  git -C "$wt" checkout -q --detach "origin/${BASE_BRANCH}" || { log "#${n}: 검증 워크트리를 origin/${BASE_BRANCH}으로 못 옮김"; return 1; }
+  for f in $POST_MERGE_COPY; do
+    [[ ! -f "$MAIN_WT/$f" ]] || cp "$MAIN_WT/$f" "$wt/$f"
+  done
+  if [[ -n "$POST_MERGE_PORT" ]]; then
+    port_deadline=$(( $(date +%s) + PORT_WAIT_SEC ))
+    while port_in_use "$POST_MERGE_PORT"; do
+      [[ "$(date +%s)" -lt "$port_deadline" ]] || { log "#${n}: 포트 ${POST_MERGE_PORT}이 비지 않았다 — 루프가 도는 동안 그 포트를 비우거나 --skip-post-merge"; return 1; }
+      sleep 30
+    done
+  fi
+  logfile="${TMPDIR:-/tmp}/ticket-loop-post-merge-${n}.log"
+  [[ "$LOG_FILE" == "/dev/null" ]] || logfile="$(dirname "$LOG_FILE")/post-merge-${n}.log"
+  started="$(date +%s)"
+  log "#${n}: 병합 뒤 검증 시작 (${wt}, 로그 ${logfile})"
+  if (cd "$wt" &amp;&amp; bash -c "$POST_MERGE_CMD" &gt;"$logfile" 2&gt;&amp;1); then
+    POST_MERGE_RESULT="통과 $(( $(date +%s) - started ))초"
+    log "#${n}: 병합 뒤 검증 ${POST_MERGE_RESULT}"
+    return 0
+  fi
+  POST_MERGE_RESULT="실패 $(( $(date +%s) - started ))초"
+  log "#${n}: 병합 뒤 검증 실패 — 꼬리 ---"; tail -n 40 "$logfile" &gt;&amp;2 || true
+  return 1
+}
+
+# ---------- 티켓 하나 ----------
+
+run_ticket() {
+  local n="$1" title="$2"
+  local deadline=$(( $(date +%s) + TICKET_TIMEOUT_SEC )) started_at ci_sec=0 ci_started
+  started_at="$(date +%s)"
+  IDLE_FALSE_POSITIVES=0
+  POST_MERGE_RESULT="건너뜀"
+  log "=== #${n} ${title} ==="
+
+  git -C "$ROOT" fetch -q origin "$BASE_BRANCH"
+
+  local created wt wt_path orca_branch handle
+  created="$(orca_json worktree create --repo "id:$REPO_ID" --name "${BRANCH_PREFIX}${n}" --no-parent \
+    --base-branch "origin/${BASE_BRANCH}" --issue "${n}" --agent "$AGENT" \
+    --prompt "$(worker_prompt "${n}")" --comment "티켓 루프: /implement ${n} 진행 중")"
+  jq -e '.ok == true' &lt;&lt;&lt;"$created" &gt;/dev/null || die "워크트리 생성 실패: $(jq -c '.error' &lt;&lt;&lt;"$created")"
+  wt="$(jq -r '.result.worktree.id' &lt;&lt;&lt;"$created")"
+  wt_path="${wt#*::}"
+  handle="$(jq -r '.result.agentTerminalHandle // .result.startupTerminal.handle // empty' &lt;&lt;&lt;"$created")"
+  [[ -n "${handle}" ]] || die "에이전트 터미널 핸들을 받지 못했습니다 (${wt})"
+  # Orca가 워크트리용으로 만든 브랜치(설정에 따라 `issue-N` 또는 `&lt;git 사용자&gt;/issue-N`) — 워커가 브랜치를 바꾸기 전에 기록한다
+  orca_branch="$(git -C "$wt_path" rev-parse --abbrev-ref HEAD 2&gt;/dev/null || true)"
+  orca_json worktree set --worktree "id:${wt}" --workspace-status in-progress &gt;/dev/null || true
+  log "#${n}: 워크트리 ${wt} / 터미널 ${handle}"
+  ensure_agent_started "${n}" "${handle}"
+
+  local pr rc=0
+  pr="$(wait_for_pr "${n}" "${handle}" "$deadline")" || rc=$?
+  if [[ $rc -ne 0 ]]; then
+    log "#${n}: 워커 출력 꼬리 ---"; terminal_tail "${handle}" &gt;&amp;2 || true
+    orca_json worktree set --worktree "id:${wt}" --unread --workspace-status todo \
+      --comment "루프 중단: PR 없이 멈춤 — 확인 필요" &gt;/dev/null || true
+    [[ $rc -ne 2 ]] || die "#${n}: 티켓 타임아웃(${TICKET_TIMEOUT_SEC}s)"
+    [[ $rc -ne 3 ]] || die "#${n}: Orca 터미널 ${handle} 에 닿지 못했습니다 (Orca 앱 종료?). 워크트리는 디스크에 남아 있습니다."
+    die "#${n}: 워커가 PR 없이 멈췄습니다 (질문·실패 가능). Orca에서 ${BRANCH_PREFIX}${n} 워크트리를 확인하세요."
+  fi
+  log "#${n}: PR #${pr} 열림"
+  orca_json worktree set --worktree "id:${wt}" --pr "${pr}" --workspace-status in-review \
+    --comment "PR #${pr} — CI 대기" &gt;/dev/null || true
+
+  local round=0 state before
+  while :; do
+    state="$(mergeable_state "${pr}")"
+    if [[ "$state" == "CONFLICTING" ]]; then
+      [[ ${round} -lt $REPAIR_ROUNDS ]] || die "#${n}: PR #${pr} 이 ${BASE_BRANCH}과 충돌합니다 (수리 ${REPAIR_ROUNDS}회 소진)"
+      round=$((round + 1)); log "#${n}: 충돌 → 워커에 수리 요청 (${round})"
+      repair "${handle}" "PR #${pr} 이 ${BASE_BRANCH}과 충돌한다. \`git fetch origin &amp;&amp; git merge origin/${BASE_BRANCH}\`으로 충돌을 해결하고 테스트·lint를 다시 돌린 뒤 같은 브랜치에 push해라. 질문하지 말고 끝까지 해라." "$deadline" \
+        || die "#${n}: 충돌 수리 중 타임아웃"
+      continue
+    fi
+    if ! ci_expected "${pr}"; then
+      log "#${n}: CI_SKIP_REGEX 경로만 바뀐 PR — CI 없이 병합한다 (PR #${pr})"
+      ci_sec=-1
+      break
+    fi
+    log "#${n}: CI 대기 (PR #${pr})"
+    ci_started="$(date +%s)"
+    if ci_passed "${pr}"; then ci_sec=$(( $(date +%s) - ci_started )); break; fi
+    [[ ${round} -lt $REPAIR_ROUNDS ]] || die "#${n}: PR #${pr} CI 실패 (수리 ${REPAIR_ROUNDS}회 소진). gh pr checks ${pr} 로 확인하세요."
+    round=$((round + 1)); log "#${n}: CI 실패 → 워커에 수리 요청 (${round})"
+    before="$(pr_head_sha "${pr}")"
+    repair "${handle}" "PR #${pr} 의 CI가 실패했다. \`gh pr checks ${pr}\` 와 \`gh run view --log-failed\` 로 원인을 보고 고친 뒤 테스트·lint를 다시 돌리고 같은 브랜치에 push해라. 테스트를 건너뛰거나 지우지 마라. 질문하지 말고 끝까지 해라." "$deadline" \
+      || die "#${n}: CI 수리 중 타임아웃"
+    [[ "$(pr_head_sha "${pr}")" != "$before" ]] || die "#${n}: 수리 뒤에도 새 커밋이 push되지 않았습니다"
+  done
+  log "#${n}: CI 통과"
+
+  if [[ $NO_MERGE -eq 1 ]]; then
+    log "#${n}: --no-merge — PR #${pr} 을 사람이 병합하세요. 워크트리는 남겨 둡니다(${wt})."
+    return 0
+  fi
+
+  gh pr merge "${pr}" "--$MERGE_METHOD" || die "#${n}: PR #${pr} 병합 실패"
+  log "#${n}: PR #${pr} 병합됨"
+  sleep 5
+  if [[ "$(gh issue view "${n}" --json state -q .state)" != "CLOSED" ]]; then
+    gh issue close "${n}" --comment "PR #${pr} 병합으로 완료 (ticket-loop)" || true
+  fi
+  gh issue edit "${n}" --remove-label "$IN_REVIEW_LABEL" &gt;/dev/null 2&gt;&amp;1 || true
+
+  # 병합된 기본 브랜치로 무거운 검증 — CI가 안 붙는 문서 PR은 건너뛴다. 실패하면 기본 브랜치가 깨진 것이므로
+  # 다음 티켓을 쌓지 않고 멈춘다(워커 워크트리는 이미 병합됐으니 정리하고, 검증 워크트리와 로그를 남긴다).
+  local post_rc=0
+  if [[ $POST_MERGE -eq 1 &amp;&amp; $ci_sec -ge 0 ]]; then
+    run_post_merge "${n}" || post_rc=$?
+  fi
+
+  local branch; branch="$(gh pr view "${pr}" --json headRefName -q .headRefName)"
+  orca_json worktree set --worktree "id:${wt}" --workspace-status completed --comment "PR #${pr} 병합 완료" &gt;/dev/null || true
+  orca_json worktree rm --worktree "id:${wt}" --force &gt;/dev/null || log "#${n}: 워크트리 삭제 실패 — 수동 정리 필요 (${wt})"
+  git -C "$ROOT" worktree prune || true
+  git -C "$ROOT" branch -D "${branch}" &gt;/dev/null 2&gt;&amp;1 || true
+  if [[ -n "$orca_branch" &amp;&amp; "$orca_branch" != "HEAD" &amp;&amp; "$orca_branch" != "$BASE_BRANCH" ]]; then
+    git -C "$ROOT" branch -D "${orca_branch}" &gt;/dev/null 2&gt;&amp;1 || true
+  fi
+  git -C "$ROOT" push -q origin --delete "${branch}" &gt;/dev/null 2&gt;&amp;1 || true
+  log "#${n} 요약: 벽시계 $(( ($(date +%s) - started_at) / 60 ))분, PR #${pr}, CI $([[ $ci_sec -ge 0 ]] &amp;&amp; echo "${ci_sec}초" || echo "없음(CI 제외 경로)"), 수리 ${round}회, idle 오판 ${IDLE_FALSE_POSITIVES}회, 병합 뒤 검증 ${POST_MERGE_RESULT}"
+  [[ $post_rc -eq 0 ]] || die "#${n}: 병합된 ${BASE_BRANCH}에서 병합 뒤 검증이 실패했습니다. 로그와 검증 워크트리($(post_merge_worktree_path))를 확인하고 수정 PR 뒤에 다시 실행하세요."
+  notify "티켓 완료" "#${n} ${title}"
+}
+
+# ---------- 메인 ----------
+
+targets="$(pick_targets)"
+log "저장소 ${OWNER_REPO} / 기준 브랜치 ${BASE_BRANCH} / 라벨 ${READY_LABEL}${SCOPE_LABEL:+ + ${SCOPE_LABEL}}${PARENT:+ / 스펙 #${PARENT}의 하위 이슈}"
+log "병합 뒤 검증: $([[ $POST_MERGE -eq 1 ]] &amp;&amp; echo "실행 — ${POST_MERGE_CMD}" || echo "끔")"
+[[ -n "$targets" ]] || { log "처리할 티켓이 없습니다."; exit 0; }
+log "대상(현재 선행 이슈가 모두 닫힌 것):"; printf '%s\n' "$targets" | sed 's/^/  #/' &gt;&amp;2
+[[ $DRY_RUN -eq 0 ]] || exit 0
+
+# 목록을 stdin으로 물리지 않는다 — 루프 안의 gh·orca·git이 stdin을 읽으면 다음 티켓이 사라진다.
+# 자동 선택이면 티켓 하나가 끝날 때마다 대상을 다시 계산해, 막 풀린 선행 관계를 반영한다.
+done_count=0
+PROCESSED=""
+while :; do
+  if [[ ${#TICKETS[@]} -gt 0 ]]; then
+    [[ $done_count -lt ${#TICKETS[@]} ]] || break
+    n="${TICKETS[$done_count]}"; title="$(issue_title "${n}")"
+    [[ "$(blocked_by "${n}")" == "0" ]] || die "#${n}: 선행 이슈가 열려 있습니다"
+    [[ -z "$(open_pr_for "${n}")" ]] || die "#${n}: 이미 열린 PR이 있습니다"
+  else
+    [[ $done_count -eq 0 ]] || targets="$(pick_targets &lt;/dev/null)"
+    # 이번 실행에서 이미 처리한 티켓은 다시 집지 않는다(이슈 닫힘 반영이 늦는 경우 대비)
+    n=""
+    while IFS=$'\t' read -r cand ctitle; do
+      [[ -n "${cand}" &amp;&amp; " ${PROCESSED} " != *" ${cand} "* ]] || continue
+      n="${cand}"; title="${ctitle}"; break
+    done &lt;&lt;&lt;"$targets"
+    [[ -n "${n}" ]] || { log "더 처리할 티켓이 없습니다."; break; }
+  fi
+  run_ticket "${n}" "${title}" &lt;/dev/null
+  PROCESSED="${PROCESSED} ${n}"
+  done_count=$((done_count + 1))
+  [[ $MAX -eq 0 || $done_count -lt $MAX ]] || { log "--max $MAX 도달"; break; }
+done
+
+log "완료: ${done_count}건"
+notify "티켓 루프 종료" "${done_count}건 완료"</code></pre>
+
+<h3>E. 개정 이력</h3>
+<p class="small muted">2판은 실제 저장소(Next.js 웹 앱, GitHub Free 비공개 저장소)에서 스펙 하나의 티켓 19건을 이 루프로 돌린 실측과 그 회고에서 나왔다.</p>
+<table class="dense">
+  <tr><th style="width:22%">바뀐 곳</th><th>내용</th><th style="width:20%">계기</th></tr>
+  <tr><td>절차의 위치 (3·8장, 부록 B)</td><td>워커 프롬프트의 7개 규칙을 저장소 소유 <code>implement</code> 스킬로 옮기고, 프롬프트에는 무인 전용 문장만 남겼다. <code>pr</code> 양식도 루프 PR에 맞춘 저장소 소유 사본으로 바꿨다.</td><td>대화형과 무인 절차가 갈라짐</td></tr>
+  <tr><td>리뷰 스킬 이름 (3·4장)</td><td><code>code-review</code> → <code>ticket-review</code></td><td>Claude Code 내장 <code>/code-review</code>와 충돌</td></tr>
+  <tr><td><code>terminal_idle</code> (2.4, 부록 D)</td><td>타임아웃 응답(<code>error.code: "timeout"</code>, exit 1)을 "닿지 못함"과 구별한다.</td><td>일하던 워커를 두고 루프가 죽음</td></tr>
+  <tr><td>병합 뒤 검증 (7장 6단계, R10)</td><td><code>POST_MERGE_CMD</code>·<code>POST_MERGE_COPY</code>·<code>POST_MERGE_PORT</code>·<code>--skip-post-merge</code> 추가. 실패하면 멈춘다.</td><td>통합 테스트가 어디서도 돌지 않아 기본 브랜치가 깨진 채 배포됨</td></tr>
+  <tr><td>CI 제외 경로 (4장 8단계, R7)</td><td><code>CI_SKIP_REGEX</code> 추가. 문서만 바뀐 PR은 체크 없이 병합한다.</td><td>워크플로 경로 필터 도입</td></tr>
+  <tr><td>대상 선택 (5장)</td><td><code>--parent</code>·<code>--label</code> 추가. 담당자가 있는 이슈와 하위 이슈를 가진 스펙 이슈를 건너뛴다(스펙 라벨을 뗄 필요가 없어졌다).</td><td>스펙 단위 운영</td></tr>
+  <tr><td>로그와 요약 (6·7장)</td><td><code>LOG_FILE</code> 기본값 <code>.orca-loop/loop-MMDD.log</code>. 티켓마다 <code>#N 요약:</code> 한 줄(벽시계·CI·수리·idle 오판·병합 뒤 검증).</td><td>회고 자료가 없었음</td></tr>
+  <tr><td>워커 비용 (4장 11단계, FAQ)</td><td>검증 2층(수시 검사 + 정해진 두 번의 전체 묶음), 작은 스크린샷, 짧은 <code>CLAUDE.md</code>.</td><td>티켓당 전체 테스트 1~9회·build 2~8회</td></tr>
+  <tr><td>환경 (4장)</td><td><code>git push</code> 자격 증명(키체인 대기) 주의, Orca 훅 설정 메뉴 경로, <code>deny</code> 중심 권한, 스킬 벤더링 시 커밋 기록, <code>.orca-loop/*.log</code> 무시.</td><td>설치·운영 중 실측</td></tr>
+  <tr><td>복구 (10장)</td><td>판정표를 담당자 기준으로, R2에 push 대기 원인 추가, R10 신설, 진단 함수에 열린 선행 이슈 목록.</td><td>위 변경 반영</td></tr>
+  <tr><td>회고 (1·9·11장)</td><td>운영 리듬 끝에 <code>/retro</code>와 환경 수정 PR을 넣었다.</td><td>—</td></tr>
+</table>
+</section>
+
+</body>
+</html>
