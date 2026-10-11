@@ -20,6 +20,16 @@ bash <(gh api repos/iwishash/orca-loop-kit/contents/install.sh -H "Accept: appli
 
 필요한 도구: `git`, `gh`(로그인), `jq`, `rsync`, Orca 앱과 CLI, Claude Code.
 
+## 누가 무엇을 하나
+
+| 주체 | 하는 일 |
+|---|---|
+| `install.sh` — 어느 저장소에서나 같은 부분 | 루프·진단·스킬 동기화 스크립트와 `setup-orca-loop` 스킬 설치, mattpocock 스킬 벤더링(`code-review` → `ticket-review`), `.gitignore`·`deny` 병합, 라벨 6개, git 자격 증명(gh), Orca 등록, `.orca-loop/kit.json` |
+| `/setup-orca-loop` — 저장소를 읽어야 정하는 부분 | `implement`·`pr`·`worker-rules.md`의 `__PLACEHOLDER__` 채우기, `verify` 명령, `orca.yaml`, CI, `.orca-loop/loop.env`, `docs/agents/ticket-loop.md`, `CLAUDE.md` 포인터 → PR |
+| 사람 | Orca 앱 설정(Command Source "orca.yaml only"), PR 병합, `--max 1` 시험 지켜보기 |
+
+키트의 `ticket-loop.sh`는 가이드북 2판 부록 D의 스크립트에 저장소별 기본값 파일 `.orca-loop/loop.env` 읽기를 더한 것이다. `CI_SKIP_REGEX`, `POST_MERGE_CMD` 같은 저장소 고정값은 거기에 `VAR="${VAR:-값}"` 꼴로 적어 커밋하고, 실행할 때 준 환경변수가 이긴다.
+
 ## 무엇을 어디에 두나
 
 | 키트 경로 | 대상 저장소 | 설치 때 |
@@ -48,3 +58,18 @@ bash <(gh api repos/iwishash/orca-loop-kit/contents/install.sh -H "Accept: appli
 - 루프 스크립트를 고치면 `python3 docs/sync-guide.py && bash docs/build-pdf.sh`로 부록 D와 PDF를 다시 만든다(`tests/smoke.sh`가 부록 D 일치를 검사한다).
 - `bash tests/smoke.sh` — 임시 저장소에 설치해 보고(네트워크·GitHub 없이), 두 번 설치해도 결과가 같은지 확인한다.
 - 바뀐 점은 `CHANGELOG.md`에, 버전은 `VERSION`과 태그로.
+
+## 검증 상태 (0.1.0, 2026-10-12)
+
+확인한 것:
+
+- `tests/smoke.sh` 통과: 문법, 부록 D 일치, 임시 저장소 설치, 재설치해도 프로젝트 소유 파일·`settings.json`·`.gitignore`가 바뀌지 않음
+- 스킬 동기화를 포함한 설치: mattpocock 1.3.1 + 미출시 changeset 16건(`49dd158`) 26개 스킬, `implement`·`pr`은 건너뜀
+- 원격 한 줄 설치(`--ref v0.1.0`)로 받아 설치되고 `.orca-loop/kit.json`에 `534653a`가 기록됨
+
+아직 확인하지 않은 것 — 첫 적용 저장소에서 확인하고 여기를 갱신한다:
+
+- `/setup-orca-loop`를 실제 저장소에서 돌려 본 적이 없다. 질문 순서나 빠진 항목이 드러나면 키트에서 고친다
+- `install.sh`의 라벨 생성·Orca 등록 단계는 시험에서 껐다. 명령 자체는 rsrehab/rental-portal에서 쓰던 것이다
+- 키트판 `ticket-loop.sh`로 실제 티켓을 돌린 적이 없다. 특히 `.orca-loop/loop.env`, `POST_MERGE_CMD`, `CI_SKIP_REGEX` 경로
+- 출처 저장소 rsrehab/rental-portal은 아직 저장소 전용판 `scripts/orca-ticket-loop.sh`를 쓴다(키트로 전환하지 않음)
