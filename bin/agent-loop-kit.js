@@ -282,7 +282,7 @@ async function init(o) {
   // 설치 단계 — Enter 만 치면 기본값
   if (interactive) {
     const items = [
-      { key: 'skills', label: 'Vendor the mattpocock skills', note: '26 skills into .claude/skills/ (code-review → ticket-review)', on: o.skills },
+      { key: 'skills', label: 'Vendor the mattpocock skills', note: 'copy 26 skills into .claude/skills/ at the pinned upstream version — overwrites vendored ones, leaves implement·pr alone', on: o.skills },
       { key: 'github', label: 'Create the 6 GitHub labels', note: 'ready-for-agent · in-review …', on: o.github },
       { key: 'credential', label: 'Use the gh token for git push',
         note: sshRemote ? 'SSH remote detected — not needed (default off)' : 'this repo only; keeps unattended HTTPS push from waiting on the keychain', on: o.credential },

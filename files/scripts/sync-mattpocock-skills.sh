@@ -29,7 +29,7 @@ RENAME_FROM="code-review"
 RENAME_TO="ticket-review"
 
 for tool in git jq rsync; do
-  command -v "$tool" >/dev/null 2>&1 || { echo "$tool 이(가) 없습니다." >&2; exit 1; }
+  command -v "$tool" >/dev/null 2>&1 || { echo "$tool is not installed." >&2; exit 1; }
 done
 
 ROOT="$(git rev-parse --show-toplevel)"
@@ -55,9 +55,9 @@ is_owned() { local s; for s in "${PROJECT_OWNED[@]}"; do [[ "$s" == "$1" ]] && r
 installed=()
 for p in "${PATHS[@]}"; do
   src="$WORK/src/$p"
-  [[ -f "$src/SKILL.md" ]] || { echo "upstream에 $p/SKILL.md가 없습니다." >&2; exit 1; }
+  [[ -f "$src/SKILL.md" ]] || { echo "upstream has no $p/SKILL.md" >&2; exit 1; }
   name="$(basename "$p")"
-  is_owned "$name" && { echo "skip $name (프로젝트 소유)"; continue; }
+  is_owned "$name" && { echo "  skip    $name (project-owned)"; continue; }
   [[ "$name" == "$RENAME_FROM" ]] && name="$RENAME_TO"
   rsync -a --delete "$src/" "$DEST/$name/"
   installed+=("$name")
@@ -83,7 +83,7 @@ if [[ -f "$MANIFEST" ]]; then
     keep=0
     for n in "${installed[@]}"; do [[ "$n" == "$old" ]] && keep=1; done
     is_owned "$old" && keep=1
-    if [[ $keep -eq 0 && -d "$DEST/$old" ]]; then rm -rf "${DEST:?}/$old"; echo "removed $old (upstream 목록에서 빠짐)"; fi
+    if [[ $keep -eq 0 && -d "$DEST/$old" ]]; then rm -rf "${DEST:?}/$old"; echo "  removed $old (no longer in the upstream list)"; fi
   done < <(jq -r '.skills[]' "$MANIFEST")
 fi
 
@@ -94,5 +94,5 @@ jq -n --arg ref "$REF" --arg commit "$COMMIT" --arg version "$VERSION" --argjson
   '{upstream: "mattpocock/skills", ref: $ref, commit: $commit, version: $version, pending_changesets: $pending, synced_at: $synced,
     renamed: {"code-review": "ticket-review"}, project_owned: $owned, skills: $skills}' > "$MANIFEST"
 
-echo "mattpocock/skills ${VERSION} + 미출시 changeset ${PENDING}건 (${COMMIT:0:7}) → ${#installed[@]}개 스킬 동기화"
-echo "프로젝트 소유(직접 갱신): ${PROJECT_OWNED[*]} — upstream 변경은 CHANGELOG에서 확인해 반영한다"
+echo "  mattpocock/skills ${VERSION} + ${PENDING} unreleased changesets (${COMMIT:0:7}) → ${#installed[@]} skills synced"
+echo "  project-owned (update by hand): ${PROJECT_OWNED[*]} — check the upstream CHANGELOG for changes to carry over"

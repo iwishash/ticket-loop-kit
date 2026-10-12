@@ -1,32 +1,33 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# agent-loop-kit 설치·업데이트 — 대상 저장소 루트에서 실행한다. 여러 번 실행해도 결과가 같다.
+# agent-loop-kit install / update — run in the target repository root. Running it again gives the same result.
 #
-#   npx github:iwishash/agent-loop-kit init           # 권장 — 백엔드를 묻고 이 스크립트를 부른다 (bin/agent-loop-kit.js)
+#   npx github:iwishash/agent-loop-kit init           # recommended — asks for the backend, then runs this script (bin/agent-loop-kit.js)
 #   bash <(gh api repos/iwishash/agent-loop-kit/contents/install.sh -H "Accept: application/vnd.github.raw")
-#   bash /path/to/agent-loop-kit/install.sh          # 키트를 clone해 둔 경우
+#   bash /path/to/agent-loop-kit/install.sh          # from a local clone of the kit
 #
-# 하는 일(프로젝트마다 똑같은 부분):
-#   0. 0.2 이하가 설치한 .orca-loop/ 는 .agent-loop/ 로 옮기고(git mv), 옛 스킬 setup-orca-loop 와 .gitignore 의 옛 줄을 지운다
-#   1. 관리 파일을 덮어쓴다: scripts/ticket-loop.sh, scripts/ticket-state.sh, scripts/sync-mattpocock-skills.sh,
+# What it does (the part that is the same for every project):
+#   0. Migrates a 0.2 install: git mv .orca-loop/ to .agent-loop/, removes the old setup-orca-loop skill and old .gitignore lines
+#   1. Overwrites the managed files: scripts/ticket-loop.sh, scripts/ticket-state.sh, scripts/sync-mattpocock-skills.sh,
 #      .claude/skills/setup-agent-loop/
-#   2. 템플릿은 없을 때만 놓는다(이후 프로젝트 소유): .claude/skills/implement·pr, .agent-loop/worker-rules.md,
+#   2. Places templates only when missing (project-owned afterwards): .claude/skills/implement and pr, .agent-loop/worker-rules.md,
 #      docs/loop-reports/README.md
-#   3. mattpocock 스킬을 .claude/skills/에 벤더링한다(code-review → ticket-review)
-#   4. .gitignore에 /.agent-loop/*.log·/.agent-loop/*.jsonl, .claude/settings.json deny에 병합·강제 push·기본 브랜치 직접 push 차단
-#   5. GitHub 라벨 6개, 저장소 범위 git 자격 증명(gh), Orca 저장소 등록
-#   6. .agent-loop/kit.json에 키트 커밋을 남긴다
-# 프로젝트를 읽어야 정하는 부분(검증 명령, orca.yaml, CI, 워커 규칙)은 설치 뒤 Claude Code에서 /setup-agent-loop가 한다.
+#   3. Vendors the mattpocock skills into .claude/skills/ (code-review → ticket-review)
+#   4. Adds /.agent-loop/*.log and /.agent-loop/*.jsonl to .gitignore; merges deny rules into .claude/settings.json
+#      (no gh pr merge, no force push, no direct push to the default branch)
+#   5. Creates the 6 GitHub labels, sets the repo-scoped git credential helper (gh), registers the repo with Orca
+#   6. Records the kit commit in .agent-loop/kit.json
+# The project-specific part (verify command, orca.yaml, CI, worker rules) is done afterwards by /setup-agent-loop in Claude Code.
 #
-# 옵션:
-#   --ref <ref>          키트의 태그·브랜치·커밋 (기본 main)
-#   --no-skills          mattpocock 스킬 동기화를 건너뛴다
-#   --no-github          라벨을 만들지 않는다
-#   --no-git-credential  저장소 git 자격 증명을 바꾸지 않는다
-#   --no-orca            Orca 저장소 등록을 건너뛴다
-# 환경변수: KIT_REPO (기본 iwishash/agent-loop-kit), KIT_DIR (키트 로컬 경로 — 주면 clone하지 않는다),
-#          KIT_COMMIT (kit.json에 남길 키트 커밋 — npx 껍질이 .git 없는 패키지에서 넘겨 준다)
+# Options:
+#   --ref <ref>          kit tag, branch or commit (default main)
+#   --no-skills          skip the mattpocock skill sync
+#   --no-github          do not create the labels
+#   --no-git-credential  leave the repo's git credential helper alone
+#   --no-orca            skip registering the repo with Orca
+# Environment: KIT_REPO (default iwishash/agent-loop-kit), KIT_DIR (local kit path — skips the clone),
+#              KIT_COMMIT (kit commit to record in kit.json — the npx shell passes it for a package without .git)
 
 KIT_REPO="${KIT_REPO:-iwishash/agent-loop-kit}"
 KIT_DIR="${KIT_DIR:-}"
@@ -53,8 +54,8 @@ say() { printf '\033[1m▸ %s\033[0m\n' "$*"; }
 warn() { printf '\033[33m! %s\033[0m\n' "$*" >&2; }
 die() { printf '\033[31m✗ %s\033[0m\n' "$*" >&2; exit 1; }
 
-for tool in git jq; do command -v "$tool" >/dev/null 2>&1 || die "$tool 이(가) 없습니다."; done
-ROOT="$(git rev-parse --show-toplevel 2>/dev/null)" || die "git 저장소 안에서 실행하세요."
+for tool in git jq; do command -v "$tool" >/dev/null 2>&1 || die "$tool is not installed."; done
+ROOT="$(git rev-parse --show-toplevel 2>/dev/null)" || die "Run this inside a git repository."
 cd "$ROOT"
 
 # ---------- 키트 받기 ----------
@@ -63,14 +64,14 @@ if [[ -z "$KIT_DIR" ]]; then
   if [[ -n "$self_dir" && -f "$self_dir/files/scripts/ticket-loop.sh" ]]; then
     KIT_DIR="$self_dir"
   else
-    command -v gh >/dev/null 2>&1 || die "gh가 없습니다. 키트를 clone한 뒤 KIT_DIR=<경로>로 실행하세요."
+    command -v gh >/dev/null 2>&1 || die "gh is not installed. Clone the kit and run with KIT_DIR=<path>."
     KIT_DIR="$(mktemp -d "${TMPDIR:-/tmp}/agent-loop-kit.XXXXXX")"
     trap 'rm -rf "$KIT_DIR"' EXIT
-    gh repo clone "$KIT_REPO" "$KIT_DIR" -- -q || die "$KIT_REPO 를 받지 못했습니다 (gh auth status 확인)."
-    git -C "$KIT_DIR" checkout -q "$REF" || die "키트 ref $REF 가 없습니다."
+    gh repo clone "$KIT_REPO" "$KIT_DIR" -- -q || die "Could not clone $KIT_REPO (check gh auth status)."
+    git -C "$KIT_DIR" checkout -q "$REF" || die "Kit ref $REF does not exist."
   fi
 fi
-[[ -f "$KIT_DIR/files/scripts/ticket-loop.sh" ]] || die "키트 경로가 올바르지 않습니다: $KIT_DIR"
+[[ -f "$KIT_DIR/files/scripts/ticket-loop.sh" ]] || die "Not a kit directory: $KIT_DIR"
 KIT_COMMIT="${KIT_COMMIT:-$(git -C "$KIT_DIR" rev-parse HEAD 2>/dev/null || echo unknown)}"
 KIT_VERSION="$(cat "$KIT_DIR/VERSION" 2>/dev/null || echo unknown)"
 say "agent-loop-kit ${KIT_VERSION} (${KIT_COMMIT:0:7}) → ${ROOT}"
@@ -85,17 +86,17 @@ BASE="${BASE:-main}"
 # ---------- 0. 옛 경로 마이그레이션 (0.2 이하: .orca-loop/, setup-orca-loop) ----------
 if [[ -d .orca-loop && ! -e .agent-loop ]]; then
   if git ls-files --error-unmatch .orca-loop >/dev/null 2>&1; then git mv .orca-loop .agent-loop; else mv .orca-loop .agent-loop; fi
-  say ".orca-loop/ → .agent-loop/ 로 옮김 (로그·기록 파일 포함)"
+  say "Moved .orca-loop/ to .agent-loop/ (logs and records included)"
 elif [[ -d .orca-loop && -e .agent-loop ]]; then
-  warn ".orca-loop/ 와 .agent-loop/ 가 둘 다 있습니다 — .agent-loop/ 만 쓰고 .orca-loop/ 는 손대지 않습니다. 합친 뒤 지우세요."
+  warn "Both .orca-loop/ and .agent-loop/ exist — using .agent-loop/ and leaving .orca-loop/ alone. Merge them and delete .orca-loop/."
 fi
 if [[ -d .claude/skills/setup-orca-loop ]]; then
   rm -rf .claude/skills/setup-orca-loop
-  say "옛 스킬 setup-orca-loop 제거 (setup-agent-loop 로 대체)"
+  say "Removed the old setup-orca-loop skill (replaced by setup-agent-loop)"
 fi
 if [[ -f .gitignore ]] && grep -q '^/\.orca-loop/' .gitignore; then
   tmp="$(mktemp)"; grep -v '^/\.orca-loop/' .gitignore > "$tmp" || true; mv "$tmp" .gitignore
-  say ".gitignore 의 /.orca-loop/ 줄 제거"
+  say "Removed the /.orca-loop/ lines from .gitignore"
 fi
 
 # ---------- 1. 관리 파일 (매번 덮어쓴다) ----------
@@ -107,27 +108,27 @@ while IFS= read -r -d '' f; do
   [[ "$rel" != *.sh ]] || chmod +x "$rel"
   managed+=("$rel")
 done < <(find "$KIT_DIR/files" -type f -print0 | sort -z)
-say "관리 파일 ${#managed[@]}개 갱신"
+say "Updated ${#managed[@]} managed files"
 
 # ---------- 2. 템플릿 (없을 때만) ----------
 while IFS= read -r -d '' f; do
   rel="${f#"$KIT_DIR/templates/"}"
   if [[ -e "$rel" ]]; then
-    echo "  유지 $rel (프로젝트 소유)"
+    echo "  kept  $rel (project-owned)"
   else
     mkdir -p "$(dirname "$rel")"
     cp "$f" "$rel"
-    echo "  추가 $rel (템플릿 — /setup-agent-loop가 채운다)"
+    echo "  added $rel (template — /setup-agent-loop fills it in)"
   fi
 done < <(find "$KIT_DIR/templates" -type f -print0 | sort -z)
 
 # ---------- 3. mattpocock 스킬 ----------
 if [[ $DO_SKILLS -eq 1 ]]; then
   if command -v rsync >/dev/null 2>&1; then
-    say "mattpocock 스킬 동기화"
-    bash scripts/sync-mattpocock-skills.sh || warn "스킬 동기화 실패 — 나중에 bash scripts/sync-mattpocock-skills.sh"
+    say "Syncing the mattpocock skills"
+    bash scripts/sync-mattpocock-skills.sh || warn "Skill sync failed — run bash scripts/sync-mattpocock-skills.sh later"
   else
-    warn "rsync가 없어 스킬 동기화를 건너뜁니다."
+    warn "rsync is not installed — skipping the skill sync."
   fi
 fi
 
@@ -146,7 +147,7 @@ jq --arg base "$BASE" '
     "Bash(git push -f:*)",
     ("Bash(git push origin " + $base + ":*)")
   ] | unique)' .claude/settings.json > "$tmp" && mv "$tmp" .claude/settings.json
-say ".claude/settings.json deny 병합 (기본 브랜치 ${BASE})"
+say "Merged deny rules into .claude/settings.json (default branch ${BASE})"
 
 # ---------- 5. GitHub · git · Orca ----------
 OWNER_REPO=""
@@ -162,9 +163,9 @@ if [[ $DO_GITHUB -eq 1 ]]; then
     gh label create needs-triage    --color C5DEF5 --description "분류 필요" --force >/dev/null
     gh label create wontfix         --color FFFFFF --description "하지 않음" --force >/dev/null
     gh label create in-review       --color 5319E7 --description "PR 열림" --force >/dev/null
-    say "GitHub 라벨 6개 (${OWNER_REPO})"
+    say "GitHub labels: 6 ensured (${OWNER_REPO})"
   else
-    warn "GitHub 저장소를 찾지 못해 라벨을 건너뜁니다 (gh repo view 실패)."
+    warn "Could not resolve the GitHub repository — skipping labels (gh repo view failed)."
   fi
 fi
 
@@ -175,22 +176,22 @@ if [[ $DO_CREDENTIAL -eq 1 ]] && command -v gh >/dev/null 2>&1; then
     git config --local --unset-all credential.helper 2>/dev/null || true
     git config --local --add credential.helper ''
     git config --local --add credential.helper '!gh auth git-credential'
-    say "git 자격 증명: 이 저장소는 gh 토큰 사용 (되돌리기: git config --local --unset-all credential.helper)"
+    say "git credential: this repo now uses the gh token (undo: git config --local --unset-all credential.helper)"
   fi
 fi
 
 if [[ $DO_ORCA -eq 1 ]]; then
   if [[ "$(uname -s)" == "Linux" ]]; then ORCA_CLI="${ORCA_CLI:-orca-ide}"; else ORCA_CLI="${ORCA_CLI:-orca}"; fi
   if ! command -v "$ORCA_CLI" >/dev/null 2>&1; then
-    warn "Orca CLI($ORCA_CLI)가 없어 저장소 등록을 건너뜁니다 (Orca Settings → General → Orca CLI)."
+    warn "Orca CLI ($ORCA_CLI) not found — skipping registration (Orca Settings → General → Orca CLI)."
   elif [[ -n "$OWNER_REPO" ]]; then
     if "$ORCA_CLI" repo list --json 2>/dev/null | jq -e --arg suffix "/${OWNER_REPO}" \
          '.result.repos[] | select((.gitRemoteIdentity.canonicalKey // "") | endswith($suffix))' >/dev/null 2>&1; then   # 호스트 별칭(github.com-<계정>)도 맞게
-      echo "  Orca에 이미 등록됨"
+      echo "  Orca: already registered"
     elif "$ORCA_CLI" repo add --path "$ROOT" --json >/dev/null 2>&1; then
-      say "Orca 저장소 등록"
+      say "Registered the repo with Orca"
     else
-      warn "Orca 등록 실패 — Orca 앱을 켠 뒤 '$ORCA_CLI repo add --path $ROOT --json'"
+      warn "Orca registration failed — start the Orca app, then run '$ORCA_CLI repo add --path $ROOT --json'"
     fi
   fi
 fi
@@ -204,17 +205,17 @@ jq -n --arg repo "$KIT_REPO" --arg ref "$REF" --arg commit "$KIT_COMMIT" --arg v
 
 # 추적 파일과 무시되지 않은 새 파일만 본다(로그·node_modules 같은 무시 대상은 제외). 주석에 남은 옛 이름도 잡힌다 — 손으로 고친다
 stale="$(git ls-files -co --exclude-standard -z 2>/dev/null | xargs -0 grep -l -e '\.orca-loop' -e 'setup-orca-loop' 2>/dev/null | grep -v '^\.agent-loop/kit\.json$' || true)"
-[[ -z "$stale" ]] || warn "아직 옛 경로(.orca-loop / setup-orca-loop)를 가리키는 파일이 있습니다 — .agent-loop / setup-agent-loop 로 고치세요:
+[[ -z "$stale" ]] || warn "These files still point at the old paths (.orca-loop / setup-orca-loop) — change them to .agent-loop / setup-agent-loop:
 $(printf '  %s\n' $stale)"
 
 cat <<EOF
 
-다음 단계
-  1. Claude Code에서 /setup-matt-pocock-skills (docs/agents/issue-tracker.md가 아직 없으면)
-  2. Claude Code에서 /setup-agent-loop — 검증 명령·orca.yaml·CI·워커 규칙을 이 저장소에 맞춰 채우고 PR을 연다
-  3. Orca Settings → Projects → <저장소> → Worktree Hooks → Advanced
-     Command Source "orca.yaml only", "Wait for setup to complete before starting agent" 켜기
-  4. PR 병합 뒤: bash scripts/ticket-loop.sh --dry-run → --max 1 로 시험
+Next steps
+  1. In Claude Code: /setup-matt-pocock-skills (if docs/agents/issue-tracker.md does not exist yet)
+  2. In Claude Code: /setup-agent-loop — fills in the verify command, orca.yaml, CI and worker rules for this repo and opens a PR
+  3. Orca Settings → Projects → <repo> → Worktree Hooks → Advanced:
+     Command Source "orca.yaml only", enable "Wait for setup to complete before starting agent"
+  4. After the PR is merged: bash scripts/ticket-loop.sh --dry-run, then --max 1
 
-바뀐 파일: git status
+Changed files: git status
 EOF
