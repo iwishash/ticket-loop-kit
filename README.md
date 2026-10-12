@@ -82,6 +82,17 @@ bash <(gh api repos/iwishash/agent-loop-kit/contents/install.sh -H "Accept: appl
 
 옵션: `--yes`, `--backend <orca|cmux>`, `--no-skills`, `--no-github`, `--no-git-credential`, `--no-orca` (`npx github:iwishash/agent-loop-kit --help`). bash 경로는 `--ref <ref>`도 받는다(`bash install.sh --help`).
 
+## 여러 컴퓨터에서 같은 저장소를 돌릴 때
+
+한 번 설치한 저장소는 클론만 하면 다른 컴퓨터에서도 바로 돈다. 재설치는 키트 버전을 올릴 때만 한 컴퓨터에서 하고, 나머지는 `git pull`로 받는다.
+
+- 루프에 필요한 것은 전부 커밋돼 있다 — `scripts/ticket-loop.sh`, `.agent-loop/loop.env`(`BACKEND`, `WORKTREE_SETUP_CMD` 포함), `worker-rules.md`, `kit.json`, `implement`·`pr` 스킬. 기계별인 것은 `.agent-loop/*.log`와 `tickets.jsonl`뿐이고 둘 다 `.gitignore`다. 새 컴퓨터에서는 빈 상태로 새로 쌓인다.
+- 백엔드는 컴퓨터마다 달라도 된다. `loop.env`의 값은 `${BACKEND:-orca}` 꼴이라 실행할 때 준 환경변수가 이긴다 — A는 Orca로 `bash scripts/ticket-loop.sh N`, B는 cmux 터미널 안에서 `BACKEND=cmux bash scripts/ticket-loop.sh N`. cmux를 쓸 저장소는 `loop.env`에 `WORKTREE_SETUP_CMD`가 있어야 한다.
+- 워크트리는 백엔드가 각자 자기 자리에 둔다(Orca는 Orca 설정 위치, cmux는 `~/.cache/ticket-loop/<owner-repo>/worktrees`). 저장소 안에는 흔적이 없어 컴퓨터끼리 충돌하지 않는다.
+- 새 컴퓨터의 전제는 평소와 같다: `gh auth login`, `claude`, `jq`, 저장소의 패키지 매니저. cmux면 cmux 터미널 안에서 실행하고(소켓 모드 기본값 `cmuxOnly`) Settings의 Claude Code 통합이 켜져 있어야 한다 — 꺼져 있으면 `lifecycle`이 `unknown`만 돌아와 기동 유예 뒤 타임아웃으로 멈춘다.
+- 동시에 돌릴 때는 티켓을 나눈다. 번호를 지정하면 브랜치(`issue-N-…`)가 갈라져 겹칠 일이 없다. 자동 선택은 담당자가 있거나 PR이 열린 티켓을 건너뛰고 워커가 시작하자마자 자기를 담당자로 넣지만, 두 루프가 몇 초 간격으로 같은 티켓을 집는 경합까지 막지는 못한다 — 자동 선택으로 함께 돌릴 거면 `--parent`나 `--label`로 범위를 가른다. 한쪽이 병합해 다른 쪽 PR에 충돌이 나면 루프의 수리 단계가 처리한다.
+- 스펙 리포트(`--parent`)는 그 컴퓨터의 `tickets.jsonl`로 그리므로, 한 스펙은 한 컴퓨터에서 돌리는 편이 표가 온전하다. 기록이 없는 티켓은 PR 시각으로 대신 채운다.
+
 ## 키트를 고칠 때
 
 - 루프 스크립트를 고치면 `python3 docs/sync-guide.py && bash docs/build-pdf.sh`로 부록 D와 PDF를 다시 만든다(`tests/smoke.sh`가 부록 D 일치를 검사한다).
