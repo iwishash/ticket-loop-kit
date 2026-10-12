@@ -11,6 +11,10 @@ for f in "$KIT"/install.sh "$KIT"/files/scripts/*.sh "$KIT"/docs/build-pdf.sh; d
   bash -n "$f" || fail "문법 오류 $f"
 done
 echo "ok  bash -n"
+node --check "$KIT/bin/agent-loop-kit.js" || fail "bin/agent-loop-kit.js 문법 오류"
+[[ "$(jq -r .version "$KIT/package.json")" == "$(cat "$KIT/VERSION")" ]] || fail "package.json version 과 VERSION 이 다르다"
+[[ "$(node "$KIT/bin/agent-loop-kit.js" --version)" == "$(cat "$KIT/VERSION")" ]] || fail "--version 이 VERSION 과 다르다"
+echo "ok  npx 껍질 문법·버전"
 
 python3 - "$KIT" <<'EOF' || fail "docs/guide.html 부록 D가 files/scripts/ticket-loop.sh와 다르다"
 import html, re, sys
@@ -70,4 +74,23 @@ for want in '<!doctype html>' 'PR #50' '인수 조건 1/2' '>병합<' '>중단<'
   grep -qF "$want" "$T/report.html" || fail "스펙 리포트에 '$want' 없음"
 done
 echo "ok  스펙 리포트 렌더"
+
+# npx 껍질: 새 저장소에 --yes 로 설치하면 install.sh 결과에 더해 loop.env(BACKEND 줄)와 kit.json(커밋·ref)이 생긴다.
+# 두 번째 실행은 loop.env 를 건드리지 않고, cmux 는 아직 거절한다
+N="$T/npx"; mkdir -p "$N"; git -C "$N" init -q -b main; git -C "$N" commit -q --allow-empty -m init
+(cd "$N" && node "$KIT/bin/agent-loop-kit.js" init --yes --no-skills --no-github --no-git-credential --no-orca >/dev/null) || fail "npx 껍질 init 실패"
+[[ -x "$N/scripts/ticket-loop.sh" && -f "$N/.claude/skills/setup-orca-loop/SKILL.md" ]] || fail "npx 껍질이 install.sh 를 부르지 않음"
+grep -qxF 'BACKEND="${BACKEND:-orca}"' "$N/.orca-loop/loop.env" || fail "loop.env 에 BACKEND 줄 없음"
+[[ "$(jq -r .commit "$N/.orca-loop/kit.json")" == "$(git -C "$KIT" rev-parse HEAD)" ]] || fail "kit.json commit 이 키트 HEAD 와 다르다"
+[[ "$(jq -r .ref "$N/.orca-loop/kit.json")" == "local" ]] || fail "kit.json ref 가 local 이 아니다"
+printf 'CI_SKIP_REGEX="${CI_SKIP_REGEX:-^docs/}"\n' >> "$N/.orca-loop/loop.env"; cp "$N/.orca-loop/loop.env" "$N/before.env"
+(cd "$N" && node "$KIT/bin/agent-loop-kit.js" init --yes --no-skills --no-github --no-git-credential --no-orca >/dev/null) || fail "npx 껍질 재실행 실패"
+cmp -s "$N/before.env" "$N/.orca-loop/loop.env" || fail "재실행이 loop.env 를 바꿈"
+sed -i.bak '/^BACKEND=/d' "$N/.orca-loop/loop.env"
+(cd "$N" && node "$KIT/bin/agent-loop-kit.js" init --yes --no-skills --no-github --no-git-credential --no-orca >/dev/null) || fail "npx 껍질 세 번째 실행 실패"
+grep -qxF 'BACKEND="${BACKEND:-orca}"' "$N/.orca-loop/loop.env" || fail "BACKEND 줄이 없는 loop.env 에 줄을 덧붙이지 않음"
+grep -q 'CI_SKIP_REGEX' "$N/.orca-loop/loop.env" || fail "BACKEND 줄을 덧붙이며 기존 줄을 잃음"
+(cd "$N" && node "$KIT/bin/agent-loop-kit.js" init --yes --backend cmux >/dev/null 2>&1) && fail "cmux 백엔드를 거절해야 한다"
+(cd "$N" && node "$KIT/bin/agent-loop-kit.js" init --bogus >/dev/null 2>&1) && fail "모르는 인자를 거절해야 한다"
+echo "ok  npx 껍질 설치·재실행·거절"
 echo "smoke 통과"
