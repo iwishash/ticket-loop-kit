@@ -1,13 +1,13 @@
 #!/usr/bin/env node
 'use strict';
 
-// agent-loop-kit — npx 껍질. 질문을 받고 검증된 bash 설치기(install.sh)를 호출한다.
+// ticket-loop-kit — npx 껍질. 질문을 받고 검증된 bash 설치기(install.sh)를 호출한다.
 //
-//   npx github:iwishash/agent-loop-kit init            대상 저장소 루트에서, 물어보며 설치
-//   npx github:iwishash/agent-loop-kit init --yes      묻지 않고 기본값으로(비대화 환경에서는 자동)
-//   npx github:iwishash/agent-loop-kit#v0.3.0 init     키트 버전 고정(태그·브랜치·커밋)
+//   npx github:iwishash/ticket-loop-kit init            대상 저장소 루트에서, 물어보며 설치
+//   npx github:iwishash/ticket-loop-kit init --yes      묻지 않고 기본값으로(비대화 환경에서는 자동)
+//   npx github:iwishash/ticket-loop-kit#v0.3.0 init     키트 버전 고정(태그·브랜치·커밋)
 //
-// Node 쪽이 맡는 것: 백엔드 선택, .agent-loop/loop.env의 BACKEND 줄, 설치 단계 켜고 끄기, 도구 점검.
+// Node 쪽이 맡는 것: 백엔드 선택, .ticket-loop/loop.env의 BACKEND 줄, 설치 단계 켜고 끄기, 도구 점검.
 // 파일 복사·병합·라벨·등록은 install.sh가 그대로 한다.
 
 const fs = require('fs');
@@ -17,19 +17,19 @@ const { spawnSync } = require('child_process');
 const PKG_ROOT = path.resolve(__dirname, '..');
 const pkg = JSON.parse(fs.readFileSync(path.join(PKG_ROOT, 'package.json'), 'utf8'));
 const INSTALL_SH = path.join(PKG_ROOT, 'install.sh');
-const LOOP_DIR = '.agent-loop';
+const LOOP_DIR = '.ticket-loop';
 
 const BACKENDS = {
   orca: { label: 'Orca', available: true, note: 'The Orca app manages worktrees and agent terminals' },
   cmux: { label: 'cmux', available: true, note: 'The loop creates git worktrees and starts the agent in a cmux workspace; run the loop inside a cmux terminal' },
 };
 
-const HELP = `agent-loop-kit ${pkg.version} — installer for the unattended ticket loop
+const HELP = `ticket-loop-kit ${pkg.version} — installer for the unattended ticket loop
 
 Usage
-  agent-loop-kit init [options]   Install or update in the target repo root (idempotent)
-  agent-loop-kit --version
-  agent-loop-kit --help
+  ticket-loop-kit init [options]   Install or update in the target repo root (idempotent)
+  ticket-loop-kit --version
+  ticket-loop-kit --help
 
 Options
   -y, --yes              Use defaults without asking (automatic when not a TTY)
@@ -38,9 +38,9 @@ Options
   --no-github            Do not create the GitHub labels
   --no-git-credential    Leave the repo's git credential helper alone
   --no-orca              Skip registering the repo with Orca
-  --ref <ref>            Kit ref to record in .agent-loop/kit.json (default: the #ref of the npx spec, else "npx")
+  --ref <ref>            Kit ref to record in .ticket-loop/kit.json (default: the #ref of the npx spec, else "npx")
 
-Pin a kit version with a tag on the npx spec:  npx github:iwishash/agent-loop-kit#v0.3.0 init
+Pin a kit version with a tag on the npx spec:  npx github:iwishash/ticket-loop-kit#v0.3.0 init
 Requires git, gh (logged in), jq, rsync and bash. The backend app (Orca or cmux) and Claude Code are needed to run the loop.
 `;
 
@@ -211,7 +211,7 @@ function kitRef() {
   return 'local';
 }
 
-// .agent-loop/loop.env — 없으면 만들고, 있으면 BACKEND 줄만 없을 때 덧붙인다(프로젝트 소유 파일이라 나머지는 건드리지 않는다)
+// .ticket-loop/loop.env — 없으면 만들고, 있으면 BACKEND 줄만 없을 때 덧붙인다(프로젝트 소유 파일이라 나머지는 건드리지 않는다)
 function writeLoopEnv(root, backend) {
   const dir = path.join(root, LOOP_DIR);
   const file = path.join(dir, 'loop.env');
@@ -219,9 +219,9 @@ function writeLoopEnv(root, backend) {
   if (!fs.existsSync(file)) {
     fs.mkdirSync(dir, { recursive: true });
     fs.writeFileSync(file, [
-      '# agent-loop-kit — 이 저장소의 티켓 루프 기본값. ticket-loop.sh가 시작할 때 읽는다.',
+      '# ticket-loop-kit — 이 저장소의 티켓 루프 기본값. ticket-loop.sh가 시작할 때 읽는다.',
       '# VAR="${VAR:-값}" 꼴로 적어 두면 실행할 때 준 환경변수가 이긴다. 나머지 값(CI_SKIP_REGEX, POST_MERGE_CMD,',
-      '# POST_MERGE_PORT …)은 /setup-agent-loop 가 저장소를 읽고 채운다.',
+      '# POST_MERGE_PORT …)은 /setup-ticket-loop 가 저장소를 읽고 채운다.',
       `# 백엔드: ${Object.keys(BACKENDS).join(' | ')}`,
       line,
       ...(backend === 'cmux' ? [
@@ -255,7 +255,7 @@ async function init(o) {
   const interactive = !o.yes && process.stdin.isTTY && process.stdout.isTTY;
   const commit = kitCommit();
   const prev = readJson(path.join(root, LOOP_DIR, 'kit.json')) || readJson(path.join(root, '.orca-loop', 'kit.json'));
-  say(`agent-loop-kit ${c.cyan(pkg.version)} ${c.dim(`(${commit.slice(0, 7)})`)} → ${root}`);
+  say(`ticket-loop-kit ${c.cyan(pkg.version)} ${c.dim(`(${commit.slice(0, 7)})`)} → ${root}`);
   if (prev) console.log(c.dim(`  currently installed: ${prev.version || '?'} (${String(prev.commit || '').slice(0, 7)}, ${prev.installed_at || '?'}) — updating`));
 
   if (!has('gh')) warn('gh is not installed: labels, credential and Orca registration will be skipped, and the loop itself needs gh.');
@@ -297,7 +297,7 @@ async function init(o) {
   console.log('');
   say(`Backend: ${c.cyan(BACKENDS[backend].label)}`);
 
-  // install.sh 가 먼저 돈다 — 옛 .orca-loop/ 를 .agent-loop/ 로 옮기는 마이그레이션이 거기 있어서, loop.env 는 그 뒤에 쓴다
+  // install.sh 가 먼저 돈다 — 옛 .agent-loop/ (.orca-loop/) 를 .ticket-loop/ 로 옮기는 마이그레이션이 거기 있어서, loop.env 는 그 뒤에 쓴다
   const args = [INSTALL_SH, '--ref', o.ref || kitRef()];
   if (!o.skills) args.push('--no-skills');
   if (!o.github) args.push('--no-github');

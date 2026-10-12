@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+키트 이름을 `agent-loop-kit`에서 `ticket-loop-kit`으로 바꿨다 — 루프의 단위는 에이전트가 아니라 티켓이다. 두 단계를 한 번에 했다.
+
+- 저장소·패키지: GitHub 저장소 `iwishash/ticket-loop-kit`(옛 주소는 GitHub가 넘겨 주지만 설치 명령은 새 이름을 쓴다), `package.json` 이름·`bin`, 껍질 파일 `bin/ticket-loop-kit.js`, 설치 명령 `npx github:iwishash/ticket-loop-kit init`, `KIT_REPO` 기본값
+- 설치본과의 약속: 설치 경로 `.agent-loop/` → `.ticket-loop/`, 스킬 `setup-agent-loop` → `setup-ticket-loop`, 설정 브랜치 `chore/ticket-loop-setup`, `.gitignore` 줄 `/.ticket-loop/*.log`·`*.jsonl`, `kit.json`·`loop.env`·`worker-rules.md` 경로. `ORCA_*`·`orca.yaml`은 그대로
+- `install.sh` 0단계가 0.3 이하 설치본을 옮긴다 — `.agent-loop/`(없으면 `.orca-loop/`)를 `.ticket-loop/`로 `git mv`(로그·기록·`loop.env` 포함), 옛 스킬 두 이름 제거, `.gitignore`의 옛 줄 두 벌 제거, 옛 경로를 아직 가리키는 파일 목록 경고(네 이름 모두). 새 경로가 이미 있으면 옛 디렉터리는 경고와 함께 남긴다
+- `tests/smoke.sh`: 0.3 설치본 마이그레이션 시나리오(`git mv` 이력, `loop.env`·`tickets.jsonl` 유지, 옛 스킬·`.gitignore` 줄 제거)와 옛 경로 둘이 함께 있을 때의 경고
+- 가이드북: 본문의 경로·스킬 이름, 부록 D 재생성, 부록 E에 한 행. PDF 재빌드
+
 README에 「여러 컴퓨터에서 같은 저장소를 돌릴 때」 절. 클론만으로 돌고 재설치는 키트 갱신 때만, 백엔드는 컴퓨터마다 환경변수로, 동시에 돌릴 때는 티켓을 나누고 스펙 리포트는 한 컴퓨터에서.
 
 ## 0.3.0 — 2026-10-12

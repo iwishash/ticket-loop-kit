@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # ticket-loop.sh — GitHub 이슈 티켓을 워크트리에서 한 건씩 무인 처리한다. 워크트리와 에이전트 터미널은 백엔드(Orca 또는 cmux)가 맡는다.
-# 가이드: 「티켓 무인 루프 가이드북」 3판 (agent-loop-kit docs/). 이 파일은 agent-loop-kit이 관리한다 — 고치면 키트에서 고친다.
+# 가이드: 「티켓 무인 루프 가이드북」 3판 (ticket-loop-kit docs/). 이 파일은 ticket-loop-kit이 관리한다 — 고치면 키트에서 고친다.
 #
 # 티켓 하나당:
 #   1. 기본 브랜치에서 워크트리를 새로 만들고 에이전트(Claude Code)에 `/implement N`을 보낸다
@@ -26,10 +26,10 @@ set -euo pipefail
 #   ticket-loop.sh --skip-post-merge   # POST_MERGE_CMD를 이번 실행에서 끈다
 #
 # 전제: 백엔드 앱 실행 중(Orca: CLI 등록 / cmux: cmux 터미널 안에서 실행하거나 소켓 모드를 열어 둠), `gh auth status` 로그인, 저장소 안에서 실행.
-# 진행 로그는 기본으로 .agent-loop/loop-MMDD.log에 덧붙인다(.gitignore에 /.agent-loop/*.log 권장).
+# 진행 로그는 기본으로 .ticket-loop/loop-MMDD.log에 덧붙인다(.gitignore에 /.ticket-loop/*.log 권장).
 # 티켓마다 "#N 요약: …" 한 줄(벽시계·PR·CI 소요·수리·idle 오판·병합 뒤 검증)을 남겨 /retro가 읽는다.
 # 같은 내용 + 모델을 RECORDS_FILE(JSONL)에도 남기고, 스펙 리포트가 GitHub의 PR과 합쳐 표로 만든다.
-# 저장소별 설정은 .agent-loop/loop.env에 둔다(있으면 읽는다). 그 파일은 `VAR="${VAR:-값}"` 꼴로 써서
+# 저장소별 설정은 .ticket-loop/loop.env에 둔다(있으면 읽는다). 그 파일은 `VAR="${VAR:-값}"` 꼴로 써서
 # 실행할 때 준 환경변수가 이기게 한다. 예: CI_SKIP_REGEX="${CI_SKIP_REGEX:-^docs/}" POST_MERGE_PORT="${POST_MERGE_PORT:-3000}"
 #
 # 환경변수(선택):
@@ -46,7 +46,7 @@ set -euo pipefail
 #   BRANCH_PREFIX       이슈 브랜치 접두사 (기본 issue-)
 #   BASE_BRANCH         기준 브랜치 (기본: 저장소 기본 브랜치)
 #   ORDER_REGEX         제목에서 순번을 뽑는 정규식, 이름 있는 그룹 n (기본 ^T(?<n>[0-9]+))
-#   WORKER_RULES_FILE   워커가 추가로 따를 규칙 파일 (기본 .agent-loop/worker-rules.md)
+#   WORKER_RULES_FILE   워커가 추가로 따를 규칙 파일 (기본 .ticket-loop/worker-rules.md)
 #   AGENT               에이전트 ID — Orca가 띄울 에이전트 / 기록의 agent 필드 (기본 claude)
 #   AGENT_BANNER_REGEX  에이전트가 떴는지 확인할 화면 문구 (기본: Claude Code 배너·모델명)
 #   AGENT_RESTART_CMD   에이전트를 셸에서 띄우는 명령. 프롬프트는 인자로 붙는다 (기본 claude --dangerously-skip-permissions —
@@ -64,8 +64,8 @@ set -euo pipefail
 #   POST_MERGE_COPY     POST_MERGE_CMD 전에 메인 체크아웃에서 복사할 파일들(공백 구분), 예 ".env.local"
 #   POST_MERGE_PORT     POST_MERGE_CMD가 쓰는 포트. 지정하면 비기를 기다린다(기본 없음)
 #   POST_MERGE_WORKTREE POST_MERGE_CMD를 돌릴 워크트리 (기본 ~/.cache/ticket-loop/<owner-repo>/post-merge, 저장소 밖)
-#   LOG_FILE            진행 로그 파일 (기본 .agent-loop/loop-MMDD.log, /dev/null이면 끔)
-#   RECORDS_FILE        티켓별 기록 JSONL (기본 .agent-loop/tickets.jsonl, 기계별 — 커밋하지 않는다)
+#   LOG_FILE            진행 로그 파일 (기본 .ticket-loop/loop-MMDD.log, /dev/null이면 끔)
+#   RECORDS_FILE        티켓별 기록 JSONL (기본 .ticket-loop/tickets.jsonl, 기계별 — 커밋하지 않는다)
 #   REPORT_DIR          스펙 리포트 HTML 디렉터리 (기본 docs/loop-reports — 리포트는 사람이 PR로 커밋)
 #   MODEL_REGEX         워커 터미널에서 모델 이름을 뽑는 정규식(ERE). 기본은 Claude Code 상태줄·배너의 "Opus 5.5" 꼴
 #
@@ -75,7 +75,7 @@ set -euo pipefail
 #   - 병합 뒤 POST_MERGE_CMD 실패, 또는 POST_MERGE_PORT가 10분 안에 비지 않음(기다리는 동안은 로그 한 줄 뒤 조용하다 — 멈춤이 아니다)
 # 자동 선택은 선행 이슈가 열렸거나, PR이 이미 있거나, 담당자가 있거나, 하위 이슈를 가진(스펙) 이슈를 건너뛴다.
 
-LOOP_ENV="$(git rev-parse --show-toplevel 2>/dev/null || pwd)/.agent-loop/loop.env"
+LOOP_ENV="$(git rev-parse --show-toplevel 2>/dev/null || pwd)/.ticket-loop/loop.env"
 # shellcheck source=/dev/null
 [[ ! -f "$LOOP_ENV" ]] || source "$LOOP_ENV"
 
@@ -97,7 +97,7 @@ IN_REVIEW_LABEL="${IN_REVIEW_LABEL:-in-review}"
 BRANCH_PREFIX="${BRANCH_PREFIX:-issue-}"
 BASE_BRANCH="${BASE_BRANCH:-}"
 ORDER_REGEX="${ORDER_REGEX:-^T(?<n>[0-9]+)}"
-WORKER_RULES_FILE="${WORKER_RULES_FILE:-.agent-loop/worker-rules.md}"
+WORKER_RULES_FILE="${WORKER_RULES_FILE:-.ticket-loop/worker-rules.md}"
 AGENT="${AGENT:-claude}"
 AGENT_BANNER_REGEX="${AGENT_BANNER_REGEX:-Claude Code|Opus|Sonnet|Fable|Haiku}"
 AGENT_RESTART_CMD="${AGENT_RESTART_CMD:-claude --dangerously-skip-permissions}"
@@ -110,8 +110,8 @@ POST_MERGE_CMD="${POST_MERGE_CMD:-}"
 POST_MERGE_COPY="${POST_MERGE_COPY:-}"
 POST_MERGE_PORT="${POST_MERGE_PORT:-}"
 POST_MERGE_WORKTREE="${POST_MERGE_WORKTREE:-}"
-LOG_FILE="${LOG_FILE:-.agent-loop/loop-$(date +%m%d).log}"
-RECORDS_FILE="${RECORDS_FILE:-.agent-loop/tickets.jsonl}"
+LOG_FILE="${LOG_FILE:-.ticket-loop/loop-$(date +%m%d).log}"
+RECORDS_FILE="${RECORDS_FILE:-.ticket-loop/tickets.jsonl}"
 REPORT_DIR="${REPORT_DIR:-docs/loop-reports}"
 MODEL_REGEX="${MODEL_REGEX:-(Opus|Sonnet|Haiku|Fable|Mythos)[[:space:]]+[0-9]+(\.[0-9]+)?}"
 IDLE_WAIT_MS=600000       # idle 1회 대기 상한(Orca: terminal wait 한 번, cmux: 폴링 한 바퀴)

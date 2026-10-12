@@ -1,24 +1,25 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# agent-loop-kit install / update — run in the target repository root. Running it again gives the same result.
+# ticket-loop-kit install / update — run in the target repository root. Running it again gives the same result.
 #
-#   npx github:iwishash/agent-loop-kit init           # recommended — asks for the backend, then runs this script (bin/agent-loop-kit.js)
-#   bash <(gh api repos/iwishash/agent-loop-kit/contents/install.sh -H "Accept: application/vnd.github.raw")
-#   bash /path/to/agent-loop-kit/install.sh          # from a local clone of the kit
+#   npx github:iwishash/ticket-loop-kit init           # recommended — asks for the backend, then runs this script (bin/ticket-loop-kit.js)
+#   bash <(gh api repos/iwishash/ticket-loop-kit/contents/install.sh -H "Accept: application/vnd.github.raw")
+#   bash /path/to/ticket-loop-kit/install.sh          # from a local clone of the kit
 #
 # What it does (the part that is the same for every project):
-#   0. Migrates a 0.2 install: git mv .orca-loop/ to .agent-loop/, removes the old setup-orca-loop skill and old .gitignore lines
+#   0. Migrates a 0.3 or 0.2 install: git mv .agent-loop/ (or .orca-loop/) to .ticket-loop/, removes the old setup-agent-loop /
+#      setup-orca-loop skill and the old .gitignore lines
 #   1. Overwrites the managed files: scripts/ticket-loop.sh, scripts/ticket-state.sh, scripts/sync-mattpocock-skills.sh,
-#      .claude/skills/setup-agent-loop/
-#   2. Places templates only when missing (project-owned afterwards): .claude/skills/implement and pr, .agent-loop/worker-rules.md,
+#      .claude/skills/setup-ticket-loop/
+#   2. Places templates only when missing (project-owned afterwards): .claude/skills/implement and pr, .ticket-loop/worker-rules.md,
 #      docs/loop-reports/README.md
 #   3. Vendors the mattpocock skills into .claude/skills/ (code-review → ticket-review)
-#   4. Adds /.agent-loop/*.log and /.agent-loop/*.jsonl to .gitignore; merges deny rules into .claude/settings.json
+#   4. Adds /.ticket-loop/*.log and /.ticket-loop/*.jsonl to .gitignore; merges deny rules into .claude/settings.json
 #      (no gh pr merge, no force push, no direct push to the default branch)
 #   5. Creates the 6 GitHub labels, sets the repo-scoped git credential helper (gh), registers the repo with Orca
-#   6. Records the kit commit in .agent-loop/kit.json
-# The project-specific part (verify command, orca.yaml, CI, worker rules) is done afterwards by /setup-agent-loop in Claude Code.
+#   6. Records the kit commit in .ticket-loop/kit.json
+# The project-specific part (verify command, orca.yaml, CI, worker rules) is done afterwards by /setup-ticket-loop in Claude Code.
 #
 # Options:
 #   --ref <ref>          kit tag, branch or commit (default main)
@@ -26,10 +27,10 @@ set -euo pipefail
 #   --no-github          do not create the labels
 #   --no-git-credential  leave the repo's git credential helper alone
 #   --no-orca            skip registering the repo with Orca
-# Environment: KIT_REPO (default iwishash/agent-loop-kit), KIT_DIR (local kit path — skips the clone),
+# Environment: KIT_REPO (default iwishash/ticket-loop-kit), KIT_DIR (local kit path — skips the clone),
 #              KIT_COMMIT (kit commit to record in kit.json — the npx shell passes it for a package without .git)
 
-KIT_REPO="${KIT_REPO:-iwishash/agent-loop-kit}"
+KIT_REPO="${KIT_REPO:-iwishash/ticket-loop-kit}"
 KIT_DIR="${KIT_DIR:-}"
 REF="main"
 DO_SKILLS=1
@@ -71,7 +72,7 @@ if [[ -z "$KIT_DIR" ]]; then
     KIT_DIR="$self_dir"
   else
     command -v gh >/dev/null 2>&1 || die "gh is not installed. Clone the kit and run with KIT_DIR=<path>."
-    KIT_DIR="$(mktemp -d "${TMPDIR:-/tmp}/agent-loop-kit.XXXXXX")"
+    KIT_DIR="$(mktemp -d "${TMPDIR:-/tmp}/ticket-loop-kit.XXXXXX")"
     trap 'rm -rf "$KIT_DIR"' EXIT
     gh repo clone "$KIT_REPO" "$KIT_DIR" -- -q || die "Could not clone $KIT_REPO (check gh auth status)."
     git -C "$KIT_DIR" checkout -q "$REF" || die "Kit ref $REF does not exist."
@@ -80,7 +81,7 @@ fi
 [[ -f "$KIT_DIR/files/scripts/ticket-loop.sh" ]] || die "Not a kit directory: $KIT_DIR"
 KIT_COMMIT="${KIT_COMMIT:-$(git -C "$KIT_DIR" rev-parse HEAD 2>/dev/null || echo unknown)}"
 KIT_VERSION="$(cat "$KIT_DIR/VERSION" 2>/dev/null || echo unknown)"
-say "agent-loop-kit ${KIT_VERSION} (${KIT_COMMIT:0:7}) → ${ROOT}"
+say "ticket-loop-kit ${KIT_VERSION} (${KIT_COMMIT:0:7}) → ${ROOT}"
 
 # 기본 브랜치: origin/HEAD → gh → main
 BASE="$(git symbolic-ref -q --short refs/remotes/origin/HEAD 2>/dev/null | sed 's#^origin/##' || true)"
@@ -89,20 +90,25 @@ if [[ -z "$BASE" ]] && command -v gh >/dev/null 2>&1; then
 fi
 BASE="${BASE:-main}"
 
-# ---------- 0. 옛 경로 마이그레이션 (0.2 이하: .orca-loop/, setup-orca-loop) ----------
-if [[ -d .orca-loop && ! -e .agent-loop ]]; then
-  if git ls-files --error-unmatch .orca-loop >/dev/null 2>&1; then git mv .orca-loop .agent-loop; else mv .orca-loop .agent-loop; fi
-  say "Moved .orca-loop/ to .agent-loop/ (logs and records included)"
-elif [[ -d .orca-loop && -e .agent-loop ]]; then
-  warn "Both .orca-loop/ and .agent-loop/ exist — using .agent-loop/ and leaving .orca-loop/ alone. Merge them and delete .orca-loop/."
-fi
-if [[ -d .claude/skills/setup-orca-loop ]]; then
-  rm -rf .claude/skills/setup-orca-loop
-  say "Removed the old setup-orca-loop skill (replaced by setup-agent-loop)"
-fi
-if [[ -f .gitignore ]] && grep -q '^/\.orca-loop/' .gitignore; then
-  tmp="$(mktemp)"; grep -v '^/\.orca-loop/' .gitignore > "$tmp" || true; mv "$tmp" .gitignore
-  say "Removed the /.orca-loop/ lines from .gitignore"
+# ---------- 0. 옛 경로 마이그레이션 (0.3 이하: .agent-loop/ · setup-agent-loop, 0.2 이하: .orca-loop/ · setup-orca-loop) ----------
+for old in .agent-loop .orca-loop; do
+  [[ -d "$old" ]] || continue
+  if [[ ! -e .ticket-loop ]]; then
+    if git ls-files --error-unmatch "$old" >/dev/null 2>&1; then git mv "$old" .ticket-loop; else mv "$old" .ticket-loop; fi
+    say "Moved ${old}/ to .ticket-loop/ (logs and records included)"
+  else
+    warn "Both ${old}/ and .ticket-loop/ exist — using .ticket-loop/ and leaving ${old}/ alone. Merge them and delete ${old}/."
+  fi
+done
+for old in setup-agent-loop setup-orca-loop; do
+  if [[ -d ".claude/skills/$old" ]]; then
+    rm -rf ".claude/skills/$old"
+    say "Removed the old $old skill (replaced by setup-ticket-loop)"
+  fi
+done
+if [[ -f .gitignore ]] && grep -qE '^/\.(agent|orca)-loop/' .gitignore; then
+  tmp="$(mktemp)"; grep -vE '^/\.(agent|orca)-loop/' .gitignore > "$tmp" || true; mv "$tmp" .gitignore
+  say "Removed the /.agent-loop/ and /.orca-loop/ lines from .gitignore"
 fi
 
 # ---------- 1. 관리 파일 (매번 덮어쓴다) ----------
@@ -124,7 +130,7 @@ while IFS= read -r -d '' f; do
   else
     mkdir -p "$(dirname "$rel")"
     cp "$f" "$rel"
-    echo "  added $rel (template — /setup-agent-loop fills it in)"
+    echo "  added $rel (template — /setup-ticket-loop fills it in)"
   fi
 done < <(find "$KIT_DIR/templates" -type f -print0 | sort -z)
 
@@ -140,8 +146,8 @@ fi
 
 # ---------- 4. .gitignore · settings.json ----------
 touch .gitignore
-grep -qxF '/.agent-loop/*.log' .gitignore || printf '\n# 티켓 루프 로그 — 규칙·설정 파일만 커밋한다\n/.agent-loop/*.log\n' >> .gitignore
-grep -qxF '/.agent-loop/*.jsonl' .gitignore || printf '# 티켓 루프의 티켓별 기록(RECORDS_FILE) — 기계별 원자료. 스펙 리포트(docs/loop-reports/)만 커밋한다\n/.agent-loop/*.jsonl\n' >> .gitignore
+grep -qxF '/.ticket-loop/*.log' .gitignore || printf '\n# 티켓 루프 로그 — 규칙·설정 파일만 커밋한다\n/.ticket-loop/*.log\n' >> .gitignore
+grep -qxF '/.ticket-loop/*.jsonl' .gitignore || printf '# 티켓 루프의 티켓별 기록(RECORDS_FILE) — 기계별 원자료. 스펙 리포트(docs/loop-reports/)만 커밋한다\n/.ticket-loop/*.jsonl\n' >> .gitignore
 
 mkdir -p .claude
 [[ -f .claude/settings.json ]] || echo '{}' > .claude/settings.json
@@ -203,21 +209,21 @@ if [[ $DO_ORCA -eq 1 ]]; then
 fi
 
 # ---------- 6. 매니페스트 ----------
-mkdir -p .agent-loop
+mkdir -p .ticket-loop
 jq -n --arg repo "$KIT_REPO" --arg ref "$REF" --arg commit "$KIT_COMMIT" --arg version "$KIT_VERSION" \
   --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
   --argjson managed "$(printf '%s\n' "${managed[@]}" | jq -R . | jq -s .)" \
-  '{kit: $repo, ref: $ref, commit: $commit, version: $version, installed_at: $at, managed: $managed}' > .agent-loop/kit.json
+  '{kit: $repo, ref: $ref, commit: $commit, version: $version, installed_at: $at, managed: $managed}' > .ticket-loop/kit.json
 
 # 추적 파일과 무시되지 않은 새 파일만 본다(로그·node_modules 같은 무시 대상은 제외). 주석에 남은 옛 이름도 잡힌다 — 손으로 고친다
-stale="$(git ls-files -co --exclude-standard -z 2>/dev/null | xargs -0 grep -l -e '\.orca-loop' -e 'setup-orca-loop' 2>/dev/null | grep -v '^\.agent-loop/kit\.json$' || true)"
-[[ -z "$stale" ]] || warn "These files still point at the old paths (.orca-loop / setup-orca-loop) — change them to .agent-loop / setup-agent-loop:
+stale="$(git ls-files -co --exclude-standard -z 2>/dev/null | xargs -0 grep -l -e '\.agent-loop' -e 'setup-agent-loop' -e '\.orca-loop' -e 'setup-orca-loop' 2>/dev/null | grep -v '^\.ticket-loop/kit\.json$' || true)"
+[[ -z "$stale" ]] || warn "These files still point at the old paths (.agent-loop / setup-agent-loop, or .orca-loop / setup-orca-loop) — change them to .ticket-loop / setup-ticket-loop:
 $(printf '  %s\n' $stale)"
 
 step() { printf '  %s%s.%s %s\n' "$C_C" "$1" "$C_0" "$2"; }
 printf '\n%sNext steps%s\n' "$C_B" "$C_0"
 step 1 "In Claude Code: ${C_C}/setup-matt-pocock-skills${C_0} ${C_D}(if docs/agents/issue-tracker.md does not exist yet)${C_0}"
-step 2 "In Claude Code: ${C_C}/setup-agent-loop${C_0} — fills in the verify command, orca.yaml, CI and worker rules for this repo and opens a PR"
+step 2 "In Claude Code: ${C_C}/setup-ticket-loop${C_0} — fills in the verify command, orca.yaml, CI and worker rules for this repo and opens a PR"
 step 3 "Orca Settings → Projects → <repo> → Worktree Hooks → Advanced:"
 printf '     Command Source %s"orca.yaml only"%s, enable %s"Wait for setup to complete before starting agent"%s\n' "$C_C" "$C_0" "$C_C" "$C_0"
 step 4 "After the PR is merged: ${C_C}bash scripts/ticket-loop.sh --dry-run${C_0}, then ${C_C}--max 1${C_0}"
