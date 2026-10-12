@@ -333,16 +333,19 @@ orca_set_status() {
   orca_json worktree set "${args[@]}" >/dev/null
 }
 
-# ----- cmux (초안 — 실제 티켓으로 아직 돌리지 않았다): 워크트리는 루프가 git으로 만들고, 터미널은 cmux 워크스페이스다 -----
+# ----- cmux: 워크트리는 루프가 git으로 만들고, 터미널은 cmux 워크스페이스다 (cmux 0.65 실측) -----
 # cmux에는 워크트리 생성 명령도, idle까지 블로킹하는 명령도 없다. 그래서
-#   - `git worktree add` 뒤 WORKTREE_SETUP_CMD(orca.yaml setup에 해당)를 돌리고 `cmux new-workspace --cwd … --command "claude …"`
+#   - `git worktree add` 뒤 WORKTREE_SETUP_CMD(orca.yaml setup에 해당)를 돌리고 `cmux workspace create --cwd … --command "claude …"`
+#     --command는 워크스페이스의 로그인 셸(zsh)이 실행하고, 그 셸의 PATH 앞에 cmux의 claude shim이 있어 Claude Code 훅이 자동으로 붙는다
 #   - idle은 `cmux rpc surface.input_state`가 돌려주는 lifecycle(running | idle | needsInput | unknown — Claude Code 훅이 보고)을
 #     IDLE_POLL_SEC마다 읽어 판정한다. 이벤트 스트림(`cmux events`)의 이름에 기대지 않는다
 #   - 소켓 모드가 cmuxOnly(기본)면 cmux 터미널 밖에서는 "액세스 거부"다. 루프를 cmux 터미널 안에서 돌린다
 #   - 백그라운드 idle 에이전트를 하이버네이션할 수 있어, 프롬프트를 보내기 전에 깨운다
-# 확인이 필요한 곳(cmux 0.65 기준 문서로만 썼다): new-workspace --json의 필드 이름, workspace status의 lane 이름.
+# 실측한 것: `--json`은 명령 뒤에 둬야 JSON이 나온다(앞에 두면 "OK workspace:N" 한 줄). `workspace create --json --id-format uuids`는
+# {workspace_id, surface_id, window_id, group_id}. `workspace status set`의 lane은 todo|working|needs-attention|review|done|auto.
+# `workspace close`는 프로세스가 살아 있으면 --force 없이 거부한다. 옛 이름(new-workspace 등)은 deprecation 한 줄을 찍으니 쓰지 않는다.
 
-cmux_j() { "$CMUX_CLI" --json "$@"; }
+cmux_j() { CMUX_QUIET=1 "$CMUX_CLI" "$@" --json; }
 
 cmux_check() {
   [[ -x "$CMUX_CLI" ]] || command -v "$CMUX_CLI" >/dev/null 2>&1 || die "cmux CLI(${CMUX_CLI})가 없습니다 (CMUX_CLI=경로)."
@@ -364,17 +367,18 @@ cmux_worktree_create() {
       || die "#${n}: WORKTREE_SETUP_CMD 실패 (${path})"
   fi
   pf="$(prompt_file "$n" "$prompt")"
-  out="$(cmux_j new-workspace --name "${BRANCH_PREFIX}${n}" --cwd "$path" --focus false --id-format uuids \
-           --command "$(agent_launch_cmd "$pf")" 2>/dev/null)" || die "cmux new-workspace 실패"
-  WT="$(jq -r '.workspace_id // .workspace // .workspace_ref // .id // empty' <<<"$out" 2>/dev/null || true)"
-  HANDLE="$(jq -r '.surface_id // .surface // .surface_ref // empty' <<<"$out" 2>/dev/null || true)"
-  [[ -n "$WT" && -n "$HANDLE" ]] || die "cmux new-workspace 응답에서 workspace/surface id를 찾지 못했습니다: ${out}"
+  out="$(cmux_j workspace create --name "${BRANCH_PREFIX}${n}" --cwd "$path" --focus false --id-format uuids \
+           --command "$(agent_launch_cmd "$pf")" 2>/dev/null)" || die "cmux workspace create 실패"
+  WT="$(jq -r '.workspace_id // empty' <<<"$out" 2>/dev/null || true)"
+  HANDLE="$(jq -r '.surface_id // empty' <<<"$out" 2>/dev/null || true)"
+  [[ -n "$WT" && -n "$HANDLE" ]] || die "cmux workspace create 응답에서 workspace_id/surface_id를 찾지 못했습니다: ${out}"
   WT_PATH="$path"
   WT_BRANCH="${BRANCH_PREFIX}${n}"
 }
 
 cmux_worktree_remove() {
-  "$CMUX_CLI" workspace close "$1" >/dev/null 2>&1 || "$CMUX_CLI" close-workspace --workspace "$1" >/dev/null 2>&1 || true
+  # 에이전트 프로세스가 살아 있는 워크스페이스라 --force가 필요하다(없으면 confirmation_required로 거부)
+  CMUX_QUIET=1 "$CMUX_CLI" workspace close "$1" --force >/dev/null 2>&1 || true
   git -C "$ROOT" worktree remove --force "$2"
 }
 

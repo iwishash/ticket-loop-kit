@@ -1,6 +1,8 @@
 # Changelog
 
-## Unreleased
+## 0.3.0 — 2026-10-12
+
+cmux 백엔드를 실제 티켓 1건(boiler-webapp #39 → PR #40, cmux 0.65, 벽시계 7분, 수리 0회, idle 오판 0회, 정리·기록 정상)으로 확인했다. 초안이 문서로만 가정했던 것 중 두 가지가 틀려 고쳤다 — `--json`은 명령 뒤에 둬야 JSON이 나온다(앞에 두면 `OK workspace:N` 한 줄이라 jq가 id를 못 찾는다), `workspace close`는 에이전트 프로세스가 살아 있으면 `--force` 없이 `confirmation_required`로 거부한다. 옛 이름 `new-workspace` 대신 `workspace create`를 쓰고 `CMUX_QUIET=1`로 deprecation 줄을 막는다. 맞았던 가정: `workspace create --json --id-format uuids`의 `workspace_id`·`surface_id`, lane 이름 `todo|working|needs-attention|review|done`, `rpc surface.input_state`가 uuid를 받고 `--command`로 띄운 claude에 훅이 붙어 `lifecycle`을 보고하는 것(워크스페이스 셸의 PATH 앞에 cmux의 claude shim이 있다). README·npx 껍질·가이드 개정 이력에서 "초안"을 뺐다.
 
 고침: 백엔드 분리 때 들어간 `orca_set_status`의 `local` 한 문장이 같은 문장에서 선언한 `status`를 바로 써서 `set -u`에 걸려, 첫 실제 티켓(boiler-webapp #34)에서 워크트리를 만든 직후 루프가 죽었다(워커는 혼자 계속 돌았다). 줄을 나눴다. `tests/smoke.sh`가 가짜 `orca`로 Orca 백엔드 함수를 전부 한 번씩 불러 이런 실수를 잡는다.
 

@@ -21,7 +21,7 @@ const LOOP_DIR = '.agent-loop';
 
 const BACKENDS = {
   orca: { label: 'Orca', available: true, note: 'The Orca app manages worktrees and agent terminals' },
-  cmux: { label: 'cmux', available: true, note: 'The loop creates git worktrees and starts the agent in a cmux workspace (draft — not yet run on a real ticket)' },
+  cmux: { label: 'cmux', available: true, note: 'The loop creates git worktrees and starts the agent in a cmux workspace; run the loop inside a cmux terminal' },
 };
 
 const HELP = `agent-loop-kit ${pkg.version} — installer for the unattended ticket loop
