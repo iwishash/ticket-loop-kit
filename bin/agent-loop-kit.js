@@ -60,25 +60,38 @@ function readKeys(onKey) {
   const readline = require('readline');
   readline.emitKeypressEvents(process.stdin);
   process.stdin.setRawMode(true); process.stdin.resume();
+  process.stdout.write('\x1b[?25l');   // 커서 숨김 — 끝나면 다시 보인다
   return new Promise((resolve) => {
-    const done = (v) => { process.stdin.off('keypress', handler); process.stdin.setRawMode(false); process.stdin.pause(); resolve(v); };
+    const done = (v) => { process.stdout.write('\x1b[?25h'); process.stdin.off('keypress', handler); process.stdin.setRawMode(false); process.stdin.pause(); resolve(v); };
     const handler = (str, key) => {
-      if (key && key.ctrl && key.name === 'c') { process.stdout.write('\n'); process.exit(130); }
+      if (key && key.ctrl && key.name === 'c') { process.stdout.write('\x1b[?25h\n'); process.exit(130); }
       const r = onKey(str, key || {});
       if (r !== undefined) done(r);
     };
     process.stdin.on('keypress', handler);
   });
 }
-const redraw = (lines, prevCount) => {
-  if (prevCount > 0) process.stdout.write(`\x1b[${prevCount}A\x1b[0J`);
-  process.stdout.write(lines.join('\n') + '\n');
-  return lines.length;
-};
-const keyHint = (s) => c.dim(`  ${s}`);
 // 보이는 폭으로 채운다 — 한글·한자는 2칸, 색 이스케이프는 0칸. 색은 채운 뒤에 입힌다
 const vwidth = (s) => [...String(s).replace(/\x1b\[[0-9;]*m/g, '')].reduce((n, ch) => n + (/[\u1100-\u115f\u2e80-\ua4cf\uac00-\ud7a3\uf900-\ufaff\ufe30-\ufe4f\uff00-\uff60\uffe0-\uffe6]/.test(ch) ? 2 : 1), 0);
 const padv = (s, w) => s + ' '.repeat(Math.max(0, w - vwidth(s)));
+// 다시 그리기 — 지운 뒤 다시 쓴다. 커서를 올리는 칸 수는 논리 줄이 아니라 터미널에서 차지한 실제 행 수다(긴 줄은 접혀 2행이 된다).
+// 그래도 접히지 않게 각 줄을 터미널 폭 안으로 자르는 것이 먼저다(fit). 2026-10-12 실측: 좁은 창에서 제목 줄이 키마다 하나씩 쌓였다.
+const columns = () => Math.max(20, process.stdout.columns || 80);
+const rowsOf = (line) => Math.max(1, Math.ceil(vwidth(line) / columns()));
+const redraw = (lines, prevRows) => {
+  if (prevRows > 0) process.stdout.write(`\x1b[${prevRows}A\x1b[0J`);
+  process.stdout.write(lines.join('\n') + '\n');
+  return lines.reduce((n, l) => n + rowsOf(l), 0);
+};
+// 설명을 남은 폭에 맞게 자른다(한글 2칸). 잘리면 … 를 붙인다
+const fit = (text, budget) => {
+  if (budget <= 1) return '';
+  if (vwidth(text) <= budget) return text;
+  let out = '';
+  for (const ch of [...text]) { if (vwidth(out + ch) > budget - 1) break; out += ch; }
+  return out + '…';
+};
+const keyHint = (s) => c.dim(`  ${s}`);
 const finalLine = (title, picked) => console.log(`${c.green('✔')} ${title} ${c.dim('›')} ${c.cyan(picked)}`);
 
 // 하나 고르기. items: [{key, label, note, disabled}]. 반환: key. Esc/q 는 null.
@@ -92,7 +105,9 @@ async function select(title, items, initialKey) {
       const mark = on ? c.cyan('❯') : ' ';
       const cell = padv(it.label, Math.max(...items.map((x) => vwidth(x.label))) + 2);
       const label = on ? c.cyan(c.bold(cell)) : it.disabled ? c.dim(cell) : cell;
-      lines.push(`  ${mark} ${c.dim(String(i + 1) + ')')} ${label}${c.dim(it.note || '')}${it.disabled ? c.yellow(' (coming soon)') : ''}`);
+      const head = `  ${mark} ${c.dim(String(i + 1) + ')')} ${label}`;
+      const tail = it.disabled ? ' (coming soon)' : '';
+      lines.push(`${head}${c.dim(fit(it.note || '', columns() - vwidth(head) - vwidth(tail) - 1))}${it.disabled ? c.yellow(tail) : ''}`);
     });
     lines.push(keyHint('↑↓ move · number to jump · Enter confirm · q quit'));
     drawn = redraw(lines, drawn);
@@ -121,7 +136,8 @@ async function checklist(title, items) {
       const box = checked ? c.green('◉') : c.dim('◯');
       const cell = padv(it.label, Math.max(...items.map((x) => vwidth(x.label))) + 2);
       const label = onRow ? c.cyan(c.bold(cell)) : checked ? cell : c.dim(cell);
-      lines.push(`  ${onRow ? c.cyan('❯') : ' '} ${box} ${label}${c.dim(it.note || '')}`);
+      const head = `  ${onRow ? c.cyan('❯') : ' '} ${box} ${label}`;
+      lines.push(`${head}${c.dim(fit(it.note || '', columns() - vwidth(head) - 1))}`);
     });
     lines.push(keyHint('↑↓ move · Space toggle · a all · n none · Enter confirm · q quit'));
     drawn = redraw(lines, drawn);
