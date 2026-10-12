@@ -101,10 +101,12 @@ cmux 백엔드는 cmux 0.65 문서로만 썼고 실제 티켓으로 돌리지 �
 
 - 0.2 설치본 마이그레이션: 스모크 테스트가 `.orca-loop/`(규칙·`loop.env`·로그)와 옛 스킬·`.gitignore` 줄이 있는 임시 저장소에 설치해 `git mv`로 옮겨지고 아무것도 잃지 않음을 확인한다. rental-portal 실제 적용은 아직이다
 
+- Orca 백엔드로 실제 티켓 1건(iwishash/boiler-webapp #34 → PR #38, 2026-10-12): 첫 설치(`npx … init` + 사용자가 `/setup-agent-loop` 실행) 뒤 `bash scripts/ticket-loop.sh 34 --max 1`이 워크트리 생성 → 워커 기동 → PR → CI 8개 작업 대기 → 병합 → 이슈 닫힘 → 워크트리·브랜치 정리 → 기록(`tickets.jsonl`, 모델 포함)까지 벽시계 10분에 끝났다. 첫 시도에서 `orca_set_status`의 `set -u` 버그로 워크트리 생성 직후 죽었고(워커는 혼자 계속 돌았다) 고친 뒤 재실행한 결과다. 병합 뒤 검증은 그 저장소에 없어 건너뛰었다
+
 아직 확인하지 않은 것 — 첫 적용 저장소에서 확인하고 여기를 갱신한다:
 
-- `/setup-agent-loop`를 실제 저장소에서 돌려 본 적이 없다. 질문 순서나 빠진 항목이 드러나면 키트에서 고친다
+- `/setup-agent-loop`는 boiler-webapp에서 사용자가 한 번 돌렸다(결과 PR은 병합됨). 질문 순서나 빠진 항목에 대한 피드백은 아직 없다
 - `install.sh`의 라벨 생성·Orca 등록 단계는 시험에서 껐다. 명령 자체는 rsrehab/rental-portal에서 쓰던 것이다
-- 키트판 `ticket-loop.sh`로 실제 티켓을 돌린 적이 없다. 특히 `.agent-loop/loop.env`, `POST_MERGE_CMD`, `CI_SKIP_REGEX` 경로와 시작 전 포트 점검 줄, 그리고 백엔드 분리 뒤의 Orca 경로(함수로 옮겼을 뿐 명령은 같다)
+- 키트판 `ticket-loop.sh`의 `POST_MERGE_CMD`·`POST_MERGE_PORT`·`CI_SKIP_CMD`·`CI_SKIP_REGEX` 경로와 수리 프롬프트 경로. boiler-webapp 1건은 병합 뒤 검증 없음·CI 경로 필터 없음·수리 0회였다. rental-portal(PR #82로 전환, `CI_SKIP_CMD`·`POST_MERGE_CMD` 설정)에서 실제 티켓을 돌리면 확인된다
 - cmux 백엔드 전체. `--dry-run`이 cmux 터미널 밖에서 소켓 오류로 멈추는 것까지만 확인했다
 - 출처 저장소 rsrehab/rental-portal은 아직 저장소 전용판 `scripts/orca-ticket-loop.sh`를 쓴다(키트로 전환하지 않음)
