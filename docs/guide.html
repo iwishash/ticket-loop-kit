@@ -1566,7 +1566,9 @@ orca_wait_idle() {
 orca_tail() { orca_json terminal read --terminal "$1" | jq -r '.result.terminal.tail[]?' | tail -n 25; }
 
 orca_set_status() {
-  local wt="$1" status="$2" pr="${3:-}" comment="${4:-}" args=(--worktree "id:${wt}" --workspace-status "$status")
+  # local 한 문장 안에서 선언한 변수를 같은 문장에서 쓰면 set -u 에 걸린다(2026-10-12 boiler-webapp #34 실측) — 줄을 나눈다
+  local wt="$1" status="$2" pr="${3:-}" comment="${4:-}"
+  local args=(--worktree "id:${wt}" --workspace-status "$status")
   [[ -z "$pr" ]] || args+=(--pr "$pr")
   [[ -z "$comment" ]] || args+=(--comment "$comment")
   [[ "$status" != "todo" ]] || args+=(--unread)
