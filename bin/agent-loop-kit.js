@@ -20,34 +20,129 @@ const INSTALL_SH = path.join(PKG_ROOT, 'install.sh');
 const LOOP_DIR = '.agent-loop';
 
 const BACKENDS = {
-  orca: { label: 'Orca', available: true, note: '워크트리·터미널을 Orca 앱이 관리한다' },
-  cmux: { label: 'cmux', available: true, note: '루프가 git worktree를 만들고 cmux 워크스페이스에서 에이전트를 띄운다 (초안 — 실제 티켓으로 아직 검증 전)' },
+  orca: { label: 'Orca', available: true, note: 'The Orca app manages worktrees and agent terminals' },
+  cmux: { label: 'cmux', available: true, note: 'The loop creates git worktrees and starts the agent in a cmux workspace (draft — not yet run on a real ticket)' },
 };
 
-const HELP = `agent-loop-kit ${pkg.version} — 티켓 무인 루프 설치 키트
+const HELP = `agent-loop-kit ${pkg.version} — installer for the unattended ticket loop
 
-사용법
-  agent-loop-kit init [옵션]     대상 저장소 루트에서 설치·업데이트 (여러 번 실행해도 결과가 같다)
+Usage
+  agent-loop-kit init [options]   Install or update in the target repo root (idempotent)
   agent-loop-kit --version
   agent-loop-kit --help
 
-옵션
-  -y, --yes              묻지 않고 기본값으로 진행 (터미널이 아니면 자동)
-  --backend <이름>        ${Object.entries(BACKENDS).map(([k, b]) => `${k}${b.available ? '' : '(준비 중)'}`).join(' | ')}  (기본 orca)
-  --no-skills            mattpocock 스킬 동기화를 건너뛴다
-  --no-github            GitHub 라벨을 만들지 않는다
-  --no-git-credential    저장소 git 자격 증명을 바꾸지 않는다
-  --no-orca              Orca 저장소 등록을 건너뛴다
-  --ref <ref>            .agent-loop/kit.json에 남길 키트 ref 표시 (기본: npx 스펙의 #ref, 없으면 npx)
+Options
+  -y, --yes              Use defaults without asking (automatic when not a TTY)
+  --backend <name>       ${Object.entries(BACKENDS).map(([k, b]) => `${k}${b.available ? '' : ' (coming soon)'}`).join(' | ')}  (default: orca)
+  --no-skills            Skip syncing the mattpocock skills
+  --no-github            Do not create the GitHub labels
+  --no-git-credential    Leave the repo's git credential helper alone
+  --no-orca              Skip registering the repo with Orca
+  --ref <ref>            Kit ref to record in .agent-loop/kit.json (default: the #ref of the npx spec, else "npx")
 
-키트 버전을 고정하려면 npx 쪽에 태그를 붙인다:  npx github:iwishash/agent-loop-kit#v0.3.0 init
-필요한 도구: git, gh(로그인), jq, rsync, bash. 백엔드 앱(Orca)과 Claude Code는 루프를 돌릴 때 필요하다.
+Pin a kit version with a tag on the npx spec:  npx github:iwishash/agent-loop-kit#v0.3.0 init
+Requires git, gh (logged in), jq, rsync and bash. The backend app (Orca or cmux) and Claude Code are needed to run the loop.
 `;
 
-const bold = (s) => (process.stdout.isTTY ? `\x1b[1m${s}\x1b[0m` : s);
-const say = (s) => console.log(bold(`▸ ${s}`));
-const warn = (s) => console.error(process.stderr.isTTY ? `\x1b[33m! ${s}\x1b[0m` : `! ${s}`);
-const die = (s, code = 1) => { console.error(process.stderr.isTTY ? `\x1b[31m✗ ${s}\x1b[0m` : `✗ ${s}`); process.exit(code); };
+// ---------- 색 ----------
+// 터미널일 때만 칠하고, NO_COLOR(https://no-color.org)나 TERM=dumb 이면 끈다. 파이프로 받는 쪽은 맨글자만 본다.
+const COLOR = process.stdout.isTTY && !process.env.NO_COLOR && process.env.TERM !== 'dumb';
+const paint = (code) => (s) => (COLOR ? `\x1b[${code}m${s}\x1b[0m` : String(s));
+const c = { bold: paint(1), dim: paint(2), red: paint(31), green: paint(32), yellow: paint(33), blue: paint(34), cyan: paint(36), inv: paint(7) };
+const say = (s) => console.log(`${c.green('▸')} ${c.bold(s)}`);
+const warn = (s) => console.error(c.yellow(`! ${s}`));
+const die = (s, code = 1) => { console.error(c.red(`✗ ${s}`)); process.exit(code); };
+
+// ---------- 키보드로 고르는 프롬프트 ----------
+// 의존성 없이 raw 모드로 키를 받는다. ↑↓/j/k 이동, 숫자로 바로 이동, Enter 확정, Space 토글(체크리스트), q·Esc·Ctrl+C 중단.
+// 화면은 커서를 위로 올려 같은 자리에 다시 그린다. 터미널이 아니면 호출되지 않는다(--yes 와 같게 처리).
+function readKeys(onKey) {
+  const readline = require('readline');
+  readline.emitKeypressEvents(process.stdin);
+  process.stdin.setRawMode(true); process.stdin.resume();
+  return new Promise((resolve) => {
+    const done = (v) => { process.stdin.off('keypress', handler); process.stdin.setRawMode(false); process.stdin.pause(); resolve(v); };
+    const handler = (str, key) => {
+      if (key && key.ctrl && key.name === 'c') { process.stdout.write('\n'); process.exit(130); }
+      const r = onKey(str, key || {});
+      if (r !== undefined) done(r);
+    };
+    process.stdin.on('keypress', handler);
+  });
+}
+const redraw = (lines, prevCount) => {
+  if (prevCount > 0) process.stdout.write(`\x1b[${prevCount}A\x1b[0J`);
+  process.stdout.write(lines.join('\n') + '\n');
+  return lines.length;
+};
+const keyHint = (s) => c.dim(`  ${s}`);
+// 보이는 폭으로 채운다 — 한글·한자는 2칸, 색 이스케이프는 0칸. 색은 채운 뒤에 입힌다
+const vwidth = (s) => [...String(s).replace(/\x1b\[[0-9;]*m/g, '')].reduce((n, ch) => n + (/[\u1100-\u115f\u2e80-\ua4cf\uac00-\ud7a3\uf900-\ufaff\ufe30-\ufe4f\uff00-\uff60\uffe0-\uffe6]/.test(ch) ? 2 : 1), 0);
+const padv = (s, w) => s + ' '.repeat(Math.max(0, w - vwidth(s)));
+const finalLine = (title, picked) => console.log(`${c.green('✔')} ${title} ${c.dim('›')} ${c.cyan(picked)}`);
+
+// 하나 고르기. items: [{key, label, note, disabled}]. 반환: key. Esc/q 는 null.
+async function select(title, items, initialKey) {
+  let cur = Math.max(0, items.findIndex((it) => it.key === initialKey));
+  let drawn = 0;
+  const draw = () => {
+    const lines = [c.bold(title)];
+    items.forEach((it, i) => {
+      const on = i === cur;
+      const mark = on ? c.cyan('❯') : ' ';
+      const cell = padv(it.label, Math.max(...items.map((x) => vwidth(x.label))) + 2);
+      const label = on ? c.cyan(c.bold(cell)) : it.disabled ? c.dim(cell) : cell;
+      lines.push(`  ${mark} ${c.dim(String(i + 1) + ')')} ${label}${c.dim(it.note || '')}${it.disabled ? c.yellow(' (coming soon)') : ''}`);
+    });
+    lines.push(keyHint('↑↓ move · number to jump · Enter confirm · q quit'));
+    drawn = redraw(lines, drawn);
+  };
+  draw();
+  const picked = await readKeys((str, key) => {
+    if (key.name === 'up' || str === 'k') { cur = (cur - 1 + items.length) % items.length; draw(); return; }
+    if (key.name === 'down' || str === 'j') { cur = (cur + 1) % items.length; draw(); return; }
+    if (/^[1-9]$/.test(str || '') && Number(str) <= items.length) { cur = Number(str) - 1; draw(); return; }
+    if (key.name === 'return') return items[cur].key;
+    if (key.name === 'escape' || str === 'q') return null;
+  });
+  process.stdout.write(`\x1b[${drawn}A\x1b[0J`);
+  if (picked !== null) finalLine(title, items[cur].label);
+  return picked;
+}
+
+// 여러 개 켜고 끄기. items: [{key, label, note, on}]. 반환: {key: boolean}. Esc/q 는 null.
+async function checklist(title, items) {
+  const state = Object.fromEntries(items.map((it) => [it.key, it.on !== false]));
+  let cur = 0, drawn = 0;
+  const draw = () => {
+    const lines = [c.bold(title)];
+    items.forEach((it, i) => {
+      const onRow = i === cur, checked = state[it.key];
+      const box = checked ? c.green('◉') : c.dim('◯');
+      const cell = padv(it.label, Math.max(...items.map((x) => vwidth(x.label))) + 2);
+      const label = onRow ? c.cyan(c.bold(cell)) : checked ? cell : c.dim(cell);
+      lines.push(`  ${onRow ? c.cyan('❯') : ' '} ${box} ${label}${c.dim(it.note || '')}`);
+    });
+    lines.push(keyHint('↑↓ move · Space toggle · a all · n none · Enter confirm · q quit'));
+    drawn = redraw(lines, drawn);
+  };
+  draw();
+  const ok = await readKeys((str, key) => {
+    if (key.name === 'up' || str === 'k') { cur = (cur - 1 + items.length) % items.length; draw(); return; }
+    if (key.name === 'down' || str === 'j') { cur = (cur + 1) % items.length; draw(); return; }
+    if (key.name === 'space') { state[items[cur].key] = !state[items[cur].key]; draw(); return; }
+    if (str === 'a') { items.forEach((it) => { state[it.key] = true; }); draw(); return; }
+    if (str === 'n') { items.forEach((it) => { state[it.key] = false; }); draw(); return; }
+    if (/^[1-9]$/.test(str || '') && Number(str) <= items.length) { cur = Number(str) - 1; draw(); return; }
+    if (key.name === 'return') return true;
+    if (key.name === 'escape' || str === 'q') return false;
+  });
+  process.stdout.write(`\x1b[${drawn}A\x1b[0J`);
+  if (!ok) return null;
+  const onLabels = items.filter((it) => state[it.key]).map((it) => it.label);
+  finalLine(title, onLabels.length ? onLabels.join(', ') : '(none)');
+  return state;
+}
 
 function parseArgs(argv) {
   const o = { command: null, yes: false, backend: null, ref: null, skills: true, github: true, credential: true, orca: true };
@@ -64,9 +159,9 @@ function parseArgs(argv) {
       case '--no-orca': o.orca = false; break;
       case '-h': case '--help': o.command = 'help'; break;
       case '-v': case '--version': o.command = 'version'; break;
-      default: die(`알 수 없는 인자: ${a}\n\n${HELP}`, 2);
+      default: die(`Unknown argument: ${a}\n\n${HELP}`, 2);
     }
-    if ((a === '--backend' || a === '--ref') && o[a.slice(2)] == null) die(`${a} 에 값이 필요합니다.`, 2);
+    if ((a === '--backend' || a === '--ref') && o[a.slice(2)] == null) die(`${a} needs a value.`, 2);
   }
   return o;
 }
@@ -77,17 +172,6 @@ function run(cmd, args, opts = {}) {
 }
 const has = (tool) => run(process.platform === 'win32' ? 'where' : 'which', [tool]).ok;
 
-async function ask(rl, q, def) {
-  const a = (await rl.question(q)).trim();
-  return a === '' ? def : a;
-}
-async function askYesNo(rl, q, def = true) {
-  for (;;) {
-    const a = (await ask(rl, `${q} [${def ? 'Y/n' : 'y/N'}] `, def ? 'y' : 'n')).toLowerCase();
-    if (['y', 'yes', '예', 'ㅇ'].includes(a)) return true;
-    if (['n', 'no', '아니오', '아니요', 'ㄴ'].includes(a)) return false;
-  }
-}
 
 // npx가 git에서 받은 패키지에는 .git이 없다. 커밋은 npx 캐시의 package-lock.json("resolved": "git+…#<sha>")에,
 // 사용자가 준 ref(npx github:…#v0.3.0)는 같은 자리의 package.json dependencies 스펙에 남는다.
@@ -130,73 +214,66 @@ function writeLoopEnv(root, backend) {
       ] : []),
       '',
     ].join('\n'));
-    return `${LOOP_DIR}/loop.env 생성 (BACKEND=${backend})`;
+    return `Created ${LOOP_DIR}/loop.env (BACKEND=${backend})`;
   }
   const text = fs.readFileSync(file, 'utf8');
   const m = text.match(/^\s*BACKEND=["']?\$\{BACKEND:-([a-z]+)\}["']?\s*$/m) || text.match(/^\s*BACKEND=["']?([a-z]+)["']?\s*$/m);
   if (!m) {
     fs.appendFileSync(file, `${text.endsWith('\n') || text === '' ? '' : '\n'}# 백엔드: ${Object.keys(BACKENDS).join(' | ')}\n${line}\n`);
-    return `${LOOP_DIR}/loop.env 에 BACKEND=${backend} 줄 추가`;
+    return `Added BACKEND=${backend} to ${LOOP_DIR}/loop.env`;
   }
-  if (m[1] !== backend) warn(`${LOOP_DIR}/loop.env 의 BACKEND=${m[1]} 를 그대로 둡니다 (선택한 ${backend} 와 다릅니다 — 바꾸려면 직접 고치세요).`);
-  return `${LOOP_DIR}/loop.env 유지 (BACKEND=${m[1]})`;
+  if (m[1] !== backend) warn(`Keeping BACKEND=${m[1]} in ${LOOP_DIR}/loop.env (differs from the selected ${backend} — edit the file to change it).`);
+  return `Kept ${LOOP_DIR}/loop.env (BACKEND=${m[1]})`;
 }
 
 async function init(o) {
-  if (process.platform === 'win32') die('Windows는 지원하지 않습니다 (bash 설치기를 씁니다). WSL에서 실행하세요.');
-  if (!fs.existsSync(INSTALL_SH)) die(`키트 패키지가 온전하지 않습니다: ${INSTALL_SH} 없음`);
-  for (const t of ['git', 'bash', 'jq']) if (!has(t)) die(`${t} 이(가) 없습니다.`);
+  if (process.platform === 'win32') die('Windows is not supported (the installer is bash). Run it under WSL.');
+  if (!fs.existsSync(INSTALL_SH)) die(`Kit package is incomplete: ${INSTALL_SH} is missing`);
+  for (const t of ['git', 'bash', 'jq']) if (!has(t)) die(`${t} is not installed.`);
 
   const top = run('git', ['rev-parse', '--show-toplevel']);
-  if (!top.ok) die('git 저장소 안에서 실행하세요.');
+  if (!top.ok) die('Run this inside a git repository.');
   const root = top.out;
-  if (path.resolve(process.cwd()) !== path.resolve(root)) warn(`저장소 루트(${root})에 설치합니다.`);
+  if (path.resolve(process.cwd()) !== path.resolve(root)) warn(`Installing into the repository root (${root}).`);
 
   const interactive = !o.yes && process.stdin.isTTY && process.stdout.isTTY;
   const commit = kitCommit();
   const prev = readJson(path.join(root, LOOP_DIR, 'kit.json')) || readJson(path.join(root, '.orca-loop', 'kit.json'));
-  say(`agent-loop-kit ${pkg.version} (${commit.slice(0, 7)}) → ${root}`);
-  if (prev) console.log(`  현재 설치: ${prev.version || '?'} (${String(prev.commit || '').slice(0, 7)}, ${prev.installed_at || '?'}) — 업데이트`);
+  say(`agent-loop-kit ${c.cyan(pkg.version)} ${c.dim(`(${commit.slice(0, 7)})`)} → ${root}`);
+  if (prev) console.log(c.dim(`  currently installed: ${prev.version || '?'} (${String(prev.commit || '').slice(0, 7)}, ${prev.installed_at || '?'}) — updating`));
 
-  if (!has('gh')) warn('gh가 없습니다. 라벨·자격 증명·Orca 등록이 건너뛰어지고, 루프 실행에도 gh가 필요합니다.');
-  else if (!run('gh', ['auth', 'status']).ok) warn('gh가 로그인돼 있지 않습니다 (gh auth login).');
-  if (!has('rsync')) warn('rsync가 없어 mattpocock 스킬 동기화를 건너뜁니다.');
+  if (!has('gh')) warn('gh is not installed: labels, credential and Orca registration will be skipped, and the loop itself needs gh.');
+  else if (!run('gh', ['auth', 'status']).ok) warn('gh is not logged in (gh auth login).');
+  if (!has('rsync')) warn('rsync is not installed: the mattpocock skill sync will be skipped.');
 
   // 백엔드
   let backend = o.backend;
-  if (backend && !BACKENDS[backend]) die(`백엔드 ${backend} 를 모릅니다. 가능: ${Object.keys(BACKENDS).join(', ')}`);
-  let rl = null;
-  if (interactive) {
-    rl = require('readline/promises').createInterface({ input: process.stdin, output: process.stdout });
-    if (!backend) {
-      const keys = Object.keys(BACKENDS);
-      console.log('\n백엔드 — 워크트리와 에이전트 터미널을 누가 관리하나');
-      keys.forEach((k, i) => console.log(`  ${i + 1}) ${BACKENDS[k].label.padEnd(6)} ${BACKENDS[k].note}${BACKENDS[k].available ? '' : ' (준비 중)'}`));
-      for (;;) {
-        const a = await ask(rl, '선택 [1]: ', '1');
-        const k = keys[Number(a) - 1] || (BACKENDS[a] ? a : null);
-        if (k) { backend = k; break; }
-      }
-    }
+  if (backend && !BACKENDS[backend]) die(`Unknown backend ${backend}. Choose one of: ${Object.keys(BACKENDS).join(', ')}`);
+  if (interactive && !backend) {
+    console.log('');
+    backend = await select('Backend — who manages worktrees and agent terminals?',
+      Object.entries(BACKENDS).map(([key, b]) => ({ key, label: b.label, note: b.note, disabled: !b.available })), 'orca');
+    if (backend === null) { console.log(c.dim('Aborted.')); process.exit(130); }
   }
   backend = backend || 'orca';
-  if (!BACKENDS[backend].available) { rl && rl.close(); die(`${BACKENDS[backend].label} 백엔드는 아직 없습니다. ${BACKENDS[backend].note}.`); }
+  if (!BACKENDS[backend].available) die(`The ${BACKENDS[backend].label} backend is not available yet. ${BACKENDS[backend].note}.`);
 
-  // 설치 단계
-  if (rl) {
-    console.log('');
-    if (!(await askYesNo(rl, '기본 설정으로 설치할까요? (스킬 동기화, GitHub 라벨, gh 자격 증명, 백엔드 등록)'))) {
-      o.skills = await askYesNo(rl, '  mattpocock 스킬을 .claude/skills/에 벤더링', o.skills);
-      o.github = await askYesNo(rl, '  GitHub 라벨 6개 만들기', o.github);
-      o.credential = await askYesNo(rl, '  이 저장소의 git push가 gh 토큰을 쓰게 하기', o.credential);
-      if (backend === 'orca') o.orca = await askYesNo(rl, '  Orca에 저장소 등록', o.orca);
-    }
-    rl.close();
+  // 설치 단계 — Enter 만 치면 전부 켠 기본값
+  if (interactive) {
+    const items = [
+      { key: 'skills', label: 'Vendor the mattpocock skills', note: '26 skills into .claude/skills/ (code-review → ticket-review)', on: o.skills },
+      { key: 'github', label: 'Create the 6 GitHub labels', note: 'ready-for-agent · in-review …', on: o.github },
+      { key: 'credential', label: 'Use the gh token for git push', note: 'this repo only; unused with an SSH remote', on: o.credential },
+    ];
+    if (backend === 'orca') items.push({ key: 'orca', label: 'Register the repo with Orca', note: 'skipped if already registered', on: o.orca });
+    const picked = await checklist('Install steps', items);
+    if (picked === null) { console.log(c.dim('Aborted.')); process.exit(130); }
+    Object.assign(o, picked);
   }
   if (backend !== 'orca') o.orca = false;
 
   console.log('');
-  say(`백엔드 ${BACKENDS[backend].label}`);
+  say(`Backend: ${c.cyan(BACKENDS[backend].label)}`);
 
   // install.sh 가 먼저 돈다 — 옛 .orca-loop/ 를 .agent-loop/ 로 옮기는 마이그레이션이 거기 있어서, loop.env 는 그 뒤에 쓴다
   const args = [INSTALL_SH, '--ref', o.ref || kitRef()];
@@ -205,7 +282,7 @@ async function init(o) {
   if (!o.credential) args.push('--no-git-credential');
   if (!o.orca) args.push('--no-orca');
   const r = spawnSync('bash', args, { cwd: root, stdio: 'inherit', env: { ...process.env, KIT_DIR: PKG_ROOT, KIT_COMMIT: commit } });
-  if (r.error) die(`install.sh 실행 실패: ${r.error.message}`);
+  if (r.error) die(`Failed to run install.sh: ${r.error.message}`);
   if (r.status !== 0) process.exit(r.status == null ? 1 : r.status);
   say(writeLoopEnv(root, backend));
 }
@@ -217,6 +294,6 @@ async function init(o) {
   process.stdout.write(HELP);
   if (o.command !== 'help') process.exit(2);
 })().catch((e) => {
-  if (e && e.name === 'AbortError') { console.log('\n중단했습니다.'); process.exit(130); } // 프롬프트에서 Ctrl+D
+  if (e && e.name === 'AbortError') { console.log('\nAborted.'); process.exit(130); } // 프롬프트에서 Ctrl+D
   die(e && e.stack ? e.stack : String(e));
 });

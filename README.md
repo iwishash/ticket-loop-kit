@@ -11,7 +11,7 @@ GitHub 이슈 티켓을 워크트리에서 한 건씩 무인으로 구현·검�
 npx github:iwishash/agent-loop-kit init
 ```
 
-백엔드(지금은 Orca)와 설치 단계를 묻고 `.agent-loop/loop.env`에 `BACKEND=` 줄을 쓴 뒤 `install.sh`를 부른다. 묻지 않으려면 `--yes`(터미널이 아니면 자동). 키트 버전을 고정하려면 `npx github:iwishash/agent-loop-kit#v0.2.0 init`. 저장소가 비공개인 동안은 이 저장소에 초대받고 `gh auth login` 뒤 `gh auth setup-git`을 한 번 해 두면 npx가 받아 간다(macOS 키체인에 GitHub 자격 증명이 있어도 된다).
+백엔드와 설치 단계를 키보드로 고르고(↑↓·숫자·Space·Enter, q로 중단) `install.sh`를 부른 뒤 `.agent-loop/loop.env`에 `BACKEND=` 줄을 쓴다. 묻지 않으려면 `--yes`(터미널이 아니면 자동). 색은 `NO_COLOR`로 끈다. SSH 별칭 원격이나 키체인 자격 증명을 쓰면 `gh auth setup-git`은 필요 없다. 키트 버전을 고정하려면 `npx github:iwishash/agent-loop-kit#v0.2.0 init`. 저장소가 비공개인 동안은 이 저장소에 초대받고 `gh auth login` 뒤 `gh auth setup-git`을 한 번 해 두면 npx가 받아 간다(macOS 키체인에 GitHub 자격 증명이 있어도 된다).
 
 npx 없이 bash로만 설치하려면:
 
