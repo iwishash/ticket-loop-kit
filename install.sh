@@ -50,9 +50,15 @@ while [[ $# -gt 0 ]]; do
   shift
 done
 
-say() { printf '\033[1m▸ %s\033[0m\n' "$*"; }
-warn() { printf '\033[33m! %s\033[0m\n' "$*" >&2; }
-die() { printf '\033[31m✗ %s\033[0m\n' "$*" >&2; exit 1; }
+# 색 — 터미널일 때만, NO_COLOR(https://no-color.org)·TERM=dumb 이면 끈다
+if [[ -t 1 && -z "${NO_COLOR:-}" && "${TERM:-}" != "dumb" ]]; then
+  C_B=$'\033[1m'; C_D=$'\033[2m'; C_R=$'\033[31m'; C_G=$'\033[32m'; C_Y=$'\033[33m'; C_C=$'\033[36m'; C_0=$'\033[0m'
+else
+  C_B=""; C_D=""; C_R=""; C_G=""; C_Y=""; C_C=""; C_0=""
+fi
+say() { printf '%s▸%s %s%s%s\n' "$C_G" "$C_0" "$C_B" "$*" "$C_0"; }
+warn() { printf '%s! %s%s\n' "$C_Y" "$*" "$C_0" >&2; }
+die() { printf '%s✗ %s%s\n' "$C_R" "$*" "$C_0" >&2; exit 1; }
 
 for tool in git jq; do command -v "$tool" >/dev/null 2>&1 || die "$tool is not installed."; done
 ROOT="$(git rev-parse --show-toplevel 2>/dev/null)" || die "Run this inside a git repository."
@@ -208,14 +214,11 @@ stale="$(git ls-files -co --exclude-standard -z 2>/dev/null | xargs -0 grep -l -
 [[ -z "$stale" ]] || warn "These files still point at the old paths (.orca-loop / setup-orca-loop) — change them to .agent-loop / setup-agent-loop:
 $(printf '  %s\n' $stale)"
 
-cat <<EOF
-
-Next steps
-  1. In Claude Code: /setup-matt-pocock-skills (if docs/agents/issue-tracker.md does not exist yet)
-  2. In Claude Code: /setup-agent-loop — fills in the verify command, orca.yaml, CI and worker rules for this repo and opens a PR
-  3. Orca Settings → Projects → <repo> → Worktree Hooks → Advanced:
-     Command Source "orca.yaml only", enable "Wait for setup to complete before starting agent"
-  4. After the PR is merged: bash scripts/ticket-loop.sh --dry-run, then --max 1
-
-Changed files: git status
-EOF
+step() { printf '  %s%s.%s %s\n' "$C_C" "$1" "$C_0" "$2"; }
+printf '\n%sNext steps%s\n' "$C_B" "$C_0"
+step 1 "In Claude Code: ${C_C}/setup-matt-pocock-skills${C_0} ${C_D}(if docs/agents/issue-tracker.md does not exist yet)${C_0}"
+step 2 "In Claude Code: ${C_C}/setup-agent-loop${C_0} — fills in the verify command, orca.yaml, CI and worker rules for this repo and opens a PR"
+step 3 "Orca Settings → Projects → <repo> → Worktree Hooks → Advanced:"
+printf '     Command Source %s"orca.yaml only"%s, enable %s"Wait for setup to complete before starting agent"%s\n' "$C_C" "$C_0" "$C_C" "$C_0"
+step 4 "After the PR is merged: ${C_C}bash scripts/ticket-loop.sh --dry-run${C_0}, then ${C_C}--max 1${C_0}"
+printf '\n%sChanged files:%s git status\n' "$C_D" "$C_0"
