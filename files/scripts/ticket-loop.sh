@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# ticket-loop.sh — GitHub 이슈 티켓을 Orca 워크트리에서 한 건씩 무인 처리한다.
+# ticket-loop.sh — GitHub 이슈 티켓을 워크트리에서 한 건씩 무인 처리한다. 워크트리와 에이전트 터미널은 백엔드(Orca 또는 cmux)가 맡는다.
 # 가이드: 「Orca 티켓 무인 루프 가이드북」 3판 (agent-loop-kit docs/). 이 파일은 agent-loop-kit이 관리한다 — 고치면 키트에서 고친다.
 #
 # 티켓 하나당:
-#   1. 기본 브랜치에서 Orca 워크트리를 새로 만들고 에이전트(Claude Code)에 `/implement N`을 보낸다
+#   1. 기본 브랜치에서 워크트리를 새로 만들고 에이전트(Claude Code)에 `/implement N`을 보낸다
 #      (티켓마다 새 프로세스라 컨텍스트가 비어 있다)
 #   2. 워커가 `<BRANCH_PREFIX>N-<slug>` 브랜치로 PR을 열 때까지 기다린다
 #   3. CI를 기다리고, 충돌·CI 실패는 같은 워커에 REPAIR_ROUNDS회까지 고치게 한다
@@ -25,7 +25,7 @@ set -euo pipefail
 #   ticket-loop.sh --no-merge 12       # CI 통과까지만, 병합은 사람이
 #   ticket-loop.sh --skip-post-merge   # POST_MERGE_CMD를 이번 실행에서 끈다
 #
-# 전제: Orca 앱 실행 중, Orca CLI 등록, `gh auth status` 로그인, 저장소 안에서 실행.
+# 전제: 백엔드 앱 실행 중(Orca: CLI 등록 / cmux: cmux 터미널 안에서 실행하거나 소켓 모드를 열어 둠), `gh auth status` 로그인, 저장소 안에서 실행.
 # 진행 로그는 기본으로 .orca-loop/loop-MMDD.log에 덧붙인다(.gitignore에 /.orca-loop/*.log 권장).
 # 티켓마다 "#N 요약: …" 한 줄(벽시계·PR·CI 소요·수리·idle 오판·병합 뒤 검증)을 남겨 /retro가 읽는다.
 # 같은 내용 + 모델을 RECORDS_FILE(JSONL)에도 남기고, 스펙 리포트가 GitHub의 PR과 합쳐 표로 만든다.
@@ -33,7 +33,12 @@ set -euo pipefail
 # 실행할 때 준 환경변수가 이기게 한다. 예: CI_SKIP_REGEX="${CI_SKIP_REGEX:-^docs/}" POST_MERGE_PORT="${POST_MERGE_PORT:-3000}"
 #
 # 환경변수(선택):
+#   BACKEND             orca | cmux (기본 orca). 워크트리 생성·에이전트 터미널·idle 판정·상태 표시를 누가 하나. 아래 "백엔드" 절
 #   ORCA_CLI            Orca CLI 실행 파일 (기본: ORCA_CLI_COMMAND → Linux면 orca-ide → orca)
+#   CMUX_CLI            cmux CLI 실행 파일 (기본: PATH의 cmux → /Applications/cmux.app/Contents/Resources/bin/cmux)
+#   WORKTREE_DIR        cmux 백엔드가 워크트리를 둘 디렉터리 (기본 ~/.cache/ticket-loop/<owner-repo>/worktrees). Orca는 자기 자리에 둔다
+#   WORKTREE_SETUP_CMD  cmux 백엔드가 새 워크트리에서 에이전트를 띄우기 전에 돌릴 명령(의존성 설치·env 복사 — Orca의 orca.yaml setup에
+#                       해당). LOOP_ROOT_PATH·LOOP_WORKTREE_PATH를 환경변수로 준다. 예 "pnpm install && cp \"$LOOP_ROOT_PATH/.env.local\" ."
 #   SPEC_ISSUE          --parent 기본값
 #   SCOPE_LABEL         함께 요구할 라벨(--label 기본값)
 #   READY_LABEL         대상 라벨 (기본 ready-for-agent)
@@ -42,10 +47,10 @@ set -euo pipefail
 #   BASE_BRANCH         기준 브랜치 (기본: 저장소 기본 브랜치)
 #   ORDER_REGEX         제목에서 순번을 뽑는 정규식, 이름 있는 그룹 n (기본 ^T(?<n>[0-9]+))
 #   WORKER_RULES_FILE   워커가 추가로 따를 규칙 파일 (기본 .orca-loop/worker-rules.md)
-#   AGENT               Orca 에이전트 ID (기본 claude)
+#   AGENT               에이전트 ID — Orca가 띄울 에이전트 / 기록의 agent 필드 (기본 claude)
 #   AGENT_BANNER_REGEX  에이전트가 떴는지 확인할 화면 문구 (기본: Claude Code 배너·모델명)
-#   AGENT_RESTART_CMD   에이전트가 뜨지 않았을 때 셸에서 다시 띄울 명령. 프롬프트는 인자로 붙는다
-#                       (기본 claude --dangerously-skip-permissions — Orca가 워커를 띄우는 방식과 같게)
+#   AGENT_RESTART_CMD   에이전트를 셸에서 띄우는 명령. 프롬프트는 인자로 붙는다 (기본 claude --dangerously-skip-permissions —
+#                       Orca가 워커를 띄우는 방식과 같게). Orca는 뜨지 않았을 때만, cmux는 처음부터 이 명령으로 띄운다
 #   TICKET_TIMEOUT_SEC  티켓 한 건 제한 시간 (기본 14400 = 4시간)
 #   MERGE_METHOD        merge | squash | rebase (기본 merge)
 #   REPAIR_ROUNDS       충돌·CI 수리 횟수 합계 (기본 1)
@@ -61,7 +66,7 @@ set -euo pipefail
 #   MODEL_REGEX         워커 터미널에서 모델 이름을 뽑는 정규식(ERE). 기본은 Claude Code 상태줄·배너의 "Opus 5.5" 꼴
 #
 # 멈추는 조건(루프 종료, 워크트리는 조사용으로 남긴다):
-#   - 워커가 PR 없이 멈춤(질문·실패) / 티켓 타임아웃 / Orca 터미널 끊김 / 에이전트 기동 실패
+#   - 워커가 PR 없이 멈춤(질문·실패) / 티켓 타임아웃 / 백엔드 터미널 끊김 / 에이전트 기동 실패
 #   - 수리 REPAIR_ROUNDS회 뒤에도 CI 실패 또는 충돌
 #   - 병합 뒤 POST_MERGE_CMD 실패, 또는 POST_MERGE_PORT가 10분 안에 비지 않음(기다리는 동안은 로그 한 줄 뒤 조용하다 — 멈춤이 아니다)
 # 자동 선택은 선행 이슈가 열렸거나, PR이 이미 있거나, 담당자가 있거나, 하위 이슈를 가진(스펙) 이슈를 건너뛴다.
@@ -70,11 +75,17 @@ LOOP_ENV="$(git rev-parse --show-toplevel 2>/dev/null || pwd)/.orca-loop/loop.en
 # shellcheck source=/dev/null
 [[ ! -f "$LOOP_ENV" ]] || source "$LOOP_ENV"
 
+BACKEND="${BACKEND:-orca}"
 if [[ -n "${ORCA_CLI:-}" ]]; then :
 elif [[ -n "${ORCA_CLI_COMMAND:-}" ]]; then ORCA_CLI="$ORCA_CLI_COMMAND"
 elif [[ "$(uname -s)" == "Linux" ]]; then ORCA_CLI="orca-ide"   # Linux의 orca는 GNOME 스크린리더다
 else ORCA_CLI="orca"
 fi
+if [[ -z "${CMUX_CLI:-}" ]]; then
+  if command -v cmux >/dev/null 2>&1; then CMUX_CLI="cmux"; else CMUX_CLI="/Applications/cmux.app/Contents/Resources/bin/cmux"; fi
+fi
+WORKTREE_DIR="${WORKTREE_DIR:-}"
+WORKTREE_SETUP_CMD="${WORKTREE_SETUP_CMD:-}"
 PARENT="${SPEC_ISSUE:-}"
 SCOPE_LABEL="${SCOPE_LABEL:-}"
 READY_LABEL="${READY_LABEL:-ready-for-agent}"
@@ -98,7 +109,8 @@ LOG_FILE="${LOG_FILE:-.orca-loop/loop-$(date +%m%d).log}"
 RECORDS_FILE="${RECORDS_FILE:-.orca-loop/tickets.jsonl}"
 REPORT_DIR="${REPORT_DIR:-docs/loop-reports}"
 MODEL_REGEX="${MODEL_REGEX:-(Opus|Sonnet|Haiku|Fable|Mythos)[[:space:]]+[0-9]+(\.[0-9]+)?}"
-IDLE_WAIT_MS=600000       # tui-idle 1회 대기 상한
+IDLE_WAIT_MS=600000       # idle 1회 대기 상한(Orca: terminal wait 한 번, cmux: 폴링 한 바퀴)
+IDLE_POLL_SEC=5           # cmux 백엔드가 lifecycle을 다시 읽는 간격
 TERMINAL_RETRY=5          # wait가 이상하게 끝났을 때 터미널 읽기를 다시 해 보는 횟수
 TERMINAL_RETRY_SEC=10
 IDLE_STRIKES=3            # PR 없이 연속 idle이면 멈춤으로 본다
@@ -148,7 +160,7 @@ notify() {
 die() { log "ERROR: $*"; [[ -z "${CUR_N:-}" ]] || record_ticket "stopped" "$*"; notify "티켓 루프 중단" "$*"; exit 1; }
 fmt_epoch() { date -r "$1" '+%H:%M:%S' 2>/dev/null || date -d "@$1" '+%H:%M:%S'; }   # macOS / Linux
 
-for tool in "$ORCA_CLI" gh jq git; do
+for tool in gh jq git; do
   command -v "$tool" >/dev/null 2>&1 || die "${tool} 이(가) 없습니다."
 done
 
@@ -163,10 +175,6 @@ fi
 
 OWNER_REPO="$(gh repo view --json nameWithOwner -q .nameWithOwner)"
 [[ -n "$BASE_BRANCH" ]] || BASE_BRANCH="$(gh repo view --json defaultBranchRef -q .defaultBranchRef.name)"
-REPO_ID="$("$ORCA_CLI" repo list --json \
-  | jq -r --arg key "github.com/${OWNER_REPO}" \
-      '.result.repos[] | select(.gitRemoteIdentity.canonicalKey == $key) | .id' | head -n1)"
-[[ -n "$REPO_ID" ]] || die "Orca에 ${OWNER_REPO} 저장소가 없습니다. '${ORCA_CLI} repo add --path ${ROOT} --json'으로 등록하세요."
 
 # ---------- GitHub 조회 ----------
 
@@ -220,12 +228,71 @@ pick_targets() {
   done < <(candidates)
 }
 
-# ---------- Orca ----------
+# ---------- 백엔드 ----------
+# 루프가 워크트리·에이전트 터미널에 대해 하는 일은 아래 아홉 가지뿐이다. 백엔드마다 같은 이름의 함수(<backend>_*)를 구현하고
+# BACKEND로 고른다. 티켓 선택·PR·CI·수리·병합·병합 뒤 검증·기록·리포트는 백엔드와 무관하게 한 벌이다.
+#   _check                       시작 때 한 번: CLI가 있고 앱에 닿는지, 저장소가 등록돼 있는지
+#   _worktree_create N PROMPT    기본 브랜치에서 워크트리를 만들고 에이전트를 띄운다. 전역 WT(백엔드의 워크트리/워크스페이스 id),
+#                                WT_PATH, WT_BRANCH(백엔드가 만든 브랜치 — 워커가 바꾸기 전 이름), HANDLE(에이전트 터미널)을 채운다
+#   _worktree_remove WT WT_PATH  워크트리를 지운다(브랜치 정리는 공통부가 한다)
+#   _send HANDLE TEXT            프롬프트 한 줄을 에이전트 입력에 넣고 제출한다. 수락되지 않으면 비0
+#   _type HANDLE TEXT            셸 명령 한 줄을 입력하고 Enter(에이전트 재기동용 — 에이전트 입력 검사 없이)
+#   _interrupt HANDLE            Ctrl-C
+#   _wait_idle HANDLE MS         반환 0: idle 확인, 1: 타임아웃(아직 작업 중), 3: 터미널에 닿지 못함(앱 종료 등)
+#   _tail HANDLE                 화면 마지막 25줄
+#   _set_status WT STATUS [PR] [COMMENT]   STATUS: in-progress | in-review | todo(확인 필요) | completed. 실패해도 루프는 간다
+backend_check()           { "${BACKEND}_check" "$@"; }
+backend_worktree_create() { "${BACKEND}_worktree_create" "$@"; }
+backend_worktree_remove() { "${BACKEND}_worktree_remove" "$@"; }
+backend_send()            { "${BACKEND}_send" "$@"; }
+backend_type()            { "${BACKEND}_type" "$@"; }
+backend_interrupt()       { "${BACKEND}_interrupt" "$@"; }
+backend_wait_idle()       { "${BACKEND}_wait_idle" "$@"; }
+backend_tail()            { "${BACKEND}_tail" "$@"; }
+backend_set_status()      { "${BACKEND}_set_status" "$@"; }
+case "$BACKEND" in orca|cmux) ;; *) die "BACKEND=${BACKEND} 를 모릅니다 (orca | cmux)." ;; esac
+BACKEND_NAME="$([[ "$BACKEND" == orca ]] && echo Orca || echo cmux)"
+
+# 프롬프트를 셸 명령 인자로 넘길 때는 파일을 거친다(따옴표·백틱이 섞여도 안전). 파일은 티켓이 끝나도 지우지 않는다(디버그용, tmp)
+prompt_file() { local f; f="$(mktemp "${TMPDIR:-/tmp}/ticket-loop-prompt-$1.XXXXXX")"; printf '%s' "$2" > "$f"; printf '%s' "$f"; }
+agent_launch_cmd() { printf '%s "$(cat %q)"' "$AGENT_RESTART_CMD" "$1"; }   # 셸이 해석할 한 줄: claude … "$(cat /tmp/…)"
+
+# ----- Orca: 워크트리·터미널·idle 대기를 모두 Orca CLI가 한다 -----
 
 orca_json() { "$ORCA_CLI" "$@" --json; }
 
-terminal_idle() {
-  # 반환 0: idle 확인, 1: 타임아웃(아직 작업 중), 3: Orca 터미널에 닿지 못함(앱 종료 등)
+orca_check() {
+  command -v "$ORCA_CLI" >/dev/null 2>&1 || die "Orca CLI(${ORCA_CLI})가 없습니다 (Orca Settings → General → Orca CLI)."
+  REPO_ID="$("$ORCA_CLI" repo list --json \
+    | jq -r --arg key "github.com/${OWNER_REPO}" \
+        '.result.repos[] | select(.gitRemoteIdentity.canonicalKey == $key) | .id' | head -n1)"
+  [[ -n "$REPO_ID" ]] || die "Orca에 ${OWNER_REPO} 저장소가 없습니다. '${ORCA_CLI} repo add --path ${ROOT} --json'으로 등록하세요."
+}
+
+orca_worktree_create() {
+  local n="$1" prompt="$2" created
+  created="$(orca_json worktree create --repo "id:$REPO_ID" --name "${BRANCH_PREFIX}${n}" --no-parent \
+    --base-branch "origin/${BASE_BRANCH}" --issue "${n}" --agent "$AGENT" \
+    --prompt "$prompt" --comment "티켓 루프: /implement ${n} 진행 중")"
+  jq -e '.ok == true' <<<"$created" >/dev/null || die "워크트리 생성 실패: $(jq -c '.error' <<<"$created")"
+  WT="$(jq -r '.result.worktree.id' <<<"$created")"
+  WT_PATH="${WT#*::}"
+  HANDLE="$(jq -r '.result.agentTerminalHandle // .result.startupTerminal.handle // empty' <<<"$created")"
+  [[ -n "${HANDLE}" ]] || die "에이전트 터미널 핸들을 받지 못했습니다 (${WT})"
+  # Orca가 워크트리용으로 만든 브랜치(설정에 따라 `issue-N` 또는 `<git 사용자>/issue-N`) — 워커가 브랜치를 바꾸기 전에 기록한다
+  WT_BRANCH="$(git -C "$WT_PATH" rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
+}
+
+orca_worktree_remove() { orca_json worktree rm --worktree "id:$1" --force >/dev/null; }
+
+orca_send() {
+  orca_json terminal send --terminal "$1" --text "$2" --enter --wait-submit 15 \
+    | jq -e '.result.send.accepted == true' >/dev/null
+}
+orca_type()      { orca_json terminal send --terminal "$1" --text "$2" --enter >/dev/null; }
+orca_interrupt() { orca_json terminal send --terminal "$1" --text $'\x03' >/dev/null; }
+
+orca_wait_idle() {
   # `orca terminal wait`는 타임아웃이면 {ok:false, error.code:"timeout"}과 함께 exit 1을 돌려준다(Orca 1.4.223 실측).
   # exit 코드만 보면 "닿지 못함"으로 오판해 일하는 워커를 두고 루프가 죽는다 — JSON으로 가른다.
   # 그 밖의 응답(빈 출력·다른 error.code)은 한 번으로 "닿지 못함"이라 판정하지 않는다. 사람이 Orca 앱에서 워커
@@ -247,15 +314,102 @@ terminal_idle() {
   return 3
 }
 
-terminal_tail() {
-  orca_json terminal read --terminal "$1" | jq -r '.result.terminal.tail[]?' | tail -n 25
+orca_tail() { orca_json terminal read --terminal "$1" | jq -r '.result.terminal.tail[]?' | tail -n 25; }
+
+orca_set_status() {
+  local wt="$1" status="$2" pr="${3:-}" comment="${4:-}" args=(--worktree "id:${wt}" --workspace-status "$status")
+  [[ -z "$pr" ]] || args+=(--pr "$pr")
+  [[ -z "$comment" ]] || args+=(--comment "$comment")
+  [[ "$status" != "todo" ]] || args+=(--unread)
+  orca_json worktree set "${args[@]}" >/dev/null
 }
 
-send_prompt() {
-  orca_json terminal send --terminal "$1" --text "$2" --enter --wait-submit 15 \
-    | jq -e '.result.send.accepted == true' >/dev/null \
-    || die "프롬프트 전송이 수락되지 않았습니다 (terminal $1)"
+# ----- cmux (초안 — 실제 티켓으로 아직 돌리지 않았다): 워크트리는 루프가 git으로 만들고, 터미널은 cmux 워크스페이스다 -----
+# cmux에는 워크트리 생성 명령도, idle까지 블로킹하는 명령도 없다. 그래서
+#   - `git worktree add` 뒤 WORKTREE_SETUP_CMD(orca.yaml setup에 해당)를 돌리고 `cmux new-workspace --cwd … --command "claude …"`
+#   - idle은 `cmux rpc surface.input_state`가 돌려주는 lifecycle(running | idle | needsInput | unknown — Claude Code 훅이 보고)을
+#     IDLE_POLL_SEC마다 읽어 판정한다. 이벤트 스트림(`cmux events`)의 이름에 기대지 않는다
+#   - 소켓 모드가 cmuxOnly(기본)면 cmux 터미널 밖에서는 "액세스 거부"다. 루프를 cmux 터미널 안에서 돌린다
+#   - 백그라운드 idle 에이전트를 하이버네이션할 수 있어, 프롬프트를 보내기 전에 깨운다
+# 확인이 필요한 곳(cmux 0.65 기준 문서로만 썼다): new-workspace --json의 필드 이름, workspace status의 lane 이름.
+
+cmux_j() { "$CMUX_CLI" --json "$@"; }
+
+cmux_check() {
+  [[ -x "$CMUX_CLI" ]] || command -v "$CMUX_CLI" >/dev/null 2>&1 || die "cmux CLI(${CMUX_CLI})가 없습니다 (CMUX_CLI=경로)."
+  "$CMUX_CLI" identify --json >/dev/null 2>&1 \
+    || die "cmux 소켓에 닿지 못했습니다. cmux 터미널 안에서 실행하거나 소켓 모드를 바꾸세요 ('${CMUX_CLI} socket-status --json')."
+  [[ -n "$WORKTREE_DIR" ]] || WORKTREE_DIR="$HOME/.cache/ticket-loop/${OWNER_REPO//\//-}/worktrees"
 }
+
+cmux_worktree_create() {
+  local n="$1" prompt="$2" path out pf
+  path="${WORKTREE_DIR}/${BRANCH_PREFIX}${n}"
+  [[ ! -e "$path" ]] || die "워크트리 경로가 이미 있습니다: ${path} (지난 실행의 잔재면 'git worktree remove --force' 뒤 다시)"
+  mkdir -p "$WORKTREE_DIR"
+  git -C "$ROOT" branch -D "${BRANCH_PREFIX}${n}" >/dev/null 2>&1 || true
+  git -C "$ROOT" worktree add -q -b "${BRANCH_PREFIX}${n}" "$path" "origin/${BASE_BRANCH}" || die "git worktree add 실패 (${path})"
+  if [[ -n "$WORKTREE_SETUP_CMD" ]]; then
+    log "#${n}: 워크트리 준비 — ${WORKTREE_SETUP_CMD}"
+    (cd "$path" && LOOP_ROOT_PATH="$MAIN_WT" LOOP_WORKTREE_PATH="$path" bash -c "$WORKTREE_SETUP_CMD") \
+      || die "#${n}: WORKTREE_SETUP_CMD 실패 (${path})"
+  fi
+  pf="$(prompt_file "$n" "$prompt")"
+  out="$(cmux_j new-workspace --name "${BRANCH_PREFIX}${n}" --cwd "$path" --focus false --id-format uuids \
+           --command "$(agent_launch_cmd "$pf")" 2>/dev/null)" || die "cmux new-workspace 실패"
+  WT="$(jq -r '.workspace_id // .workspace // .workspace_ref // .id // empty' <<<"$out" 2>/dev/null || true)"
+  HANDLE="$(jq -r '.surface_id // .surface // .surface_ref // empty' <<<"$out" 2>/dev/null || true)"
+  [[ -n "$WT" && -n "$HANDLE" ]] || die "cmux new-workspace 응답에서 workspace/surface id를 찾지 못했습니다: ${out}"
+  WT_PATH="$path"
+  WT_BRANCH="${BRANCH_PREFIX}${n}"
+}
+
+cmux_worktree_remove() {
+  "$CMUX_CLI" workspace close "$1" >/dev/null 2>&1 || "$CMUX_CLI" close-workspace --workspace "$1" >/dev/null 2>&1 || true
+  git -C "$ROOT" worktree remove --force "$2"
+}
+
+cmux_send() {
+  "$CMUX_CLI" agent-hibernation wake "$1" >/dev/null 2>&1 || true
+  # paste --submit: 한 줄을 붙여 넣고 제출. 에이전트 입력에 초안이나 대화상자가 있으면 거부(비0)한다 — 사람이 끼어든 것이니 보내지 않는다
+  "$CMUX_CLI" paste --surface "$1" --submit "$2" >/dev/null
+}
+cmux_type()      { "$CMUX_CLI" send --surface "$1" --force "$2" >/dev/null && "$CMUX_CLI" send-key --surface "$1" enter >/dev/null; }
+cmux_interrupt() { "$CMUX_CLI" send-key --surface "$1" ctrl+c >/dev/null; }
+
+cmux_lifecycle() {   # running | idle | needsInput | unknown, 소켓에 닿지 못하면 빈 값
+  "$CMUX_CLI" rpc surface.input_state "{\"surface_id\":\"$1\"}" 2>/dev/null | jq -r '.lifecycle // empty' 2>/dev/null || true
+}
+
+cmux_wait_idle() {
+  local handle="$1" deadline_ms=$(( $(date +%s) * 1000 + $2 )) lc fails=0
+  while :; do
+    lc="$(cmux_lifecycle "$handle")"
+    case "$lc" in
+      idle|needsInput) return 0 ;;    # needsInput: 질문·권한 대화상자 — 공통부가 PR 유무와 화면으로 "멈춤"을 가른다
+      running|unknown) fails=0 ;;
+      *) fails=$((fails + 1)); [[ $fails -lt $TERMINAL_RETRY ]] || return 3 ;;
+    esac
+    [[ $(( $(date +%s) * 1000 )) -lt $deadline_ms ]] || return 1
+    sleep "$IDLE_POLL_SEC"
+  done
+}
+
+cmux_tail() { "$CMUX_CLI" read-screen --surface "$1" --lines 25; }
+
+cmux_set_status() {
+  local wt="$1" status="$2" pr="${3:-}" comment="${4:-}" lane
+  case "$status" in in-progress) lane=working ;; in-review) lane=review ;; completed) lane=done ;; *) lane=todo ;; esac
+  "$CMUX_CLI" workspace status set "$lane" --workspace "$wt" >/dev/null 2>&1 || true
+  [[ -z "$pr" ]] || "$CMUX_CLI" pr "$pr" --workspace "$wt" >/dev/null 2>&1 || true
+  [[ -z "$comment" ]] || "$CMUX_CLI" log --workspace "$wt" "$comment" >/dev/null 2>&1 || true
+}
+
+# ----- 공통 -----
+
+terminal_idle() { backend_wait_idle "$@"; }
+terminal_tail() { backend_tail "$@"; }
+send_prompt() { backend_send "$1" "$2" || die "프롬프트 전송이 수락되지 않았습니다 (terminal $1)"; }
 
 worker_prompt() {
   # 한 줄로 보낸다 — TUI에서는 줄바꿈이 곧 제출이다.
@@ -279,18 +433,16 @@ ensure_agent_started() {
     done
     [[ $attempt -eq 1 ]] || break
     log "#${n}: 에이전트가 뜨지 않음 — 터미널에서 다시 띄운다"
-    promptfile="$(mktemp "${TMPDIR:-/tmp}/ticket-loop-prompt-${n}.XXXXXX")"
-    worker_prompt "${n}" > "${promptfile}"
-    orca_json terminal send --terminal "${handle}" --text $'\x03' >/dev/null || true   # Ctrl-C로 입력 줄 비움
+    promptfile="$(prompt_file "${n}" "$(worker_prompt "${n}")")"
+    backend_interrupt "${handle}" || true   # Ctrl-C로 입력 줄 비움
     sleep 1
-    orca_json terminal send --terminal "${handle}" --text "${AGENT_RESTART_CMD} \"\$(cat ${promptfile})\"" --enter >/dev/null \
-      || die "#${n}: 재기동 명령 전송 실패"
+    backend_type "${handle}" "$(agent_launch_cmd "${promptfile}")" || die "#${n}: 재기동 명령 전송 실패"
   done
   die "#${n}: 에이전트가 터미널 ${handle}에서 뜨지 않습니다"
 }
 
 # PR이 생길 때까지(또는 워커가 멈출 때까지) 기다린다. 성공 시 PR 번호를 stdout에 쓴다.
-# 반환: 0 PR 열림, 1 PR 없이 멈춤, 2 타임아웃, 3 Orca 터미널 끊김
+# 반환: 0 PR 열림, 1 PR 없이 멈춤, 2 타임아웃, 3 백엔드 터미널 끊김
 wait_for_pr() {
   local n="$1" handle="$2" deadline="$3" strikes=0 pr started idle last_screen="" screen
   started="$(date +%s)"
@@ -329,7 +481,7 @@ repair() {
   while :; do
     idle=0; terminal_idle "${handle}" "$IDLE_WAIT_MS" || idle=$?
     [[ $idle -ne 0 ]] || return 0
-    [[ $idle -ne 3 ]] || die "Orca 터미널 ${handle} 에 닿지 못했습니다 (Orca 앱 종료?)"
+    [[ $idle -ne 3 ]] || die "${BACKEND_NAME} 터미널 ${handle} 에 닿지 못했습니다 (${BACKEND_NAME} 앱 종료?)"
     [[ "$(date +%s)" -lt "$deadline" ]] || return 1
   done
 }
@@ -500,7 +652,7 @@ def badge: {merged: ["병합", "ok"], "closed-without-pr": ["PR 없이 닫힘", 
   + "td.nw{white-space:nowrap}.bits{margin-top:4px;color:var(--muted);font-size:12px}.reason{margin-top:4px;color:var(--bad);font-size:12px}.muted{color:var(--muted)}.small{font-size:12px}"
   + ".badge{display:inline-block;font-size:12px;font-weight:700;border-radius:10px;padding:0 8px;border:1px solid var(--line);white-space:nowrap}.badge.ok{color:var(--ok);background:var(--ok-soft)}"
   + ".badge.warn{color:var(--warn);background:var(--warn-soft)}.badge.bad{color:var(--bad);background:var(--bad-soft)}.badge.muted{color:var(--muted);background:var(--soft)}footer{margin-top:20px;color:var(--muted);font-size:12px}</style></head>"
-  + "<body><main><div class=\"kicker\">ORCA 티켓 무인 루프 · 스펙 리포트</div>"
+  + "<body><main><div class=\"kicker\">티켓 무인 루프 · 스펙 리포트</div>"
   + @html "<h1><a href=\"\($spec.url)\">#\($spec.number)</a> \($spec.title)</h1>"
   + "<p class=\"meta\">스펙 " + (if ($rows | length) > 0 and $closed == ($rows | length) then "완료(하위 티켓 전부 닫힘)" else "진행 중(\($closed)/\($rows | length) 닫힘)" end)
   + " · 생성 \($now) · 스펙 이슈 " + (if $spec.state == "CLOSED" then "닫힘" else "열림" end) + "</p>"
@@ -561,19 +713,12 @@ run_ticket() {
 
   git -C "$ROOT" fetch -q origin "$BASE_BRANCH"
 
-  local created wt wt_path orca_branch handle
-  created="$(orca_json worktree create --repo "id:$REPO_ID" --name "${BRANCH_PREFIX}${n}" --no-parent \
-    --base-branch "origin/${BASE_BRANCH}" --issue "${n}" --agent "$AGENT" \
-    --prompt "$(worker_prompt "${n}")" --comment "티켓 루프: /implement ${n} 진행 중")"
-  jq -e '.ok == true' <<<"$created" >/dev/null || die "워크트리 생성 실패: $(jq -c '.error' <<<"$created")"
-  wt="$(jq -r '.result.worktree.id' <<<"$created")"
-  wt_path="${wt#*::}"
-  handle="$(jq -r '.result.agentTerminalHandle // .result.startupTerminal.handle // empty' <<<"$created")"
-  [[ -n "${handle}" ]] || die "에이전트 터미널 핸들을 받지 못했습니다 (${wt})"
-  # Orca가 워크트리용으로 만든 브랜치(설정에 따라 `issue-N` 또는 `<git 사용자>/issue-N`) — 워커가 브랜치를 바꾸기 전에 기록한다
-  orca_branch="$(git -C "$wt_path" rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
-  orca_json worktree set --worktree "id:${wt}" --workspace-status in-progress >/dev/null || true
-  log "#${n}: 워크트리 ${wt} / 터미널 ${handle}"
+  local wt wt_path orca_branch handle
+  WT=""; WT_PATH=""; WT_BRANCH=""; HANDLE=""
+  backend_worktree_create "${n}" "$(worker_prompt "${n}")"
+  wt="$WT"; wt_path="$WT_PATH"; orca_branch="$WT_BRANCH"; handle="$HANDLE"
+  backend_set_status "${wt}" in-progress || true
+  log "#${n}: 워크트리 ${wt} (${wt_path}) / 터미널 ${handle}"
   ensure_agent_started "${n}" "${handle}"
   CUR_MODEL="$(detect_model "${handle}")"
 
@@ -581,16 +726,14 @@ run_ticket() {
   pr="$(wait_for_pr "${n}" "${handle}" "$deadline")" || rc=$?
   if [[ $rc -ne 0 ]]; then
     log "#${n}: 워커 출력 꼬리 ---"; terminal_tail "${handle}" >&2 || true
-    orca_json worktree set --worktree "id:${wt}" --unread --workspace-status todo \
-      --comment "루프 중단: PR 없이 멈춤 — 확인 필요" >/dev/null || true
+    backend_set_status "${wt}" todo "" "루프 중단: PR 없이 멈춤 — 확인 필요" || true
     [[ $rc -ne 2 ]] || die "#${n}: 티켓 타임아웃(${TICKET_TIMEOUT_SEC}s)"
-    [[ $rc -ne 3 ]] || die "#${n}: Orca 터미널 ${handle} 에 닿지 못했습니다 (Orca 앱 종료?). 워크트리는 디스크에 남아 있습니다."
-    die "#${n}: 워커가 PR 없이 멈췄습니다 (질문·실패 가능). Orca에서 ${BRANCH_PREFIX}${n} 워크트리를 확인하세요."
+    [[ $rc -ne 3 ]] || die "#${n}: ${BACKEND_NAME} 터미널 ${handle} 에 닿지 못했습니다 (${BACKEND_NAME} 앱 종료?). 워크트리는 디스크에 남아 있습니다."
+    die "#${n}: 워커가 PR 없이 멈췄습니다 (질문·실패 가능). ${BACKEND_NAME}에서 ${BRANCH_PREFIX}${n} 워크트리를 확인하세요."
   fi
   log "#${n}: PR #${pr} 열림"
   CUR_PR="$pr"; model_now="$(detect_model "${handle}")"; [[ -z "$model_now" ]] || CUR_MODEL="$model_now"
-  orca_json worktree set --worktree "id:${wt}" --pr "${pr}" --workspace-status in-review \
-    --comment "PR #${pr} — CI 대기" >/dev/null || true
+  backend_set_status "${wt}" in-review "${pr}" "PR #${pr} — CI 대기" || true
 
   local round=0 state before
   while :; do
@@ -642,8 +785,8 @@ run_ticket() {
   fi
 
   local branch; branch="$(gh pr view "${pr}" --json headRefName -q .headRefName)"
-  orca_json worktree set --worktree "id:${wt}" --workspace-status completed --comment "PR #${pr} 병합 완료" >/dev/null || true
-  orca_json worktree rm --worktree "id:${wt}" --force >/dev/null || log "#${n}: 워크트리 삭제 실패 — 수동 정리 필요 (${wt})"
+  backend_set_status "${wt}" completed "${pr}" "PR #${pr} 병합 완료" || true
+  backend_worktree_remove "${wt}" "${wt_path}" || log "#${n}: 워크트리 삭제 실패 — 수동 정리 필요 (${wt}, ${wt_path})"
   git -C "$ROOT" worktree prune || true
   git -C "$ROOT" branch -D "${branch}" >/dev/null 2>&1 || true
   if [[ -n "$orca_branch" && "$orca_branch" != "HEAD" && "$orca_branch" != "$BASE_BRANCH" ]]; then
@@ -658,8 +801,9 @@ run_ticket() {
 
 # ---------- 메인 ----------
 
+backend_check
 targets="$(pick_targets)"
-log "저장소 ${OWNER_REPO} / 기준 브랜치 ${BASE_BRANCH} / 라벨 ${READY_LABEL}${SCOPE_LABEL:+ + ${SCOPE_LABEL}}${PARENT:+ / 스펙 #${PARENT}의 하위 이슈}"
+log "저장소 ${OWNER_REPO} / 백엔드 ${BACKEND_NAME} / 기준 브랜치 ${BASE_BRANCH} / 라벨 ${READY_LABEL}${SCOPE_LABEL:+ + ${SCOPE_LABEL}}${PARENT:+ / 스펙 #${PARENT}의 하위 이슈}"
 log "병합 뒤 검증: $([[ $POST_MERGE -eq 1 ]] && echo "실행 — ${POST_MERGE_CMD}" || echo "끔")"
 if [[ $POST_MERGE -eq 1 && -n "$POST_MERGE_PORT" ]] && port_in_use "$POST_MERGE_PORT"; then
   log "주의: 포트 ${POST_MERGE_PORT} 사용 중($(port_holder "$POST_MERGE_PORT" || true)) — 루프가 도는 동안 비워 두세요. 그대로면 병합마다 비기를 최대 $((PORT_WAIT_SEC / 60))분 기다린다(끄려면 --skip-post-merge)"
@@ -669,7 +813,7 @@ fi
 log "대상(현재 선행 이슈가 모두 닫힌 것):"; printf '%s\n' "$targets" | sed 's/^/  #/' >&2
 [[ $DRY_RUN -eq 0 ]] || exit 0
 
-# 목록을 stdin으로 물리지 않는다 — 루프 안의 gh·orca·git이 stdin을 읽으면 다음 티켓이 사라진다.
+# 목록을 stdin으로 물리지 않는다 — 루프 안의 gh·백엔드 CLI·git이 stdin을 읽으면 다음 티켓이 사라진다.
 # 자동 선택이면 티켓 하나가 끝날 때마다 대상을 다시 계산해, 막 풀린 선행 관계를 반영한다.
 done_count=0
 PROCESSED=""

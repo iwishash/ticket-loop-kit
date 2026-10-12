@@ -21,7 +21,7 @@ const LOOP_DIR = '.orca-loop';
 
 const BACKENDS = {
   orca: { label: 'Orca', available: true, note: '워크트리·터미널을 Orca 앱이 관리한다' },
-  cmux: { label: 'cmux', available: false, note: 'ticket-loop.sh의 백엔드 분리 뒤 지원' },
+  cmux: { label: 'cmux', available: true, note: '루프가 git worktree를 만들고 cmux 워크스페이스에서 에이전트를 띄운다 (초안 — 실제 티켓으로 아직 검증 전)' },
 };
 
 const HELP = `agent-loop-kit ${pkg.version} — 티켓 무인 루프 설치 키트
@@ -124,6 +124,10 @@ function writeLoopEnv(root, backend) {
       '# POST_MERGE_PORT …)은 /setup-orca-loop 가 저장소를 읽고 채운다.',
       `# 백엔드: ${Object.keys(BACKENDS).join(' | ')}`,
       line,
+      ...(backend === 'cmux' ? [
+        '# cmux는 orca.yaml setup 대신 이 명령으로 새 워크트리를 준비한다(의존성 설치·env 복사). LOOP_ROOT_PATH, LOOP_WORKTREE_PATH 사용 가능',
+        '# WORKTREE_SETUP_CMD="${WORKTREE_SETUP_CMD:-pnpm install}"',
+      ] : []),
       '',
     ].join('\n'));
     return `${LOOP_DIR}/loop.env 생성 (BACKEND=${backend})`;

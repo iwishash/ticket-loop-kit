@@ -1,6 +1,6 @@
 # agent-loop-kit
 
-GitHub 이슈 티켓을 Orca 워크트리에서 한 건씩 무인으로 구현·검증·병합하는 **티켓 루프**를 다른 저장소에 설치하고 업데이트하는 키트.
+GitHub 이슈 티켓을 워크트리에서 한 건씩 무인으로 구현·검증·병합하는 **티켓 루프**를 다른 저장소에 설치하고 업데이트하는 키트. 워크트리와 에이전트 터미널은 백엔드(Orca, 또는 초안 단계의 cmux)가 맡는다.
 원리와 운영은 [「Orca 티켓 무인 루프 가이드북」](docs/orca-ticket-loop-guide.pdf)에 있다.
 
 ## 설치
@@ -41,6 +41,21 @@ bash <(gh api repos/iwishash/agent-loop-kit/contents/install.sh -H "Accept: appl
 
 루프가 남기는 것은 세 가지다. 진행 로그 `.orca-loop/loop-MMDD.log`(사람이 읽는다), 티켓별 기록 `.orca-loop/tickets.jsonl`(기계별, 커밋하지 않는다), 그리고 `--parent <스펙>` 실행이 정상 종료할 때 쓰는 스펙 리포트 `docs/loop-reports/spec-<N>.html`(티켓별 상태·결과 브리프·경과 시간·모델 한 표, 사람이 보고 PR로 커밋한다). `POST_MERGE_PORT`를 정한 저장소에서는 포트가 차 있을 때 점유 프로세스를 적고 30초마다 다시 보며 기다린다. 시작할 때 이미 차 있으면 "주의" 한 줄을 적는다.
 
+## 백엔드
+
+루프 스크립트에서 워크트리·에이전트 터미널에 하는 일은 아홉 가지뿐이다(만들기·지우기·프롬프트 보내기·셸 입력·Ctrl-C·idle 대기·화면 읽기·상태 표시·시작 점검). 백엔드마다 같은 이름의 함수(`orca_*`, `cmux_*`)로 구현하고 `.orca-loop/loop.env`의 `BACKEND=orca|cmux`로 고른다. 티켓 선택·PR·CI·수리·병합·병합 뒤 검증·기록·스펙 리포트는 한 벌이다.
+
+| | Orca | cmux (초안) |
+|---|---|---|
+| 워크트리 | `orca worktree create`가 만들고 `orca.yaml` setup을 돌린다 | 루프가 `git worktree add`(`WORKTREE_DIR`, 기본 `~/.cache/ticket-loop/<owner-repo>/worktrees`) 뒤 `WORKTREE_SETUP_CMD`를 돌린다 |
+| 에이전트 | Orca가 `--agent claude --prompt`로 띄운다 | `cmux new-workspace --cwd … --command "claude … \"$(cat 프롬프트파일)\""` |
+| idle 판정 | `orca terminal wait --for tui-idle`(블로킹) | `cmux rpc surface.input_state`의 `lifecycle`을 5초마다 읽는다(Claude Code 훅이 보고) |
+| 입력·화면 | `orca terminal send / read` | `cmux paste --submit`, `send --force` + `send-key enter`, `read-screen --lines 25`. 보내기 전에 하이버네이션에서 깨운다 |
+| 상태 표시 | `orca worktree set --workspace-status` | `cmux workspace status set`, `cmux pr`, `cmux log` |
+| 실행 조건 | Orca 앱 실행 중, 저장소 등록 | cmux 터미널 안에서 실행(소켓 모드 기본값 `cmuxOnly`) |
+
+cmux 백엔드는 cmux 0.65 문서로만 썼고 실제 티켓으로 돌리지 않았다. `new-workspace --json`의 필드 이름과 `workspace status`의 lane 이름은 첫 실행에서 확인해 고친다.
+
 ## 무엇을 어디에 두나
 
 | 키트 경로 | 대상 저장소 | 설치 때 |
@@ -57,7 +72,7 @@ bash <(gh api repos/iwishash/agent-loop-kit/contents/install.sh -H "Accept: appl
 | — | GitHub 라벨 6개, 저장소 git 자격 증명(gh), Orca 등록 | 없으면 만듦 |
 | — | `.orca-loop/kit.json` | 설치한 키트 커밋 기록 |
 
-프로젝트별 값은 대상 저장소의 `.orca-loop/loop.env`(루프 기본값), `orca.yaml`, `.orca-loop/worker-rules.md`, `implement`·`pr` 스킬에 있다. 키트 소유 파일은 대상 저장소에서 고치지 말고 키트에서 고친다.
+프로젝트별 값은 대상 저장소의 `.orca-loop/loop.env`(루프 기본값, `BACKEND` 포함), `orca.yaml`(Orca), `.orca-loop/worker-rules.md`, `implement`·`pr` 스킬에 있다. 키트 소유 파일은 대상 저장소에서 고치지 말고 키트에서 고친다.
 
 ## 업데이트
 
@@ -86,5 +101,6 @@ bash <(gh api repos/iwishash/agent-loop-kit/contents/install.sh -H "Accept: appl
 
 - `/setup-orca-loop`를 실제 저장소에서 돌려 본 적이 없다. 질문 순서나 빠진 항목이 드러나면 키트에서 고친다
 - `install.sh`의 라벨 생성·Orca 등록 단계는 시험에서 껐다. 명령 자체는 rsrehab/rental-portal에서 쓰던 것이다
-- 키트판 `ticket-loop.sh`로 실제 티켓을 돌린 적이 없다. 특히 `.orca-loop/loop.env`, `POST_MERGE_CMD`, `CI_SKIP_REGEX` 경로와 시작 전 포트 점검 줄
+- 키트판 `ticket-loop.sh`로 실제 티켓을 돌린 적이 없다. 특히 `.orca-loop/loop.env`, `POST_MERGE_CMD`, `CI_SKIP_REGEX` 경로와 시작 전 포트 점검 줄, 그리고 백엔드 분리 뒤의 Orca 경로(함수로 옮겼을 뿐 명령은 같다)
+- cmux 백엔드 전체. `--dry-run`이 cmux 터미널 밖에서 소켓 오류로 멈추는 것까지만 확인했다
 - 출처 저장소 rsrehab/rental-portal은 아직 저장소 전용판 `scripts/orca-ticket-loop.sh`를 쓴다(키트로 전환하지 않음)

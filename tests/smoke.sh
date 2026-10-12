@@ -57,6 +57,19 @@ echo "ok  재설치 멱등"
 (cd "$T" && bash scripts/ticket-loop.sh --help >/dev/null) || fail "ticket-loop.sh --help"
 echo "ok  ticket-loop.sh --help"
 
+# 백엔드마다 같은 함수 집합을 구현해야 한다(공통부는 backend_* 만 부른다)
+for b in orca cmux; do
+  for f in check worktree_create worktree_remove send type interrupt wait_idle tail set_status; do
+    grep -qE "^${b}_${f}\(\)" "$KIT/files/scripts/ticket-loop.sh" || fail "백엔드 ${b} 에 ${b}_${f} 함수가 없다"
+  done
+done
+grep -qE '^backend_[a-z_]+\(\)' "$KIT/files/scripts/ticket-loop.sh" || fail "backend_* 디스패치 함수가 없다"
+# 공통부에서 백엔드 CLI를 직접 부르면 안 된다(백엔드 절 밖의 orca_json / "$CMUX_CLI")
+awk '/^# ---------- 백엔드 ----------/{on=1} /^# ----- 공통 -----/{on=0} !on && !/^\s*#/ && /orca_json|\$CMUX_CLI|\$ORCA_CLI/' \
+  "$KIT/files/scripts/ticket-loop.sh" | grep -v '^ORCA_CLI=\|^elif\|^if \[\[ -n "\${ORCA_CLI\|CMUX_CLI="' | grep -q . \
+  && fail "백엔드 절 밖에서 백엔드 CLI를 직접 부른다: $(awk '/^# ---------- 백엔드 ----------/{on=1} /^# ----- 공통 -----/{on=0} !on && !/^\s*#/ && /orca_json|\$CMUX_CLI/' "$KIT/files/scripts/ticket-loop.sh" | head -3)"
+echo "ok  백엔드 함수 집합·분리"
+
 # 스펙 리포트 jq 프로그램을 고정 자료로 그려 본다(GitHub 없이). 병합·중단·기록 없음 세 경우가 표에 나와야 한다
 REPORT_JQ="$(sed -n "/^read -r -d '' REPORT_JQ <<'JQ'/,/^JQ\$/p" "$KIT/files/scripts/ticket-loop.sh" | sed '1d;$d')"
 [[ -n "$REPORT_JQ" ]] || fail "REPORT_JQ 블록을 찾지 못함"
@@ -90,7 +103,11 @@ sed -i.bak '/^BACKEND=/d' "$N/.orca-loop/loop.env"
 (cd "$N" && node "$KIT/bin/agent-loop-kit.js" init --yes --no-skills --no-github --no-git-credential --no-orca >/dev/null) || fail "npx 껍질 세 번째 실행 실패"
 grep -qxF 'BACKEND="${BACKEND:-orca}"' "$N/.orca-loop/loop.env" || fail "BACKEND 줄이 없는 loop.env 에 줄을 덧붙이지 않음"
 grep -q 'CI_SKIP_REGEX' "$N/.orca-loop/loop.env" || fail "BACKEND 줄을 덧붙이며 기존 줄을 잃음"
-(cd "$N" && node "$KIT/bin/agent-loop-kit.js" init --yes --backend cmux >/dev/null 2>&1) && fail "cmux 백엔드를 거절해야 한다"
+(cd "$N" && node "$KIT/bin/agent-loop-kit.js" init --yes --backend bogus >/dev/null 2>&1) && fail "모르는 백엔드를 거절해야 한다"
+C="$T/npx-cmux"; mkdir -p "$C"; git -C "$C" init -q -b main; git -C "$C" commit -q --allow-empty -m init
+(cd "$C" && node "$KIT/bin/agent-loop-kit.js" init --yes --backend cmux --no-skills --no-github --no-git-credential >/dev/null) || fail "cmux 백엔드 init 실패"
+grep -qxF 'BACKEND="${BACKEND:-cmux}"' "$C/.orca-loop/loop.env" || fail "cmux 선택이 loop.env 에 반영되지 않음"
+grep -q 'WORKTREE_SETUP_CMD' "$C/.orca-loop/loop.env" || fail "cmux loop.env 에 WORKTREE_SETUP_CMD 안내가 없음"
 (cd "$N" && node "$KIT/bin/agent-loop-kit.js" init --bogus >/dev/null 2>&1) && fail "모르는 인자를 거절해야 한다"
-echo "ok  npx 껍질 설치·재실행·거절"
+echo "ok  npx 껍질 설치·재실행·백엔드 선택·거절"
 echo "smoke 통과"
