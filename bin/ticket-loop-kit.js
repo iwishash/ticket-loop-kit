@@ -5,7 +5,7 @@
 //
 //   npx github:iwishash/ticket-loop-kit init            대상 저장소 루트에서, 물어보며 설치
 //   npx github:iwishash/ticket-loop-kit init --yes      묻지 않고 기본값으로(비대화 환경에서는 자동)
-//   npx github:iwishash/ticket-loop-kit#v0.3.0 init     키트 버전 고정(태그·브랜치·커밋)
+//   npx github:iwishash/ticket-loop-kit#v0.4.0 init     키트 버전 고정(태그·브랜치·커밋)
 //
 // Node 쪽이 맡는 것: 백엔드 선택, .ticket-loop/loop.env의 BACKEND 줄, 설치 단계 켜고 끄기, 도구 점검.
 // 파일 복사·병합·라벨·등록은 install.sh가 그대로 한다.
@@ -40,7 +40,7 @@ Options
   --no-orca              Skip registering the repo with Orca
   --ref <ref>            Kit ref to record in .ticket-loop/kit.json (default: the #ref of the npx spec, else "npx")
 
-Pin a kit version with a tag on the npx spec:  npx github:iwishash/ticket-loop-kit#v0.3.0 init
+Pin a kit version with a tag on the npx spec:  npx github:iwishash/ticket-loop-kit#v0.4.0 init
 Requires git, gh (logged in), jq, rsync and bash. The backend app (Orca or cmux) and Claude Code are needed to run the loop.
 `;
 
