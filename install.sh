@@ -202,7 +202,8 @@ jq -n --arg repo "$KIT_REPO" --arg ref "$REF" --arg commit "$KIT_COMMIT" --arg v
   --argjson managed "$(printf '%s\n' "${managed[@]}" | jq -R . | jq -s .)" \
   '{kit: $repo, ref: $ref, commit: $commit, version: $version, installed_at: $at, managed: $managed}' > .agent-loop/kit.json
 
-stale="$(grep -rl --exclude-dir=.git --exclude-dir=node_modules -e '\.orca-loop' -e 'setup-orca-loop' . 2>/dev/null | grep -v '^./.agent-loop/kit.json$' || true)"
+# 추적 파일과 무시되지 않은 새 파일만 본다(로그·node_modules 같은 무시 대상은 제외). 주석에 남은 옛 이름도 잡힌다 — 손으로 고친다
+stale="$(git ls-files -co --exclude-standard -z 2>/dev/null | xargs -0 grep -l -e '\.orca-loop' -e 'setup-orca-loop' 2>/dev/null | grep -v '^\.agent-loop/kit\.json$' || true)"
 [[ -z "$stale" ]] || warn "아직 옛 경로(.orca-loop / setup-orca-loop)를 가리키는 파일이 있습니다 — .agent-loop / setup-agent-loop 로 고치세요:
 $(printf '  %s\n' $stale)"
 
