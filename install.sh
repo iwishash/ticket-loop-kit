@@ -184,8 +184,8 @@ if [[ $DO_ORCA -eq 1 ]]; then
   if ! command -v "$ORCA_CLI" >/dev/null 2>&1; then
     warn "Orca CLI($ORCA_CLI)가 없어 저장소 등록을 건너뜁니다 (Orca Settings → General → Orca CLI)."
   elif [[ -n "$OWNER_REPO" ]]; then
-    if "$ORCA_CLI" repo list --json 2>/dev/null | jq -e --arg key "github.com/${OWNER_REPO}" \
-         '.result.repos[] | select(.gitRemoteIdentity.canonicalKey == $key)' >/dev/null 2>&1; then
+    if "$ORCA_CLI" repo list --json 2>/dev/null | jq -e --arg suffix "/${OWNER_REPO}" \
+         '.result.repos[] | select((.gitRemoteIdentity.canonicalKey // "") | endswith($suffix))' >/dev/null 2>&1; then   # 호스트 별칭(github.com-<계정>)도 맞게
       echo "  Orca에 이미 등록됨"
     elif "$ORCA_CLI" repo add --path "$ROOT" --json >/dev/null 2>&1; then
       say "Orca 저장소 등록"

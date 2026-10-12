@@ -268,9 +268,11 @@ orca_json() { "$ORCA_CLI" "$@" --json; }
 
 orca_check() {
   command -v "$ORCA_CLI" >/dev/null 2>&1 || die "Orca CLI(${ORCA_CLI})가 없습니다 (Orca Settings → General → Orca CLI)."
+  # canonicalKey는 보통 github.com/<owner>/<repo>지만, SSH 별칭 호스트(~/.ssh/config의 github.com-<계정>)를 쓰면
+  # github.com-<계정>/<owner>/<repo>가 된다(2026-10-12 실측). 호스트는 보지 않고 /<owner>/<repo>로 끝나는지만 본다
   REPO_ID="$("$ORCA_CLI" repo list --json \
-    | jq -r --arg key "github.com/${OWNER_REPO}" \
-        '.result.repos[] | select(.gitRemoteIdentity.canonicalKey == $key) | .id' | head -n1)"
+    | jq -r --arg suffix "/${OWNER_REPO}" \
+        '.result.repos[] | select((.gitRemoteIdentity.canonicalKey // "") | endswith($suffix)) | .id' | head -n1)"
   [[ -n "$REPO_ID" ]] || die "Orca에 ${OWNER_REPO} 저장소가 없습니다. '${ORCA_CLI} repo add --path ${ROOT} --json'으로 등록하세요."
 }
 
