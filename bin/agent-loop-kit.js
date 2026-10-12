@@ -274,12 +274,18 @@ async function init(o) {
   backend = backend || 'orca';
   if (!BACKENDS[backend].available) die(`The ${BACKENDS[backend].label} backend is not available yet. ${BACKENDS[backend].note}.`);
 
-  // 설치 단계 — Enter 만 치면 전부 켠 기본값
+  // origin 이 실제로 쓰는 주소 — ls-remote --get-url 은 insteadOf 규칙까지 적용한 값을 준다. SSH 면 gh 토큰 단계는 쓰이지 않는다
+  const originUrl = run('git', ['ls-remote', '--get-url', 'origin']).out;
+  const sshRemote = /^(git@|ssh:\/\/|git\+ssh:\/\/)|^[^/]+@[^:]+:/.test(originUrl);
+  if (sshRemote && o.credential && !o.yes) o.credential = false;   // 기본값만 끈다. --yes 는 install.sh 가 알아서 한다(SSH 면 설정해도 무해)
+
+  // 설치 단계 — Enter 만 치면 기본값
   if (interactive) {
     const items = [
       { key: 'skills', label: 'Vendor the mattpocock skills', note: '26 skills into .claude/skills/ (code-review → ticket-review)', on: o.skills },
       { key: 'github', label: 'Create the 6 GitHub labels', note: 'ready-for-agent · in-review …', on: o.github },
-      { key: 'credential', label: 'Use the gh token for git push', note: 'this repo only; unused with an SSH remote', on: o.credential },
+      { key: 'credential', label: 'Use the gh token for git push',
+        note: sshRemote ? 'SSH remote detected — not needed (default off)' : 'this repo only; keeps unattended HTTPS push from waiting on the keychain', on: o.credential },
     ];
     if (backend === 'orca') items.push({ key: 'orca', label: 'Register the repo with Orca', note: 'skipped if already registered', on: o.orca });
     const picked = await checklist('Install steps', items);
