@@ -54,8 +54,12 @@ set -euo pipefail
 #   TICKET_TIMEOUT_SEC  티켓 한 건 제한 시간 (기본 14400 = 4시간)
 #   MERGE_METHOD        merge | squash | rebase (기본 merge)
 #   REPAIR_ROUNDS       충돌·CI 수리 횟수 합계 (기본 1)
-#   CI_SKIP_REGEX       바뀐 파일이 전부 이 정규식(ERE)에 맞으면 CI가 안 붙는 게 정상인 PR로 보고 체크 없이 병합한다.
-#                       ci.yml의 paths-ignore와 같게 맞춘다 (기본 없음 = 모든 PR에서 체크를 기다린다)
+#   CI_SKIP_REGEX       저장소 CI가 경로 필터(paths / paths-ignore)로 일부 PR에서 돌지 않을 때, 그 필터를 루프에 알려 주는 값.
+#                       바뀐 파일이 전부 이 정규식(ERE)에 맞으면 체크가 안 붙는 게 정상인 PR로 보고 체크 없이 병합한다.
+#                       루프가 정하는 규칙이 아니라 워크플로의 필터를 따라 하는 것이다 — 필터가 없으면 비워 둔다 (기본 없음 = 모든 PR에서 체크를 기다린다)
+#   CI_SKIP_CMD         같은 목적의 명령 — 순서 규칙이 있는 paths 목록처럼 정규식 하나로 못 쓰는 필터용. 바뀐 파일 목록을 stdin으로
+#                       (한 줄에 하나) 받아 CI가 돌면 "run", 전부 제외 경로면 "skip"을 출력한다. 저장소 루트에서 실행되고, 있으면
+#                       CI_SKIP_REGEX보다 먼저 본다. 실패하거나 다른 출력이면 체크를 기다리는 쪽으로 간다
 #   POST_MERGE_CMD      병합 뒤 기본 브랜치에서 돌릴 명령, 예 "npm ci && npm run test:e2e" (기본 없음 = 끔)
 #   POST_MERGE_COPY     POST_MERGE_CMD 전에 메인 체크아웃에서 복사할 파일들(공백 구분), 예 ".env.local"
 #   POST_MERGE_PORT     POST_MERGE_CMD가 쓰는 포트. 지정하면 비기를 기다린다(기본 없음)
@@ -101,6 +105,7 @@ TICKET_TIMEOUT_SEC="${TICKET_TIMEOUT_SEC:-14400}"
 MERGE_METHOD="${MERGE_METHOD:-merge}"
 REPAIR_ROUNDS="${REPAIR_ROUNDS:-1}"
 CI_SKIP_REGEX="${CI_SKIP_REGEX:-}"
+CI_SKIP_CMD="${CI_SKIP_CMD:-}"
 POST_MERGE_CMD="${POST_MERGE_CMD:-}"
 POST_MERGE_COPY="${POST_MERGE_COPY:-}"
 POST_MERGE_PORT="${POST_MERGE_PORT:-}"
@@ -503,13 +508,18 @@ ci_passed() {
 
 pr_head_sha() { gh pr view "$1" --json headRefOid -q .headRefOid; }
 
-# 반환 0: CI가 도는 PR, 1: 바뀐 파일이 전부 CI_SKIP_REGEX에 맞아 체크가 안 붙는 게 정상인 PR.
-# 판정이 안 되면 0(기다리는 쪽).
+# 반환 0: CI가 도는 PR, 1: 저장소 CI의 경로 필터에 걸려 체크가 안 붙는 게 정상인 PR(CI_SKIP_CMD가 "skip", 또는 바뀐 파일이 전부
+# CI_SKIP_REGEX에 맞음). 둘 다 없거나 판정이 안 되면 0(기다리는 쪽).
 ci_expected() {
-  local files
-  [[ -n "$CI_SKIP_REGEX" ]] || return 0
+  local files verdict
+  [[ -n "$CI_SKIP_CMD" || -n "$CI_SKIP_REGEX" ]] || return 0
   files="$(gh pr diff "$1" --name-only 2>/dev/null)" || return 0
   [[ -n "$files" ]] || return 0
+  if [[ -n "$CI_SKIP_CMD" ]]; then
+    verdict="$(cd "$ROOT" && printf '%s\n' "$files" | bash -c "$CI_SKIP_CMD" 2>/dev/null)" || return 0
+    [[ "$verdict" != "skip" ]]
+    return
+  fi
   grep -Evq "$CI_SKIP_REGEX" <<<"$files"
 }
 
@@ -746,7 +756,7 @@ run_ticket() {
       continue
     fi
     if ! ci_expected "${pr}"; then
-      log "#${n}: CI_SKIP_REGEX 경로만 바뀐 PR — CI 없이 병합한다 (PR #${pr})"
+      log "#${n}: 저장소 CI의 경로 필터에 걸리는 PR(${CI_SKIP_CMD:+CI_SKIP_CMD}${CI_SKIP_CMD:-CI_SKIP_REGEX}) — 체크 없이 병합한다 (PR #${pr})"
       ci_sec=-1
       break
     fi

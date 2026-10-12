@@ -134,7 +134,7 @@
 <ul>
   <li><b>결정이 남아 있는 작업.</b> 워커는 질문할 수 없다. 설계·사업 결정이 필요한 일은 먼저 사람이 결정해 티켓에 적어야 한다(<code>/grill-with-docs</code>가 이 단계를 돕는다).</li>
   <li><b>크고 모호한 작업.</b> 한 PR 크기로 쪼개지지 않는 일은 루프에 넣지 않는다. 쪼개는 것이 <code>/to-tickets</code>의 일이다.</li>
-  <li><b>PR에서 CI가 돌지 않는 저장소.</b> 루프는 CI 결과로만 병합을 판단한다. CI가 없으면 자동 병합의 근거가 없다(<code>--no-merge</code>로 PR까지만 쓸 수는 있다). 문서만 바뀐 PR처럼 CI를 일부러 건너뛰는 경로는 루프에 알려 줄 수 있다(<code>CI_SKIP_REGEX</code>, 6장).</li>
+  <li><b>PR에서 CI가 돌지 않는 저장소.</b> 루프는 CI 결과로만 병합을 판단한다. CI가 없으면 자동 병합의 근거가 없다(<code>--no-merge</code>로 PR까지만 쓸 수는 있다). 워크플로에 경로 필터가 있어 일부 PR에서 CI가 돌지 않는다면 그 필터를 루프에 알려 준다(<code>CI_SKIP_REGEX</code>·<code>CI_SKIP_CMD</code>, 6장). 필터가 없으면 비워 둔다.</li>
   <li><b>동시에 수십 개를 돌려야 하는 경우.</b> 이 루프는 직렬이다. 병렬이 필요하면 12장 FAQ의 <code>/implement-spec</code>을 본다.</li>
 </ul>
 
@@ -347,7 +347,7 @@ git worktree prune                                               # 사라진 디
   <tr><td><b>Orca</b> (데스크톱 앱 + CLI)</td><td>여러 코딩 에이전트를 각자의 git 워크트리에서 나란히 돌리는 오케스트레이터다. 루프는 CLI로 워크트리를 만들고(<code>worktree create --agent claude --prompt …</code>), 터미널이 입력을 기다리는 상태인지 확인하며(<code>terminal wait --for tui-idle</code>), 수리 지시를 보낸다(<code>terminal send</code>). 워크스페이스 카드 상태(<code>todo</code>·<code>in-progress</code>·<code>in-review</code>·<code>completed</code>)와 코멘트도 갱신한다.</td></tr>
   <tr><td><b>Claude Code</b></td><td>Orca가 워크트리마다 띄우는 워커. 저장소의 <code>CLAUDE.md</code>·스킬·<code>.claude/settings.json</code>을 읽는다.</td></tr>
   <tr><td><b>gh</b> / <b>jq</b> / <b>git</b></td><td>이슈·PR 조회, CI 대기, 병합, 라벨 정리, JSON 처리, 브랜치 정리</td></tr>
-  <tr><td><b>CI</b> (예: GitHub Actions)</td><td>PR마다 도는 체크. 루프가 병합 여부를 판단하는 유일한 기준이다. 체크가 하나도 없으면 루프는 병합하지 않는다(<code>CI_SKIP_REGEX</code>에 맞는 PR만 예외).</td></tr>
+  <tr><td><b>CI</b> (예: GitHub Actions)</td><td>PR마다 도는 체크. 루프가 병합 여부를 판단하는 유일한 기준이다. 체크가 하나도 없으면 루프는 병합하지 않는다(저장소 CI의 경로 필터에 걸리는 PR만 예외 — <code>CI_SKIP_REGEX</code>·<code>CI_SKIP_CMD</code>).</td></tr>
   <tr><td><b><code>ticket-loop.sh</code></b></td><td>위 전부를 엮는 bash 스크립트(부록 D). 저장소의 <code>scripts/</code>에 두고 쓴다.</td></tr>
   <tr><td><b>저장소 파일</b></td><td><code>.claude/skills/</code>(벤더링한 스킬), <code>.claude/settings.json</code>(<code>deny</code>), <code>orca.yaml</code>(setup 훅), <code>.agent-loop/worker-rules.md</code>(무인 전용 규칙), <code>docs/agents/</code>(트래커·라벨·도메인 설정), 코딩 표준 문서. 워커는 <code>origin/main</code>의 것만 보므로 <b>바꾸면 먼저 병합</b>한다.</td></tr>
 </table>
@@ -480,9 +480,9 @@ on:
     branches: [main]
     paths-ignore: ["docs/**", ".claude/**", ".agent-loop/**", "**/*.md"]
 
-# 루프 실행 시 — 바뀐 파일이 전부 이 정규식에 맞으면 체크 없이 병합한다
-export CI_SKIP_REGEX='^(docs/|\.claude/|\.agent-loop/)|\.md$'</code></pre>
-<p class="small muted">두 목록은 손으로 맞춘다. 테스트가 문서를 문자열로 읽는다면(예: 문서 내용을 검사하는 테스트) 그 문서는 제외 목록에서 빼야 한다. 맞추기 번거로우면 워크플로 파일을 읽어 판정하는 작은 스크립트를 두고 루프의 <code>ci_expected</code>를 그것으로 바꾼다.</p>
+# 루프에 같은 필터를 알려 준다(.agent-loop/loop.env) — 바뀐 파일이 전부 이 정규식에 맞으면 체크 없이 병합한다
+CI_SKIP_REGEX="${CI_SKIP_REGEX:-^(docs/|\.claude/|\.agent-loop/)|\.md$}"</code></pre>
+<p class="small muted">이 단계는 워크플로에 경로 필터를 두기로 한 저장소에만 해당한다. 필터를 두지 않으면 루프는 모든 PR에서 체크를 기다리고, 두 값은 비워 둔다. 두 목록은 손으로 맞춘다. 테스트가 문서를 문자열로 읽는다면(예: 문서 내용을 검사하는 테스트) 그 문서는 제외 목록에서 빼야 한다. <code>paths</code>에 포함·제외가 순서대로 섞여 정규식으로 못 쓰면, 워크플로 파일을 읽어 같은 판정을 내는 저장소 스크립트(바뀐 파일 목록을 stdin으로 받아 <code>run</code>/<code>skip</code> 출력)를 두고 <code>CI_SKIP_CMD</code>에 적는다.</p>
 </div></div>
 
 <div class="step"><div class="n">9</div><div class="b">
@@ -553,7 +553,7 @@ bash scripts/ticket-loop.sh --dry-run</code></pre>
   <tr><td>☐</td><td>스킬과 <code>docs/agents/</code> 설정이 <b>기본 브랜치에 병합돼</b> 있다</td><td>워커가 "트래커 설정이 없다"고 하면 6단계 후 push. 워커는 <code>origin/main</code>의 파일만 본다</td></tr>
   <tr><td>☐</td><td><code>implement</code>·<code>pr</code>이 저장소 소유 사본이고, <code>code-review</code>가 <code>ticket-review</code>로 바뀌었다</td><td>5·12단계</td></tr>
   <tr><td>☐</td><td>라벨 6개가 있다</td><td><code>gh label list</code></td></tr>
-  <tr><td>☐</td><td>PR에서 CI가 돈다(경로 필터를 쓰면 <code>CI_SKIP_REGEX</code>도 맞췄다)</td><td>빈 PR을 하나 열어 체크가 뜨는지 본다</td></tr>
+  <tr><td>☐</td><td>PR에서 CI가 돈다(워크플로에 경로 필터가 있으면 <code>CI_SKIP_REGEX</code> 또는 <code>CI_SKIP_CMD</code>를 같은 판정으로 맞췄다)</td><td>빈 PR을 하나 열어 체크가 뜨는지 본다</td></tr>
   <tr><td>☐</td><td>워크트리 setup이 성공한다</td><td>Orca 앱 설정이 "orca.yaml only"인지 보고, 워크트리를 직접 하나 만들어 setup 출력을 확인한다</td></tr>
   <tr><td>☐</td><td>무인 세션의 <code>git push</code>가 멈추지 않는다</td><td><code>git config --get-all credential.helper</code>에 <code>osxkeychain</code>만 있으면 2단계 주의대로 바꾼다</td></tr>
   <tr><td>☐</td><td>워커가 권한을 묻지 않는다</td><td><code>--max 1</code> 첫 실행 때 Orca 터미널을 지켜본다</td></tr>
@@ -644,7 +644,8 @@ bash scripts/ticket-loop.sh --parent 40             # 끝난 스펙이면 "처�
   <tr><td><code>TICKET_TIMEOUT_SEC</code></td><td><code>14400</code> (4시간)</td><td>티켓 한 건 전체 제한 시간</td></tr>
   <tr><td><code>MERGE_METHOD</code></td><td><code>merge</code></td><td><code>merge</code> | <code>squash</code> | <code>rebase</code></td></tr>
   <tr><td><code>REPAIR_ROUNDS</code></td><td><code>1</code></td><td>충돌·CI 수리를 합친 허용 횟수</td></tr>
-  <tr><td><code>CI_SKIP_REGEX</code></td><td>(없음)</td><td>바뀐 파일이 전부 이 정규식(ERE)에 맞으면 CI가 안 붙는 게 정상인 PR로 보고 체크 없이 병합한다. 워크플로의 <code>paths-ignore</code>와 맞춘다(4장 8단계)</td></tr>
+  <tr><td><code>CI_SKIP_REGEX</code></td><td>(없음)</td><td>저장소 CI에 경로 필터가 있을 때 그 필터를 루프에 알려 주는 값. 바뀐 파일이 전부 이 정규식(ERE)에 맞으면 체크가 안 붙는 게 정상인 PR로 보고 체크 없이 병합한다. 루프의 규칙이 아니라 워크플로의 <code>paths-ignore</code>를 따라 하는 것이다 — 필터가 없으면 비운다(4장 8단계)</td></tr>
+  <tr><td><code>CI_SKIP_CMD</code></td><td>(없음)</td><td>같은 목적의 명령. 순서 규칙이 있는 <code>paths</code> 목록처럼 정규식 하나로 못 쓰는 필터용. 바뀐 파일 목록을 stdin으로 받아 <code>run</code>/<code>skip</code>을 출력하는 저장소 스크립트를 적는다. 있으면 정규식보다 먼저 보고, 실패하면 체크를 기다린다</td></tr>
   <tr><td><code>POST_MERGE_CMD</code></td><td>(없음 = 끔)</td><td>병합 뒤 기본 브랜치에서 한 번 돌릴 명령. 실패하면 루프가 멈춘다(7장 6단계)</td></tr>
   <tr><td><code>POST_MERGE_COPY</code></td><td>(없음)</td><td>그 전에 메인 체크아웃에서 복사할 파일(공백 구분), 예 <code>.env.local</code></td></tr>
   <tr><td><code>POST_MERGE_PORT</code></td><td>(없음)</td><td>그 명령이 쓰는 포트. 지정하면 비기를 최대 10분 기다린다</td></tr>
@@ -706,7 +707,7 @@ systemd-inhibit bash scripts/ticket-loop.sh        # Linux</code></pre>
 <p><b>충돌 확인.</b> PR의 병합 가능 여부(<code>mergeable</code>)를 본다. 계산 중(<code>UNKNOWN</code>)이면 10초 간격으로 최대 6번 다시 본다. 충돌(<code>CONFLICTING</code>)이면 같은 워커 터미널에 "기본 브랜치를 병합해 충돌을 해결하고, 테스트·lint 후 push하라"고 보낸다.</p></div></div>
 
 <div class="step"><div class="n">4</div><div class="b">
-<p><b>CI 대기.</b> 바뀐 파일이 전부 <code>CI_SKIP_REGEX</code>에 맞으면 체크를 기다리지 않고 병합으로 넘어간다(병합 뒤 검증도 건너뛴다). 그 밖에는 체크가 나타나기를 최대 15분 기다린 뒤 <code>gh pr checks --watch --fail-fast</code>로 끝까지 본다. 실패하면 워커에게 "<code>gh pr checks</code>·<code>gh run view --log-failed</code>로 원인을 보고 고쳐 push하라"고 보낸다. 수리 뒤에도 PR의 head 커밋이 그대로면(새 push 없음) 멈춘다. 충돌·CI 수리는 합쳐서 <code>REPAIR_ROUNDS</code>회까지다.</p></div></div>
+<p><b>CI 대기.</b> 저장소 CI의 경로 필터에 걸리는 PR(<code>CI_SKIP_CMD</code>가 <code>skip</code>, 또는 바뀐 파일이 전부 <code>CI_SKIP_REGEX</code>에 맞음)이면 체크를 기다리지 않고 병합으로 넘어간다(병합 뒤 검증도 건너뛴다). 그 밖에는 체크가 나타나기를 최대 15분 기다린 뒤 <code>gh pr checks --watch --fail-fast</code>로 끝까지 본다. 실패하면 워커에게 "<code>gh pr checks</code>·<code>gh run view --log-failed</code>로 원인을 보고 고쳐 push하라"고 보낸다. 수리 뒤에도 PR의 head 커밋이 그대로면(새 push 없음) 멈춘다. 충돌·CI 수리는 합쳐서 <code>REPAIR_ROUNDS</code>회까지다.</p></div></div>
 
 <div class="step"><div class="n">5</div><div class="b">
 <p><b>병합.</b> <code>gh pr merge --&lt;MERGE_METHOD&gt;</code>. 5초 뒤에도 이슈가 열려 있으면 직접 닫고 코멘트를 남긴다. <span class="label">in-review</span>를 지운다.</p></div></div>
@@ -976,7 +977,7 @@ bash scripts/ticket-loop.sh N</code></pre></td></tr>
 <p><code>gh auth status</code> → 필요하면 <code>gh auth login</code>. 그다음 R1과 같다. 마지막 티켓의 상태를 진단하고, 판정표대로 정리한 뒤 재실행한다. 루프가 병합 직후에 죽었다면 F 상태일 가능성이 크다.</p>
 
 <h4><span class="tag r">R7</span>"체크가 등록되지 않았습니다"</h4>
-<p>워크플로가 PR 이벤트에서 돌지 않는 경우다(트리거 브랜치 불일치, Actions 비활성, 경로 필터). 워크플로에 경로 필터(<code>paths-ignore</code>)를 두었다면 루프의 <code>CI_SKIP_REGEX</code>가 같은 경로를 덮는지 본다. 워크플로는 건너뛰는데 루프는 기다리면 이 메시지가 난다. 원인을 고쳐 기본 브랜치에 반영한다. 그 PR은 기본 브랜치를 병합해 push하면 체크가 붙는다(정말 CI가 필요 없는 PR이었다면 사람이 병합한다). 그 뒤 R3로 마무리한다.</p>
+<p>워크플로가 PR 이벤트에서 돌지 않는 경우다(트리거 브랜치 불일치, Actions 비활성, 경로 필터). 워크플로에 경로 필터(<code>paths</code>/<code>paths-ignore</code>)를 두었다면 루프의 <code>CI_SKIP_REGEX</code>·<code>CI_SKIP_CMD</code>가 같은 판정을 내는지 본다. 워크플로는 건너뛰는데 루프는 기다리면 이 메시지가 난다. 원인을 고쳐 기본 브랜치에 반영한다. 그 PR은 기본 브랜치를 병합해 push하면 체크가 붙는다(정말 CI가 필요 없는 PR이었다면 사람이 병합한다). 그 뒤 R3로 마무리한다.</p>
 
 <h4><span class="tag r">R8</span>"다른 루프가 실행 중입니다"</h4>
 <p>정말 다른 루프가 돌고 있으면 끝나기를 기다린다(같은 저장소에서 두 루프를 돌리지 않는다). <code>pgrep -fl ticket-loop</code> 결과가 비어 있으면 강제 종료로 남은 잠금이므로 <code>rmdir "$(git rev-parse --git-common-dir)/ticket-loop.lock"</code>.</p>
@@ -1049,7 +1050,7 @@ git push origin --delete issue-43-export-button</code></pre></div></div>
 <h2>11. 안전 장치와 운영 수칙</h2>
 <h3>루프가 지키는 것</h3>
 <ul>
-  <li><b>CI가 녹색일 때만 병합한다.</b> 체크가 하나라도 실패하면(<code>--fail-fast</code>) 병합하지 않는다. 체크가 아예 없어도 병합하지 않는다. 예외는 바뀐 파일이 전부 <code>CI_SKIP_REGEX</code>에 맞는 PR뿐이다.</li>
+  <li><b>CI가 녹색일 때만 병합한다.</b> 체크가 하나라도 실패하면(<code>--fail-fast</code>) 병합하지 않는다. 체크가 아예 없어도 병합하지 않는다. 예외는 저장소 CI의 경로 필터에 걸리는 PR(<code>CI_SKIP_REGEX</code>·<code>CI_SKIP_CMD</code>)뿐이다.</li>
   <li><b>기본 브랜치가 깨지면 쌓지 않는다.</b> 병합 뒤 검증이 실패하면 다음 티켓으로 가지 않고 멈춘다.</li>
   <li><b>수리 횟수에 상한이 있다.</b> 기본 1회 고쳐 보게 하고, 그래도 안 되면 사람에게 넘긴다.</li>
   <li><b>워커는 병합하지 않는다.</b> 프롬프트로 지시하고 권한으로도 막는다(4장 10단계).</li>
@@ -1295,8 +1296,12 @@ set -euo pipefail
 #   TICKET_TIMEOUT_SEC  티켓 한 건 제한 시간 (기본 14400 = 4시간)
 #   MERGE_METHOD        merge | squash | rebase (기본 merge)
 #   REPAIR_ROUNDS       충돌·CI 수리 횟수 합계 (기본 1)
-#   CI_SKIP_REGEX       바뀐 파일이 전부 이 정규식(ERE)에 맞으면 CI가 안 붙는 게 정상인 PR로 보고 체크 없이 병합한다.
-#                       ci.yml의 paths-ignore와 같게 맞춘다 (기본 없음 = 모든 PR에서 체크를 기다린다)
+#   CI_SKIP_REGEX       저장소 CI가 경로 필터(paths / paths-ignore)로 일부 PR에서 돌지 않을 때, 그 필터를 루프에 알려 주는 값.
+#                       바뀐 파일이 전부 이 정규식(ERE)에 맞으면 체크가 안 붙는 게 정상인 PR로 보고 체크 없이 병합한다.
+#                       루프가 정하는 규칙이 아니라 워크플로의 필터를 따라 하는 것이다 — 필터가 없으면 비워 둔다 (기본 없음 = 모든 PR에서 체크를 기다린다)
+#   CI_SKIP_CMD         같은 목적의 명령 — 순서 규칙이 있는 paths 목록처럼 정규식 하나로 못 쓰는 필터용. 바뀐 파일 목록을 stdin으로
+#                       (한 줄에 하나) 받아 CI가 돌면 "run", 전부 제외 경로면 "skip"을 출력한다. 저장소 루트에서 실행되고, 있으면
+#                       CI_SKIP_REGEX보다 먼저 본다. 실패하거나 다른 출력이면 체크를 기다리는 쪽으로 간다
 #   POST_MERGE_CMD      병합 뒤 기본 브랜치에서 돌릴 명령, 예 "npm ci &amp;&amp; npm run test:e2e" (기본 없음 = 끔)
 #   POST_MERGE_COPY     POST_MERGE_CMD 전에 메인 체크아웃에서 복사할 파일들(공백 구분), 예 ".env.local"
 #   POST_MERGE_PORT     POST_MERGE_CMD가 쓰는 포트. 지정하면 비기를 기다린다(기본 없음)
@@ -1342,6 +1347,7 @@ TICKET_TIMEOUT_SEC="${TICKET_TIMEOUT_SEC:-14400}"
 MERGE_METHOD="${MERGE_METHOD:-merge}"
 REPAIR_ROUNDS="${REPAIR_ROUNDS:-1}"
 CI_SKIP_REGEX="${CI_SKIP_REGEX:-}"
+CI_SKIP_CMD="${CI_SKIP_CMD:-}"
 POST_MERGE_CMD="${POST_MERGE_CMD:-}"
 POST_MERGE_COPY="${POST_MERGE_COPY:-}"
 POST_MERGE_PORT="${POST_MERGE_PORT:-}"
@@ -1744,13 +1750,18 @@ ci_passed() {
 
 pr_head_sha() { gh pr view "$1" --json headRefOid -q .headRefOid; }
 
-# 반환 0: CI가 도는 PR, 1: 바뀐 파일이 전부 CI_SKIP_REGEX에 맞아 체크가 안 붙는 게 정상인 PR.
-# 판정이 안 되면 0(기다리는 쪽).
+# 반환 0: CI가 도는 PR, 1: 저장소 CI의 경로 필터에 걸려 체크가 안 붙는 게 정상인 PR(CI_SKIP_CMD가 "skip", 또는 바뀐 파일이 전부
+# CI_SKIP_REGEX에 맞음). 둘 다 없거나 판정이 안 되면 0(기다리는 쪽).
 ci_expected() {
-  local files
-  [[ -n "$CI_SKIP_REGEX" ]] || return 0
+  local files verdict
+  [[ -n "$CI_SKIP_CMD" || -n "$CI_SKIP_REGEX" ]] || return 0
   files="$(gh pr diff "$1" --name-only 2&gt;/dev/null)" || return 0
   [[ -n "$files" ]] || return 0
+  if [[ -n "$CI_SKIP_CMD" ]]; then
+    verdict="$(cd "$ROOT" &amp;&amp; printf '%s\n' "$files" | bash -c "$CI_SKIP_CMD" 2&gt;/dev/null)" || return 0
+    [[ "$verdict" != "skip" ]]
+    return
+  fi
   grep -Evq "$CI_SKIP_REGEX" &lt;&lt;&lt;"$files"
 }
 
@@ -1987,7 +1998,7 @@ run_ticket() {
       continue
     fi
     if ! ci_expected "${pr}"; then
-      log "#${n}: CI_SKIP_REGEX 경로만 바뀐 PR — CI 없이 병합한다 (PR #${pr})"
+      log "#${n}: 저장소 CI의 경로 필터에 걸리는 PR(${CI_SKIP_CMD:+CI_SKIP_CMD}${CI_SKIP_CMD:-CI_SKIP_REGEX}) — 체크 없이 병합한다 (PR #${pr})"
       ci_sec=-1
       break
     fi
