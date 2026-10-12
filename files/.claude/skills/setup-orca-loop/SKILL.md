@@ -1,10 +1,10 @@
 ---
 name: setup-orca-loop
-description: "orca-loop-kit 설치 뒤, 이 저장소에 맞게 티켓 무인 루프의 프로젝트별 설정(검증 명령·orca.yaml·CI·워커 규칙·implement)을 채우고 PR을 연다."
+description: "agent-loop-kit 설치 뒤, 이 저장소에 맞게 티켓 무인 루프의 프로젝트별 설정(검증 명령·orca.yaml·CI·워커 규칙·implement)을 채우고 PR을 연다."
 disable-model-invocation: true
 ---
 
-<!-- orca-loop-kit 관리 파일: install.sh가 덮어쓴다. 고칠 때는 키트 저장소에서 고친다. -->
+<!-- agent-loop-kit 관리 파일: install.sh가 덮어쓴다. 고칠 때는 키트 저장소에서 고친다. -->
 
 `install.sh`가 놓은 템플릿의 `__PLACEHOLDER__`를 이 저장소의 사실로 채우고, 루프가 기대는 저장소 파일을 갖춘다. 판단 근거는 가이드북(키트 `docs/orca-ticket-loop-guide.pdf`) 4장이다. 결과는 브랜치 하나와 PR 하나다.
 
@@ -41,7 +41,9 @@ disable-model-invocation: true
 | `__MIGRATION_RULE__` | 마이그레이션 규칙 한 문장, 또는 "없음"(줄 삭제) |
 | `__HEAVY_TESTS_RULE__` | 워커가 돌리지 않을 무거운 테스트와 PR 표기 문구 |
 | `orca.yaml` setup | 의존성 설치 명령, 복사할 env 파일과 안전 조건 |
-| `POST_MERGE_CMD` 등 | 병합 뒤 검증 명령·복사 파일·포트, 또는 끔 |
+| `POST_MERGE_CMD` 등 | 병합 뒤 검증 명령·복사 파일, 또는 끔 |
+| `POST_MERGE_PORT` | 그 명령이 띄우는 고정 포트(예 `next dev`의 3000). 루프가 병합마다 비기를 기다리고, 시작할 때 차 있으면 알린다. 없으면 비움 |
+| `REPORT_DIR` | 스펙 리포트 HTML 디렉터리. 기본 `docs/loop-reports`를 바꿀 이유가 있을 때만 |
 | `CI_SKIP_REGEX` | CI가 건너뛰는 경로와 같은 정규식, 또는 없음 |
 
 ## 4. 쓰기
@@ -53,7 +55,8 @@ disable-model-invocation: true
 3. **`orca.yaml`**: `scripts.setup`에 설치 명령, env 파일 복사(`$ORCA_ROOT_PATH` → `$ORCA_WORKTREE_PATH`, 운영 값이 섞이면 복사하지 않는 조건 포함), `setupAgentStartupPolicy: wait-for-setup`. 파일 맨 위 주석에 Orca 앱의 Command Source를 "orca.yaml only"로 바꿔야 쓰인다고 적는다.
 4. **`.orca-loop/loop.env`**: 루프의 저장소별 기본값을 `VAR="${VAR:-값}"` 꼴로 쓴다(`CI_SKIP_REGEX`, `POST_MERGE_CMD`, `POST_MERGE_COPY`, `POST_MERGE_PORT`, 필요하면 `MERGE_METHOD`). 정할 것이 없으면 만들지 않는다.
 5. **CI**: PR에서 도는 워크플로가 없으면 `__VERIFY__`를 도는 최소 워크플로를 만든다(비밀 값 없이). 경로 필터를 두면 `CI_SKIP_REGEX`와 같은 경로로 맞춘다.
-6. **`docs/agents/ticket-loop.md`**: 이 저장소의 운영 문서. 흐름(`/grill-with-docs` → `/to-spec` → `/to-tickets` → `bash scripts/ticket-loop.sh --parent <스펙>` → `/retro`), 실행 명령, 위 결정 표, 사람이 할 일(Orca 앱 설정, 병합), 복구는 가이드북 10장과 `bash scripts/ticket-state.sh N`을 가리킨다. 키트 버전은 `.orca-loop/kit.json`을 가리킨다.
+6. **`docs/agents/ticket-loop.md`**: 이 저장소의 운영 문서. 흐름(`/grill-with-docs` → `/to-spec` → `/to-tickets` → `bash scripts/ticket-loop.sh --parent <스펙>` → 스펙 리포트 `docs/loop-reports/spec-<N>.html` 검수 → `/retro`), 실행 명령, 위 결정 표, 사람이 할 일(Orca 앱 설정, 병합, 리포트 PR 커밋), 복구는 가이드북 10장과 `bash scripts/ticket-state.sh N`을 가리킨다. `POST_MERGE_PORT`가 있으면 "실행 전 `lsof -nP -iTCP:<포트> -sTCP:LISTEN`으로 비어 있는지 본다"와 "로그가 '포트 … 사용 중'에서 조용하면 멈춤이 아니라 대기다(가이드북 R10)"를 적는다. 키트 버전은 `.orca-loop/kit.json`을 가리킨다.
+   `docs/loop-reports/README.md`(키트 템플릿)는 `REPORT_DIR`를 바꿨을 때만 그 경로로 옮긴다.
 7. **`CLAUDE.md`**(없으면 `AGENTS.md`)의 `## Agent skills` 블록에 두 줄을 더한다: 작업 흐름은 `docs/agents/ticket-loop.md`, 티켓 구현 절차는 `.claude/skills/implement/SKILL.md`가 단일 진실. 리뷰는 `ticket-review`.
 
 ## 5. 검증
@@ -62,7 +65,7 @@ disable-model-invocation: true
 
 - `grep -rn '__[A-Z_]*__' .claude/skills/implement .claude/skills/pr .orca-loop` 결과가 없다.
 - `__VERIFY__`를 한 번 돌려 통과한다(실패하면 원인을 보고하고, 기존 실패인지 이번 변경 탓인지 가른다).
-- `bash scripts/ticket-loop.sh --dry-run`이 저장소·기준 브랜치를 찍고 정상 종료한다.
+- `bash scripts/ticket-loop.sh --dry-run`이 저장소·기준 브랜치·병합 뒤 검증 설정을 찍고 정상 종료한다(`POST_MERGE_PORT`를 정했으면 그 포트가 차 있을 때 "주의: 포트 … 사용 중" 줄이 나오는지도 한 번 본다).
 - `orca.yaml`의 setup 명령을 메인 체크아웃에서 그대로 실행해 성공한다(설치 명령만, 복사는 건너뛴다).
 
 ## 6. PR

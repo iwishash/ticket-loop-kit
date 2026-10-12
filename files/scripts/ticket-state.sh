@@ -2,7 +2,7 @@
 set -uo pipefail
 
 # 멈춘 티켓 하나의 상태를 한눈에 본다(이슈·PR·원격 브랜치·워크트리·루프 잠금).
-# 판정표와 복구 절차: 「Orca 티켓 무인 루프 가이드북」 10장 (orca-loop-kit docs/).
+# 판정표와 복구 절차: 「Orca 티켓 무인 루프 가이드북」 10장 (agent-loop-kit docs/).
 #   bash scripts/ticket-state.sh 41
 
 n="${1:?사용법: ticket-state.sh <이슈 번호>}"; n="${n#\#}"

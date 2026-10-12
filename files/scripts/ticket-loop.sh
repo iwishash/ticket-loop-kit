@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # ticket-loop.sh — GitHub 이슈 티켓을 Orca 워크트리에서 한 건씩 무인 처리한다.
-# 가이드: 「Orca 티켓 무인 루프 가이드북」 2판 (orca-loop-kit docs/). 이 파일은 orca-loop-kit이 관리한다 — 고치면 키트에서 고친다.
+# 가이드: 「Orca 티켓 무인 루프 가이드북」 3판 (agent-loop-kit docs/). 이 파일은 agent-loop-kit이 관리한다 — 고치면 키트에서 고친다.
 #
 # 티켓 하나당:
 #   1. 기본 브랜치에서 Orca 워크트리를 새로 만들고 에이전트(Claude Code)에 `/implement N`을 보낸다
@@ -11,7 +11,9 @@ set -euo pipefail
 #   3. CI를 기다리고, 충돌·CI 실패는 같은 워커에 REPAIR_ROUNDS회까지 고치게 한다
 #   4. PR을 병합한다 → 본문의 `Closes #N`으로 이슈가 닫힌다
 #   5. (선택) 병합된 기본 브랜치로 POST_MERGE_CMD를 한 번 돌린다 — 워커가 못 돌리는 무거운 검증. 실패하면 멈춘다
-#   6. 워크트리·브랜치를 지우고, 티켓 요약 한 줄을 로그에 남기고, 다음 티켓으로 간다(자동 선택이면 대상 재계산)
+#   6. 워크트리·브랜치를 지우고, 티켓 요약 한 줄을 로그에, 기록 한 줄을 RECORDS_FILE에 남기고, 다음 티켓으로 간다
+#      (자동 선택이면 대상 재계산)
+#   7. `--parent` 실행이 정상 종료하면 스펙 리포트 HTML(티켓별 결과·경과 시간·모델 표)을 REPORT_DIR/spec-<N>.html에 쓴다
 #
 # 사용법:
 #   ticket-loop.sh                     # 준비된 티켓 전부
@@ -26,8 +28,9 @@ set -euo pipefail
 # 전제: Orca 앱 실행 중, Orca CLI 등록, `gh auth status` 로그인, 저장소 안에서 실행.
 # 진행 로그는 기본으로 .orca-loop/loop-MMDD.log에 덧붙인다(.gitignore에 /.orca-loop/*.log 권장).
 # 티켓마다 "#N 요약: …" 한 줄(벽시계·PR·CI 소요·수리·idle 오판·병합 뒤 검증)을 남겨 /retro가 읽는다.
+# 같은 내용 + 모델을 RECORDS_FILE(JSONL)에도 남기고, 스펙 리포트가 GitHub의 PR과 합쳐 표로 만든다.
 # 저장소별 설정은 .orca-loop/loop.env에 둔다(있으면 읽는다). 그 파일은 `VAR="${VAR:-값}"` 꼴로 써서
-# 실행할 때 준 환경변수가 이기게 한다. 예: CI_SKIP_REGEX="${CI_SKIP_REGEX:-^docs/}"
+# 실행할 때 준 환경변수가 이기게 한다. 예: CI_SKIP_REGEX="${CI_SKIP_REGEX:-^docs/}" POST_MERGE_PORT="${POST_MERGE_PORT:-3000}"
 #
 # 환경변수(선택):
 #   ORCA_CLI            Orca CLI 실행 파일 (기본: ORCA_CLI_COMMAND → Linux면 orca-ide → orca)
@@ -53,11 +56,14 @@ set -euo pipefail
 #   POST_MERGE_PORT     POST_MERGE_CMD가 쓰는 포트. 지정하면 비기를 기다린다(기본 없음)
 #   POST_MERGE_WORKTREE POST_MERGE_CMD를 돌릴 워크트리 (기본 ~/.cache/ticket-loop/<owner-repo>/post-merge, 저장소 밖)
 #   LOG_FILE            진행 로그 파일 (기본 .orca-loop/loop-MMDD.log, /dev/null이면 끔)
+#   RECORDS_FILE        티켓별 기록 JSONL (기본 .orca-loop/tickets.jsonl, 기계별 — 커밋하지 않는다)
+#   REPORT_DIR          스펙 리포트 HTML 디렉터리 (기본 docs/loop-reports — 리포트는 사람이 PR로 커밋)
+#   MODEL_REGEX         워커 터미널에서 모델 이름을 뽑는 정규식(ERE). 기본은 Claude Code 상태줄·배너의 "Opus 5.5" 꼴
 #
 # 멈추는 조건(루프 종료, 워크트리는 조사용으로 남긴다):
 #   - 워커가 PR 없이 멈춤(질문·실패) / 티켓 타임아웃 / Orca 터미널 끊김 / 에이전트 기동 실패
 #   - 수리 REPAIR_ROUNDS회 뒤에도 CI 실패 또는 충돌
-#   - 병합 뒤 POST_MERGE_CMD 실패, 또는 POST_MERGE_PORT가 10분 안에 비지 않음
+#   - 병합 뒤 POST_MERGE_CMD 실패, 또는 POST_MERGE_PORT가 10분 안에 비지 않음(기다리는 동안은 로그 한 줄 뒤 조용하다 — 멈춤이 아니다)
 # 자동 선택은 선행 이슈가 열렸거나, PR이 이미 있거나, 담당자가 있거나, 하위 이슈를 가진(스펙) 이슈를 건너뛴다.
 
 LOOP_ENV="$(git rev-parse --show-toplevel 2>/dev/null || pwd)/.orca-loop/loop.env"
@@ -89,13 +95,18 @@ POST_MERGE_COPY="${POST_MERGE_COPY:-}"
 POST_MERGE_PORT="${POST_MERGE_PORT:-}"
 POST_MERGE_WORKTREE="${POST_MERGE_WORKTREE:-}"
 LOG_FILE="${LOG_FILE:-.orca-loop/loop-$(date +%m%d).log}"
+RECORDS_FILE="${RECORDS_FILE:-.orca-loop/tickets.jsonl}"
+REPORT_DIR="${REPORT_DIR:-docs/loop-reports}"
+MODEL_REGEX="${MODEL_REGEX:-(Opus|Sonnet|Haiku|Fable|Mythos)[[:space:]]+[0-9]+(\.[0-9]+)?}"
 IDLE_WAIT_MS=600000       # tui-idle 1회 대기 상한
+TERMINAL_RETRY=5          # wait가 이상하게 끝났을 때 터미널 읽기를 다시 해 보는 횟수
+TERMINAL_RETRY_SEC=10
 IDLE_STRIKES=3            # PR 없이 연속 idle이면 멈춤으로 본다
 IDLE_RECHECK_SEC=30
 STARTUP_GRACE_SEC=120     # 기동 직후에는 프롬프트 처리 전에도 idle로 잡힌다
 AGENT_START_WAIT_SEC=90   # 에이전트 배너가 보이기까지 기다리는 상한(1회), 넘기면 한 번 다시 띄운다
 CI_APPEAR_TIMEOUT_SEC=900
-PORT_WAIT_SEC=600
+PORT_WAIT_SEC=600         # POST_MERGE_PORT가 비기를 기다리는 상한. 기다리는 동안은 30초마다 다시 본다(멈춤이 아니다)
 
 DRY_RUN=0
 NO_MERGE=0
@@ -133,7 +144,9 @@ notify() {
     notify-send "$1" "$2" >/dev/null 2>&1 || true
   fi
 }
-die() { log "ERROR: $*"; notify "티켓 루프 중단" "$*"; exit 1; }
+# 티켓 처리 중(CUR_N이 있을 때) 멈추면 그 티켓을 "stopped"로 기록해 스펙 리포트에 시도로 남긴다
+die() { log "ERROR: $*"; [[ -z "${CUR_N:-}" ]] || record_ticket "stopped" "$*"; notify "티켓 루프 중단" "$*"; exit 1; }
+fmt_epoch() { date -r "$1" '+%H:%M:%S' 2>/dev/null || date -d "@$1" '+%H:%M:%S'; }   # macOS / Linux
 
 for tool in "$ORCA_CLI" gh jq git; do
   command -v "$tool" >/dev/null 2>&1 || die "${tool} 이(가) 없습니다."
@@ -215,11 +228,22 @@ terminal_idle() {
   # 반환 0: idle 확인, 1: 타임아웃(아직 작업 중), 3: Orca 터미널에 닿지 못함(앱 종료 등)
   # `orca terminal wait`는 타임아웃이면 {ok:false, error.code:"timeout"}과 함께 exit 1을 돌려준다(Orca 1.4.223 실측).
   # exit 코드만 보면 "닿지 못함"으로 오판해 일하는 워커를 두고 루프가 죽는다 — JSON으로 가른다.
-  local out
+  # 그 밖의 응답(빈 출력·다른 error.code)은 한 번으로 "닿지 못함"이라 판정하지 않는다. 사람이 Orca 앱에서 워커
+  # 워크트리를 열면 세션이 다시 붙으며(데몬 로그 session-attached) 기다리던 wait가 그렇게 끝난다 — 2026-10-12 #72
+  # (Orca 1.4.224)에서 일하던 워커를 두고 루프가 죽었다. 터미널을 읽을 수 있으면 아직 작업 중(1)으로 보고,
+  # TERMINAL_RETRY번 연달아 읽지도 못할 때만 3이다. 터미널이 사라지면 read가 ok:false(terminal_handle_stale)다.
+  local out code i
   out="$(orca_json terminal wait --terminal "$1" --for tui-idle --timeout-ms "$2" 2>/dev/null)" || true
-  [[ -n "$out" ]] || return 3
   jq -e '.result.wait.satisfied == true' <<<"$out" >/dev/null 2>&1 && return 0
-  [[ "$(jq -r '.error.code // empty' <<<"$out" 2>/dev/null)" == "timeout" ]] && return 1
+  code="$(jq -r '.error.code // empty' <<<"$out" 2>/dev/null)"
+  [[ "$code" == "timeout" ]] && return 1
+  for i in $(seq 1 "$TERMINAL_RETRY"); do
+    sleep "$TERMINAL_RETRY_SEC"
+    if orca_json terminal read --terminal "$1" 2>/dev/null | jq -e '.ok == true' >/dev/null 2>&1; then
+      log "터미널 $1: wait 응답 이상(${code:-빈 출력}) — 터미널은 살아 있어 계속 기다린다"
+      return 1
+    fi
+  done
   return 3
 }
 
@@ -353,6 +377,7 @@ mergeable_state() {
 # 한 번 돌린다. 루프는 직렬이라 여기서 돌리면 워커끼리 부딪히지 않는다. 저장소 밖 전용 워크트리를 쓴다.
 
 port_in_use() { lsof -nP -iTCP:"$1" -sTCP:LISTEN >/dev/null 2>&1; }
+port_holder() { lsof -nP -iTCP:"$1" -sTCP:LISTEN 2>/dev/null | awk 'NR==2 {print $1" pid "$2}'; }   # 예: "node pid 48213"
 
 post_merge_worktree_path() {
   if [[ -n "$POST_MERGE_WORKTREE" ]]; then printf '%s' "$POST_MERGE_WORKTREE"; return; fi
@@ -361,7 +386,7 @@ post_merge_worktree_path() {
 
 # 반환 0: 통과, 1: 실패(로그 꼬리를 남긴다)
 run_post_merge() {
-  local n="$1" wt logfile started f port_deadline
+  local n="$1" wt logfile started f port_deadline holder
   wt="$(post_merge_worktree_path)"
   if [[ ! -d "$wt/.git" && ! -f "$wt/.git" ]]; then
     mkdir -p "$(dirname "$wt")"
@@ -374,6 +399,12 @@ run_post_merge() {
   done
   if [[ -n "$POST_MERGE_PORT" ]]; then
     port_deadline=$(( $(date +%s) + PORT_WAIT_SEC ))
+    # 기다리는 동안 아무것도 찍지 않으면 루프가 멈춘 것처럼 보인다(실측: 사람이 띄운 개발 서버가 포트를 쥔 채 4분을
+    # 조용히 기다렸다). 처음 한 번 점유 프로세스와 기한을 적는다 — 그 서버를 끄면 30초 안에 이어 간다
+    if port_in_use "$POST_MERGE_PORT"; then
+      holder="$(port_holder "$POST_MERGE_PORT")"
+      log "#${n}: 포트 ${POST_MERGE_PORT} 사용 중(${holder:-?}) — 비기를 $(fmt_epoch "$port_deadline")까지 기다린다. 그 서버를 끄면 바로 이어 간다"
+    fi
     while port_in_use "$POST_MERGE_PORT"; do
       [[ "$(date +%s)" -lt "$port_deadline" ]] || { log "#${n}: 포트 ${POST_MERGE_PORT}이 비지 않았다 — 루프가 도는 동안 그 포트를 비우거나 --skip-post-merge"; return 1; }
       sleep 30
@@ -393,6 +424,129 @@ run_post_merge() {
   return 1
 }
 
+# ---------- 티켓 기록 · 스펙 리포트 ----------
+# 루프의 상태는 GitHub에만 두지만(기억 없음), 벽시계·CI 소요·수리 횟수·병합 뒤 검증 결과·모델은 GitHub에 없다. 티켓
+# 하나가 끝날 때(병합·--no-merge·중단) RECORDS_FILE에 한 줄을 덧붙이고, --parent 실행이 정상 종료하면 그 기록과 GitHub
+# (하위 이슈·PR 본문)을 합쳐 REPORT_DIR/spec-<N>.html을 만든다. 기록이 없는 티켓(다른 PC·사람 처리)은 PR 시각으로 대신한다.
+
+CUR_N=""; CUR_TITLE=""; CUR_STARTED=0; CUR_STARTED_ISO=""; CUR_PR=""; CUR_MODEL=""; CUR_CI_SEC=""; CUR_ROUND=0
+
+# 워커 터미널의 에이전트 상태줄·배너에서 모델 이름을 뽑는다(Claude Code: "[Opus 5.5 | Max]"). 못 찾으면 빈 값.
+detect_model() { terminal_tail "$1" 2>/dev/null | grep -oE "$MODEL_REGEX" | tail -n1 || true; }
+
+# 티켓이 속한 스펙 이슈 번호 — --parent가 없으면(이슈 번호 직접 지정) GitHub의 부모 이슈를 묻는다. 없으면 0.
+spec_of_ticket() {
+  [[ -z "$PARENT" ]] || { printf '%s' "$PARENT"; return; }
+  gh api graphql -f query="{ repository(owner: \"${OWNER_REPO%%/*}\", name: \"${OWNER_REPO#*/}\") { issue(number: $1) { parent { number } } } }" \
+    --jq '.data.repository.issue.parent.number // 0' 2>/dev/null || echo 0
+}
+
+record_ticket() {
+  local result="$1" reason="${2:-}" file="$RECORDS_FILE" spec
+  [[ "$LOG_FILE" != "/dev/null" ]] || return 0
+  [[ "$file" == /* ]] || file="$ROOT/$file"
+  mkdir -p "$(dirname "$file")"
+  spec="$(spec_of_ticket "$CUR_N")"
+  jq -cn --argjson spec "${spec:-0}" --argjson issue "$CUR_N" --arg title "$CUR_TITLE" --arg result "$result" --arg reason "$reason" \
+    --arg pr "$CUR_PR" --arg started "$CUR_STARTED_ISO" --arg finished "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" \
+    --argjson wall "$(( $(date +%s) - CUR_STARTED ))" --arg ci "$CUR_CI_SEC" --argjson repairs "$CUR_ROUND" \
+    --argjson idle "${IDLE_FALSE_POSITIVES:-0}" --arg post "${POST_MERGE_RESULT:-}" --arg model "$CUR_MODEL" --arg agent "$AGENT" '
+    {spec: $spec, issue: $issue, title: $title, result: $result, started: $started, finished: $finished, wall_sec: $wall,
+     repairs: $repairs, idle_false_positives: $idle, agent: $agent}
+    + (if $reason != "" then {reason: $reason} else {} end)
+    + (if $pr != "" then {pr: ($pr | tonumber)} else {} end)
+    + (if $ci != "" then {ci_sec: ($ci | tonumber)} else {} end)
+    + (if $post != "" then {post_merge: $post} else {} end)
+    + (if $model != "" then {model: $model} else {} end)' >> "$file" 2>/dev/null \
+    || log "#${CUR_N}: 티켓 기록을 남기지 못했습니다 (${file})"
+}
+
+# 스펙 리포트 HTML — jq 하나로 그린다(의존 도구를 늘리지 않는다). 표: 이슈·티켓·상태·결과 브리프(PR 제목, 본문의
+# 인수 조건 체크 수, 중단 사유, CI·수리·병합 뒤 검증)·경과 시간·모델·마친 시각. 문자열은 전부 @html로 이스케이프한다.
+read -r -d '' REPORT_JQ <<'JQ' || true
+def dur: if . == null then "—" elif . >= 3600 then "\(. / 3600 | floor)시간 \((. % 3600) / 60 | floor)분"
+         elif . >= 60 then "\(. / 60 | floor)분" else "\(. | floor)초" end;
+def epoch: if . == null or . == "" then null else (sub("\\.[0-9]+Z$"; "Z") | fromdate) end;
+def when: epoch | if . == null then "—" else strflocaltime("%Y-%m-%d %H:%M") end;
+def order: (.title | capture("^T(?<n>[0-9]+)") | .n | tonumber) // 999999;
+# jq(Oniguruma Perl 문법)의 ^는 줄 머리가 아니라 문자열 머리다 — 앞에 \n을 붙여 줄 머리를 \n으로 잡는다
+def checks: ("\n" + .) | {checked: ([scan("\n[ \t]*[-*] \\[x\\]"; "i")] | length), total: ([scan("\n[ \t]*[-*] \\[[ x]\\]"; "i")] | length)};
+def badge: {merged: ["병합", "ok"], "closed-without-pr": ["PR 없이 닫힘", "muted"], "pr-open": ["PR 열림", "warn"],
+            "in-progress": ["진행 중", "warn"], stopped: ["중단", "bad"], pending: ["미착수", "muted"]}[.];
+($issues | sort_by(order, .number) | map(. as $i
+  | ($recs | map(select(.issue == $i.number)) | sort_by(.finished)) as $rs | ($rs | last) as $r
+  | ($prs | map(select(.headRefName | startswith($prefix + ($i.number | tostring) + "-")))
+     | (map(select(.state == "MERGED")) + .) | (map(select(.number == $r.pr)) + .) | first) as $pr
+  | {issue: $i, pr: $pr, rec: $r, attempts: ($rs | length),
+     status: (if $pr.state == "MERGED" then "merged" elif $i.state == "closed" then "closed-without-pr"
+              elif $pr.state == "OPEN" then "pr-open" elif $r.result == "stopped" then "stopped"
+              elif ($i.assignees // 0) > 0 then "in-progress" else "pending" end),
+     wall: (if $r.wall_sec != null then {sec: $r.wall_sec, src: "loop"}
+            elif $pr.mergedAt != null then {sec: (($pr.mergedAt | epoch) - ($pr.createdAt | epoch)), src: "pr"} else null end),
+     model: ($r.model // "미기록")})) as $rows
+| ($rows | map(select(.status == "merged")) | length) as $merged
+| ($rows | map(select(.issue.state == "closed")) | length) as $closed
+| ($rows | map(select(.wall.src == "loop") | .wall.sec) | add // 0) as $total
+| ($rows | map(.model) | map(select(. != "미기록")) | unique | join(", ")) as $models
+| "<!doctype html>\n<html lang=\"ko\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
+  + @html "<title>#\($spec.number) \($spec.title) — 루프 리포트</title>"
+  + "<style>:root{--ink:#1c1f24;--muted:#5b6270;--line:#d9dde3;--soft:#f4f6f8;--bg:#fff;--accent:#2457c5;--ok:#1f7a4d;--ok-soft:#e6f4ec;--warn:#9a6700;--warn-soft:#fff6d6;--bad:#b4441c;--bad-soft:#fbeee8}"
+  + "@media (prefers-color-scheme:dark){:root{--ink:#e6e8eb;--muted:#9aa3ad;--line:#3a4047;--soft:#22262b;--bg:#15181b;--accent:#7ea2ff;--ok:#5fcf8f;--ok-soft:#1c3327;--warn:#e3b341;--warn-soft:#3a3012;--bad:#ff8a65;--bad-soft:#3b2219}}"
+  + "*{box-sizing:border-box}body{margin:0;padding:24px 16px 48px;color:var(--ink);background:var(--bg);font-family:\"Apple SD Gothic Neo\",\"Noto Sans KR\",system-ui,sans-serif;font-size:14px;line-height:1.55}"
+  + "main{max-width:1200px;margin:0 auto}h1{font-size:22px;margin:0 0 4px}a{color:var(--accent);text-decoration:none}.kicker{color:var(--accent);font-weight:700;font-size:12px;letter-spacing:.06em}"
+  + ".meta{color:var(--muted);font-size:13px;margin:0 0 18px}.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;margin:0 0 20px}"
+  + ".kpi{background:var(--soft);border:1px solid var(--line);border-radius:8px;padding:10px 12px}.kpi .v{font-size:20px;font-weight:700}.kpi .l{color:var(--muted);font-size:12px}"
+  + ".wrap{overflow-x:auto}table{width:100%;border-collapse:collapse;font-size:13px}th,td{border:1px solid var(--line);padding:8px 10px;vertical-align:top;text-align:left}th{background:var(--soft);white-space:nowrap}"
+  + "td.nw{white-space:nowrap}.bits{margin-top:4px;color:var(--muted);font-size:12px}.reason{margin-top:4px;color:var(--bad);font-size:12px}.muted{color:var(--muted)}.small{font-size:12px}"
+  + ".badge{display:inline-block;font-size:12px;font-weight:700;border-radius:10px;padding:0 8px;border:1px solid var(--line);white-space:nowrap}.badge.ok{color:var(--ok);background:var(--ok-soft)}"
+  + ".badge.warn{color:var(--warn);background:var(--warn-soft)}.badge.bad{color:var(--bad);background:var(--bad-soft)}.badge.muted{color:var(--muted);background:var(--soft)}footer{margin-top:20px;color:var(--muted);font-size:12px}</style></head>"
+  + "<body><main><div class=\"kicker\">ORCA 티켓 무인 루프 · 스펙 리포트</div>"
+  + @html "<h1><a href=\"\($spec.url)\">#\($spec.number)</a> \($spec.title)</h1>"
+  + "<p class=\"meta\">스펙 " + (if ($rows | length) > 0 and $closed == ($rows | length) then "완료(하위 티켓 전부 닫힘)" else "진행 중(\($closed)/\($rows | length) 닫힘)" end)
+  + " · 생성 \($now) · 스펙 이슈 " + (if $spec.state == "CLOSED" then "닫힘" else "열림" end) + "</p>"
+  + "<div class=\"kpis\"><div class=\"kpi\"><div class=\"v\">\($rows | length)</div><div class=\"l\">티켓</div></div><div class=\"kpi\"><div class=\"v\">\($merged)</div><div class=\"l\">병합</div></div>"
+  + "<div class=\"kpi\"><div class=\"v\">\($total | dur)</div><div class=\"l\">루프 벽시계 합계(기록 있는 티켓)</div></div>"
+  + @html "<div class=\"kpi\"><div class=\"v\">\(if $models == "" then "미기록" else $models end)</div><div class=\"l\">사용 모델</div></div></div>"
+  + "<div class=\"wrap\"><table><thead><tr><th>이슈</th><th>티켓</th><th>상태</th><th>작업 결과 브리프</th><th>경과 시간</th><th>사용 모델</th><th>마친 시각</th></tr></thead><tbody>"
+  + ($rows | map(
+      @html "<tr><td class=\"nw\"><a href=\"\(.issue.url)\">#\(.issue.number)</a></td><td>\(.issue.title)</td>"
+      + "<td><span class=\"badge \(.status | badge | .[1])\">\(.status | badge | .[0])</span></td><td>"
+      + (if .pr then @html "<div><a href=\"\(.pr.url)\">PR #\(.pr.number)</a> \(.pr.title)</div>"
+                      + ((.pr.body // "" | checks) | if .total > 0 then "<div>인수 조건 \(.checked)/\(.total)</div>" else "" end)
+         elif .rec == null then "<span class=\"muted\">기록 없음</span>" else "" end)
+      + (if .rec.result == "stopped" and .status != "merged" then @html "<div class=\"reason\">중단 사유: \(.rec.reason // "—")</div>" else "" end)
+      + (if .rec then "<div class=\"bits\">" + ([
+            (if .rec.ci_sec == null then empty elif .rec.ci_sec < 0 then "CI 없음(CI 제외 경로)" else "CI \(.rec.ci_sec | dur)" end),
+            "수리 \(.rec.repairs // 0)회",
+            (if .rec.post_merge then @html "병합 뒤 검증 \(.rec.post_merge)" else empty end),
+            (if .attempts > 1 then "시도 \(.attempts)회" else empty end)] | join(" · ")) + "</div>" else "" end)
+      + "</td><td class=\"nw\">" + (if .wall == null then "—" else (.wall.sec | dur) + (if .wall.src == "pr" then "<div class=\"muted small\">PR 생성→병합 기준</div>" else "" end) end) + "</td>"
+      + @html "<td class=\"nw\">\(.model)</td>"
+      + "<td class=\"nw\">" + (if .rec then (.rec.finished | when) elif .pr.mergedAt then (.pr.mergedAt | when) else "—" end) + "</td></tr>") | join("\n"))
+  + "</tbody></table></div><footer>경과 시간은 루프가 워크트리를 만든 때부터 병합·정리를 마친 때까지의 벽시계다. 루프 기록이 없는 티켓은 PR 생성→병합 시간으로 대신한다.</footer></main></body></html>"
+JQ
+
+# --parent 실행이 정상 종료하면 스펙 리포트 HTML을 쓴다. 생성 실패는 루프 결과를 바꾸지 않는다(로그만).
+# 리포트는 커밋하지 않는다 — 사람이 보고 PR로 올린다(루프가 도는 동안 기본 브랜치 직접 커밋 금지).
+write_spec_report() {
+  [[ -n "$PARENT" ]] || return 0
+  local out="$REPORT_DIR/spec-${PARENT}.html" records="$RECORDS_FILE" spec issues prs recs
+  [[ "$out" == /* ]] || out="$ROOT/$out"
+  [[ "$records" == /* ]] || records="$ROOT/$records"
+  if spec="$(gh issue view "$PARENT" --json number,title,state,url)" \
+    && issues="$(gh api "repos/${OWNER_REPO}/issues/${PARENT}/sub_issues?per_page=100" --paginate \
+         --jq '.[] | {number, title, state, url: .html_url, assignees: (.assignees | length)}' | jq -s '.')" \
+    && prs="$(gh pr list --state all --limit 300 --json number,title,body,state,url,createdAt,mergedAt,headRefName)" \
+    && recs="$( { [[ -f "$records" ]] && grep '^{' "$records" || true; } | jq -s --argjson spec "$PARENT" 'map(select(.spec == $spec))')" \
+    && mkdir -p "$(dirname "$out")" \
+    && jq -rn --argjson spec "$spec" --argjson issues "$issues" --argjson prs "$prs" --argjson recs "$recs" \
+         --arg prefix "$BRANCH_PREFIX" --arg now "$(date '+%Y-%m-%d %H:%M')" "$REPORT_JQ" > "$out"; then
+    log "스펙 #${PARENT} 리포트: ${out#"$ROOT"/} — 확인 뒤 PR로 커밋하세요"
+  else
+    log "스펙 #${PARENT} 리포트 생성 실패 — ticket-loop.sh --parent ${PARENT}를 다시 돌리면 다시 만든다"
+  fi
+}
+
 # ---------- 티켓 하나 ----------
 
 run_ticket() {
@@ -402,6 +556,8 @@ run_ticket() {
   IDLE_FALSE_POSITIVES=0
   POST_MERGE_RESULT="건너뜀"
   log "=== #${n} ${title} ==="
+  CUR_N="$n"; CUR_TITLE="$title"; CUR_STARTED="$started_at"; CUR_STARTED_ISO="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+  CUR_PR=""; CUR_MODEL=""; CUR_CI_SEC=""; CUR_ROUND=0
 
   git -C "$ROOT" fetch -q origin "$BASE_BRANCH"
 
@@ -419,8 +575,9 @@ run_ticket() {
   orca_json worktree set --worktree "id:${wt}" --workspace-status in-progress >/dev/null || true
   log "#${n}: 워크트리 ${wt} / 터미널 ${handle}"
   ensure_agent_started "${n}" "${handle}"
+  CUR_MODEL="$(detect_model "${handle}")"
 
-  local pr rc=0
+  local pr rc=0 model_now
   pr="$(wait_for_pr "${n}" "${handle}" "$deadline")" || rc=$?
   if [[ $rc -ne 0 ]]; then
     log "#${n}: 워커 출력 꼬리 ---"; terminal_tail "${handle}" >&2 || true
@@ -431,6 +588,7 @@ run_ticket() {
     die "#${n}: 워커가 PR 없이 멈췄습니다 (질문·실패 가능). Orca에서 ${BRANCH_PREFIX}${n} 워크트리를 확인하세요."
   fi
   log "#${n}: PR #${pr} 열림"
+  CUR_PR="$pr"; model_now="$(detect_model "${handle}")"; [[ -z "$model_now" ]] || CUR_MODEL="$model_now"
   orca_json worktree set --worktree "id:${wt}" --pr "${pr}" --workspace-status in-review \
     --comment "PR #${pr} — CI 대기" >/dev/null || true
 
@@ -439,7 +597,7 @@ run_ticket() {
     state="$(mergeable_state "${pr}")"
     if [[ "$state" == "CONFLICTING" ]]; then
       [[ ${round} -lt $REPAIR_ROUNDS ]] || die "#${n}: PR #${pr} 이 ${BASE_BRANCH}과 충돌합니다 (수리 ${REPAIR_ROUNDS}회 소진)"
-      round=$((round + 1)); log "#${n}: 충돌 → 워커에 수리 요청 (${round})"
+      round=$((round + 1)); CUR_ROUND=$round; log "#${n}: 충돌 → 워커에 수리 요청 (${round})"
       repair "${handle}" "PR #${pr} 이 ${BASE_BRANCH}과 충돌한다. \`git fetch origin && git merge origin/${BASE_BRANCH}\`으로 충돌을 해결하고 테스트·lint를 다시 돌린 뒤 같은 브랜치에 push해라. 질문하지 말고 끝까지 해라." "$deadline" \
         || die "#${n}: 충돌 수리 중 타임아웃"
       continue
@@ -453,16 +611,18 @@ run_ticket() {
     ci_started="$(date +%s)"
     if ci_passed "${pr}"; then ci_sec=$(( $(date +%s) - ci_started )); break; fi
     [[ ${round} -lt $REPAIR_ROUNDS ]] || die "#${n}: PR #${pr} CI 실패 (수리 ${REPAIR_ROUNDS}회 소진). gh pr checks ${pr} 로 확인하세요."
-    round=$((round + 1)); log "#${n}: CI 실패 → 워커에 수리 요청 (${round})"
+    round=$((round + 1)); CUR_ROUND=$round; log "#${n}: CI 실패 → 워커에 수리 요청 (${round})"
     before="$(pr_head_sha "${pr}")"
     repair "${handle}" "PR #${pr} 의 CI가 실패했다. \`gh pr checks ${pr}\` 와 \`gh run view --log-failed\` 로 원인을 보고 고친 뒤 테스트·lint를 다시 돌리고 같은 브랜치에 push해라. 테스트를 건너뛰거나 지우지 마라. 질문하지 말고 끝까지 해라." "$deadline" \
       || die "#${n}: CI 수리 중 타임아웃"
     [[ "$(pr_head_sha "${pr}")" != "$before" ]] || die "#${n}: 수리 뒤에도 새 커밋이 push되지 않았습니다"
   done
   log "#${n}: CI 통과"
+  CUR_CI_SEC="$ci_sec"
 
   if [[ $NO_MERGE -eq 1 ]]; then
     log "#${n}: --no-merge — PR #${pr} 을 사람이 병합하세요. 워크트리는 남겨 둡니다(${wt})."
+    record_ticket "no-merge"; CUR_N=""
     return 0
   fi
 
@@ -491,6 +651,7 @@ run_ticket() {
   fi
   git -C "$ROOT" push -q origin --delete "${branch}" >/dev/null 2>&1 || true
   log "#${n} 요약: 벽시계 $(( ($(date +%s) - started_at) / 60 ))분, PR #${pr}, CI $([[ $ci_sec -ge 0 ]] && echo "${ci_sec}초" || echo "없음(CI 제외 경로)"), 수리 ${round}회, idle 오판 ${IDLE_FALSE_POSITIVES}회, 병합 뒤 검증 ${POST_MERGE_RESULT}"
+  record_ticket "merged"; CUR_N=""
   [[ $post_rc -eq 0 ]] || die "#${n}: 병합된 ${BASE_BRANCH}에서 병합 뒤 검증이 실패했습니다. 로그와 검증 워크트리($(post_merge_worktree_path))를 확인하고 수정 PR 뒤에 다시 실행하세요."
   notify "티켓 완료" "#${n} ${title}"
 }
@@ -500,7 +661,11 @@ run_ticket() {
 targets="$(pick_targets)"
 log "저장소 ${OWNER_REPO} / 기준 브랜치 ${BASE_BRANCH} / 라벨 ${READY_LABEL}${SCOPE_LABEL:+ + ${SCOPE_LABEL}}${PARENT:+ / 스펙 #${PARENT}의 하위 이슈}"
 log "병합 뒤 검증: $([[ $POST_MERGE -eq 1 ]] && echo "실행 — ${POST_MERGE_CMD}" || echo "끔")"
-[[ -n "$targets" ]] || { log "처리할 티켓이 없습니다."; exit 0; }
+if [[ $POST_MERGE -eq 1 && -n "$POST_MERGE_PORT" ]] && port_in_use "$POST_MERGE_PORT"; then
+  log "주의: 포트 ${POST_MERGE_PORT} 사용 중($(port_holder "$POST_MERGE_PORT" || true)) — 루프가 도는 동안 비워 두세요. 그대로면 병합마다 비기를 최대 $((PORT_WAIT_SEC / 60))분 기다린다(끄려면 --skip-post-merge)"
+fi
+# 티켓이 더 없어도 --parent면 리포트는 다시 만든다(끝난 스펙의 리포트를 다시 뽑는 길)
+[[ -n "$targets" ]] || { log "처리할 티켓이 없습니다."; [[ $DRY_RUN -eq 1 ]] || write_spec_report; exit 0; }
 log "대상(현재 선행 이슈가 모두 닫힌 것):"; printf '%s\n' "$targets" | sed 's/^/  #/' >&2
 [[ $DRY_RUN -eq 0 ]] || exit 0
 
@@ -530,5 +695,6 @@ while :; do
   [[ $MAX -eq 0 || $done_count -lt $MAX ]] || { log "--max $MAX 도달"; break; }
 done
 
+write_spec_report
 log "완료: ${done_count}건"
 notify "티켓 루프 종료" "${done_count}건 완료"
