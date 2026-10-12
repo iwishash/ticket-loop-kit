@@ -7,7 +7,7 @@
 //   npx github:iwishash/agent-loop-kit init --yes      묻지 않고 기본값으로(비대화 환경에서는 자동)
 //   npx github:iwishash/agent-loop-kit#v0.3.0 init     키트 버전 고정(태그·브랜치·커밋)
 //
-// Node 쪽이 맡는 것: 백엔드 선택, .orca-loop/loop.env의 BACKEND 줄, 설치 단계 켜고 끄기, 도구 점검.
+// Node 쪽이 맡는 것: 백엔드 선택, .agent-loop/loop.env의 BACKEND 줄, 설치 단계 켜고 끄기, 도구 점검.
 // 파일 복사·병합·라벨·등록은 install.sh가 그대로 한다.
 
 const fs = require('fs');
@@ -17,7 +17,7 @@ const { spawnSync } = require('child_process');
 const PKG_ROOT = path.resolve(__dirname, '..');
 const pkg = JSON.parse(fs.readFileSync(path.join(PKG_ROOT, 'package.json'), 'utf8'));
 const INSTALL_SH = path.join(PKG_ROOT, 'install.sh');
-const LOOP_DIR = '.orca-loop';
+const LOOP_DIR = '.agent-loop';
 
 const BACKENDS = {
   orca: { label: 'Orca', available: true, note: '워크트리·터미널을 Orca 앱이 관리한다' },
@@ -38,7 +38,7 @@ const HELP = `agent-loop-kit ${pkg.version} — 티켓 무인 루프 설치 키�
   --no-github            GitHub 라벨을 만들지 않는다
   --no-git-credential    저장소 git 자격 증명을 바꾸지 않는다
   --no-orca              Orca 저장소 등록을 건너뛴다
-  --ref <ref>            .orca-loop/kit.json에 남길 키트 ref 표시 (기본: npx 스펙의 #ref, 없으면 npx)
+  --ref <ref>            .agent-loop/kit.json에 남길 키트 ref 표시 (기본: npx 스펙의 #ref, 없으면 npx)
 
 키트 버전을 고정하려면 npx 쪽에 태그를 붙인다:  npx github:iwishash/agent-loop-kit#v0.3.0 init
 필요한 도구: git, gh(로그인), jq, rsync, bash. 백엔드 앱(Orca)과 Claude Code는 루프를 돌릴 때 필요하다.
@@ -111,7 +111,7 @@ function kitRef() {
   return 'local';
 }
 
-// .orca-loop/loop.env — 없으면 만들고, 있으면 BACKEND 줄만 없을 때 덧붙인다(프로젝트 소유 파일이라 나머지는 건드리지 않는다)
+// .agent-loop/loop.env — 없으면 만들고, 있으면 BACKEND 줄만 없을 때 덧붙인다(프로젝트 소유 파일이라 나머지는 건드리지 않는다)
 function writeLoopEnv(root, backend) {
   const dir = path.join(root, LOOP_DIR);
   const file = path.join(dir, 'loop.env');
@@ -121,7 +121,7 @@ function writeLoopEnv(root, backend) {
     fs.writeFileSync(file, [
       '# agent-loop-kit — 이 저장소의 티켓 루프 기본값. ticket-loop.sh가 시작할 때 읽는다.',
       '# VAR="${VAR:-값}" 꼴로 적어 두면 실행할 때 준 환경변수가 이긴다. 나머지 값(CI_SKIP_REGEX, POST_MERGE_CMD,',
-      '# POST_MERGE_PORT …)은 /setup-orca-loop 가 저장소를 읽고 채운다.',
+      '# POST_MERGE_PORT …)은 /setup-agent-loop 가 저장소를 읽고 채운다.',
       `# 백엔드: ${Object.keys(BACKENDS).join(' | ')}`,
       line,
       ...(backend === 'cmux' ? [
@@ -154,7 +154,7 @@ async function init(o) {
 
   const interactive = !o.yes && process.stdin.isTTY && process.stdout.isTTY;
   const commit = kitCommit();
-  const prev = (() => { try { return JSON.parse(fs.readFileSync(path.join(root, LOOP_DIR, 'kit.json'), 'utf8')); } catch { return null; } })();
+  const prev = readJson(path.join(root, LOOP_DIR, 'kit.json')) || readJson(path.join(root, '.orca-loop', 'kit.json'));
   say(`agent-loop-kit ${pkg.version} (${commit.slice(0, 7)}) → ${root}`);
   if (prev) console.log(`  현재 설치: ${prev.version || '?'} (${String(prev.commit || '').slice(0, 7)}, ${prev.installed_at || '?'}) — 업데이트`);
 
@@ -197,8 +197,8 @@ async function init(o) {
 
   console.log('');
   say(`백엔드 ${BACKENDS[backend].label}`);
-  console.log(`  ${writeLoopEnv(root, backend)}`);
 
+  // install.sh 가 먼저 돈다 — 옛 .orca-loop/ 를 .agent-loop/ 로 옮기는 마이그레이션이 거기 있어서, loop.env 는 그 뒤에 쓴다
   const args = [INSTALL_SH, '--ref', o.ref || kitRef()];
   if (!o.skills) args.push('--no-skills');
   if (!o.github) args.push('--no-github');
@@ -206,7 +206,8 @@ async function init(o) {
   if (!o.orca) args.push('--no-orca');
   const r = spawnSync('bash', args, { cwd: root, stdio: 'inherit', env: { ...process.env, KIT_DIR: PKG_ROOT, KIT_COMMIT: commit } });
   if (r.error) die(`install.sh 실행 실패: ${r.error.message}`);
-  process.exit(r.status == null ? 1 : r.status);
+  if (r.status !== 0) process.exit(r.status == null ? 1 : r.status);
+  say(writeLoopEnv(root, backend));
 }
 
 (async () => {

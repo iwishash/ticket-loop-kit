@@ -8,15 +8,16 @@ set -euo pipefail
 #   bash /path/to/agent-loop-kit/install.sh          # 키트를 clone해 둔 경우
 #
 # 하는 일(프로젝트마다 똑같은 부분):
+#   0. 0.2 이하가 설치한 .orca-loop/ 는 .agent-loop/ 로 옮기고(git mv), 옛 스킬 setup-orca-loop 와 .gitignore 의 옛 줄을 지운다
 #   1. 관리 파일을 덮어쓴다: scripts/ticket-loop.sh, scripts/ticket-state.sh, scripts/sync-mattpocock-skills.sh,
-#      .claude/skills/setup-orca-loop/
-#   2. 템플릿은 없을 때만 놓는다(이후 프로젝트 소유): .claude/skills/implement·pr, .orca-loop/worker-rules.md,
+#      .claude/skills/setup-agent-loop/
+#   2. 템플릿은 없을 때만 놓는다(이후 프로젝트 소유): .claude/skills/implement·pr, .agent-loop/worker-rules.md,
 #      docs/loop-reports/README.md
 #   3. mattpocock 스킬을 .claude/skills/에 벤더링한다(code-review → ticket-review)
-#   4. .gitignore에 /.orca-loop/*.log·/.orca-loop/*.jsonl, .claude/settings.json deny에 병합·강제 push·기본 브랜치 직접 push 차단
+#   4. .gitignore에 /.agent-loop/*.log·/.agent-loop/*.jsonl, .claude/settings.json deny에 병합·강제 push·기본 브랜치 직접 push 차단
 #   5. GitHub 라벨 6개, 저장소 범위 git 자격 증명(gh), Orca 저장소 등록
-#   6. .orca-loop/kit.json에 키트 커밋을 남긴다
-# 프로젝트를 읽어야 정하는 부분(검증 명령, orca.yaml, CI, 워커 규칙)은 설치 뒤 Claude Code에서 /setup-orca-loop가 한다.
+#   6. .agent-loop/kit.json에 키트 커밋을 남긴다
+# 프로젝트를 읽어야 정하는 부분(검증 명령, orca.yaml, CI, 워커 규칙)은 설치 뒤 Claude Code에서 /setup-agent-loop가 한다.
 #
 # 옵션:
 #   --ref <ref>          키트의 태그·브랜치·커밋 (기본 main)
@@ -81,6 +82,22 @@ if [[ -z "$BASE" ]] && command -v gh >/dev/null 2>&1; then
 fi
 BASE="${BASE:-main}"
 
+# ---------- 0. 옛 경로 마이그레이션 (0.2 이하: .orca-loop/, setup-orca-loop) ----------
+if [[ -d .orca-loop && ! -e .agent-loop ]]; then
+  if git ls-files --error-unmatch .orca-loop >/dev/null 2>&1; then git mv .orca-loop .agent-loop; else mv .orca-loop .agent-loop; fi
+  say ".orca-loop/ → .agent-loop/ 로 옮김 (로그·기록 파일 포함)"
+elif [[ -d .orca-loop && -e .agent-loop ]]; then
+  warn ".orca-loop/ 와 .agent-loop/ 가 둘 다 있습니다 — .agent-loop/ 만 쓰고 .orca-loop/ 는 손대지 않습니다. 합친 뒤 지우세요."
+fi
+if [[ -d .claude/skills/setup-orca-loop ]]; then
+  rm -rf .claude/skills/setup-orca-loop
+  say "옛 스킬 setup-orca-loop 제거 (setup-agent-loop 로 대체)"
+fi
+if [[ -f .gitignore ]] && grep -q '^/\.orca-loop/' .gitignore; then
+  tmp="$(mktemp)"; grep -v '^/\.orca-loop/' .gitignore > "$tmp" || true; mv "$tmp" .gitignore
+  say ".gitignore 의 /.orca-loop/ 줄 제거"
+fi
+
 # ---------- 1. 관리 파일 (매번 덮어쓴다) ----------
 managed=()
 while IFS= read -r -d '' f; do
@@ -100,7 +117,7 @@ while IFS= read -r -d '' f; do
   else
     mkdir -p "$(dirname "$rel")"
     cp "$f" "$rel"
-    echo "  추가 $rel (템플릿 — /setup-orca-loop가 채운다)"
+    echo "  추가 $rel (템플릿 — /setup-agent-loop가 채운다)"
   fi
 done < <(find "$KIT_DIR/templates" -type f -print0 | sort -z)
 
@@ -116,8 +133,8 @@ fi
 
 # ---------- 4. .gitignore · settings.json ----------
 touch .gitignore
-grep -qxF '/.orca-loop/*.log' .gitignore || printf '\n# 티켓 루프 로그 — 규칙·설정 파일만 커밋한다\n/.orca-loop/*.log\n' >> .gitignore
-grep -qxF '/.orca-loop/*.jsonl' .gitignore || printf '# 티켓 루프의 티켓별 기록(RECORDS_FILE) — 기계별 원자료. 스펙 리포트(docs/loop-reports/)만 커밋한다\n/.orca-loop/*.jsonl\n' >> .gitignore
+grep -qxF '/.agent-loop/*.log' .gitignore || printf '\n# 티켓 루프 로그 — 규칙·설정 파일만 커밋한다\n/.agent-loop/*.log\n' >> .gitignore
+grep -qxF '/.agent-loop/*.jsonl' .gitignore || printf '# 티켓 루프의 티켓별 기록(RECORDS_FILE) — 기계별 원자료. 스펙 리포트(docs/loop-reports/)만 커밋한다\n/.agent-loop/*.jsonl\n' >> .gitignore
 
 mkdir -p .claude
 [[ -f .claude/settings.json ]] || echo '{}' > .claude/settings.json
@@ -179,17 +196,21 @@ if [[ $DO_ORCA -eq 1 ]]; then
 fi
 
 # ---------- 6. 매니페스트 ----------
-mkdir -p .orca-loop
+mkdir -p .agent-loop
 jq -n --arg repo "$KIT_REPO" --arg ref "$REF" --arg commit "$KIT_COMMIT" --arg version "$KIT_VERSION" \
   --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
   --argjson managed "$(printf '%s\n' "${managed[@]}" | jq -R . | jq -s .)" \
-  '{kit: $repo, ref: $ref, commit: $commit, version: $version, installed_at: $at, managed: $managed}' > .orca-loop/kit.json
+  '{kit: $repo, ref: $ref, commit: $commit, version: $version, installed_at: $at, managed: $managed}' > .agent-loop/kit.json
+
+stale="$(grep -rl --exclude-dir=.git --exclude-dir=node_modules -e '\.orca-loop' -e 'setup-orca-loop' . 2>/dev/null | grep -v '^./.agent-loop/kit.json$' || true)"
+[[ -z "$stale" ]] || warn "아직 옛 경로(.orca-loop / setup-orca-loop)를 가리키는 파일이 있습니다 — .agent-loop / setup-agent-loop 로 고치세요:
+$(printf '  %s\n' $stale)"
 
 cat <<EOF
 
 다음 단계
   1. Claude Code에서 /setup-matt-pocock-skills (docs/agents/issue-tracker.md가 아직 없으면)
-  2. Claude Code에서 /setup-orca-loop — 검증 명령·orca.yaml·CI·워커 규칙을 이 저장소에 맞춰 채우고 PR을 연다
+  2. Claude Code에서 /setup-agent-loop — 검증 명령·orca.yaml·CI·워커 규칙을 이 저장소에 맞춰 채우고 PR을 연다
   3. Orca Settings → Projects → <저장소> → Worktree Hooks → Advanced
      Command Source "orca.yaml only", "Wait for setup to complete before starting agent" 켜기
   4. PR 병합 뒤: bash scripts/ticket-loop.sh --dry-run → --max 1 로 시험

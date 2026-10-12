@@ -4,7 +4,7 @@ description: "Implement a piece of work based on a spec or set of tickets."
 disable-model-invocation: true
 ---
 
-<!-- Project-owned: scripts/sync-mattpocock-skills.sh skips this skill. Seeded by agent-loop-kit from upstream mattpocock/skills `implement`; /setup-orca-loop filled the __PLACEHOLDERS__. When upstream changes it, port the change here by hand. -->
+<!-- Project-owned: scripts/sync-mattpocock-skills.sh skips this skill. Seeded by agent-loop-kit from upstream mattpocock/skills `implement`; /setup-agent-loop filled the __PLACEHOLDERS__. When upstream changes it, port the change here by hand. -->
 
 Implement the work described by the user in the spec or tickets. The tracker is described in `docs/agents/issue-tracker.md`.
 

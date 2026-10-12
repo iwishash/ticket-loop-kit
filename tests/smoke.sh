@@ -34,25 +34,42 @@ run() { (cd "$T" && KIT_DIR="$KIT" bash "$KIT/install.sh" --no-skills --no-githu
 
 run
 for f in scripts/ticket-loop.sh scripts/ticket-state.sh scripts/sync-mattpocock-skills.sh \
-         .claude/skills/setup-orca-loop/SKILL.md .claude/skills/implement/SKILL.md .claude/skills/pr/SKILL.md \
-         .orca-loop/worker-rules.md .orca-loop/kit.json docs/loop-reports/README.md; do
+         .claude/skills/setup-agent-loop/SKILL.md .claude/skills/implement/SKILL.md .claude/skills/pr/SKILL.md \
+         .agent-loop/worker-rules.md .agent-loop/kit.json docs/loop-reports/README.md; do
   [[ -f "$T/$f" ]] || fail "설치 뒤 $f 없음"
 done
 [[ -x "$T/scripts/ticket-loop.sh" ]] || fail "ticket-loop.sh 실행 권한 없음"
 jq -e '.permissions.deny | index("Bash(gh pr merge:*)")' "$T/.claude/settings.json" >/dev/null || fail "deny 병합 안 됨"
-grep -qxF '/.orca-loop/*.log' "$T/.gitignore" || fail ".gitignore 줄 없음"
-grep -qxF '/.orca-loop/*.jsonl' "$T/.gitignore" || fail ".gitignore jsonl 줄 없음"
+grep -qxF '/.agent-loop/*.log' "$T/.gitignore" || fail ".gitignore 줄 없음"
+grep -qxF '/.agent-loop/*.jsonl' "$T/.gitignore" || fail ".gitignore jsonl 줄 없음"
 echo "ok  첫 설치"
 
 # 프로젝트 소유 파일은 두 번째 설치에서 유지돼야 한다
-echo "project edit" >> "$T/.orca-loop/worker-rules.md"
+echo "project edit" >> "$T/.agent-loop/worker-rules.md"
 jq '.permissions.deny += ["Bash(rm -rf:*)"]' "$T/.claude/settings.json" > "$T/s.json" && mv "$T/s.json" "$T/.claude/settings.json"
 cp "$T/.claude/settings.json" "$T/before.json"; cp "$T/.gitignore" "$T/before.gitignore"
 run
-grep -q "project edit" "$T/.orca-loop/worker-rules.md" || fail "재설치가 프로젝트 소유 파일을 덮어씀"
+grep -q "project edit" "$T/.agent-loop/worker-rules.md" || fail "재설치가 프로젝트 소유 파일을 덮어씀"
 cmp -s "$T/before.json" "$T/.claude/settings.json" || fail "재설치가 settings.json을 바꿈"
 cmp -s "$T/before.gitignore" "$T/.gitignore" || fail "재설치가 .gitignore에 줄을 또 넣음"
 echo "ok  재설치 멱등"
+
+# 0.2 이하가 설치한 저장소(.orca-loop/, setup-orca-loop, 옛 .gitignore 줄)를 옮긴다. 프로젝트 소유 편집과 로그는 따라간다
+M="$T/migrate"; mkdir -p "$M/.orca-loop" "$M/.claude/skills/setup-orca-loop"; git -C "$M" init -q -b main
+printf 'old rules\n' > "$M/.orca-loop/worker-rules.md"; printf 'CI_SKIP_REGEX="${CI_SKIP_REGEX:-^docs/}"\n' > "$M/.orca-loop/loop.env"
+printf 'log line\n' > "$M/.orca-loop/loop-1012.log"; echo old > "$M/.claude/skills/setup-orca-loop/SKILL.md"
+printf '/.orca-loop/*.log\n/.orca-loop/*.jsonl\n' > "$M/.gitignore"
+git -C "$M" add -A >/dev/null; git -C "$M" -c user.name=t -c user.email=t@t commit -q -m old
+(cd "$M" && KIT_DIR="$KIT" bash "$KIT/install.sh" --no-skills --no-github --no-git-credential --no-orca >/dev/null 2>&1) || fail "마이그레이션 설치 실패"
+[[ ! -e "$M/.orca-loop" && -d "$M/.agent-loop" ]] || fail ".orca-loop → .agent-loop 이동 안 됨"
+grep -q 'old rules' "$M/.agent-loop/worker-rules.md" || fail "마이그레이션이 프로젝트 소유 worker-rules.md 를 잃음"
+grep -q 'CI_SKIP_REGEX' "$M/.agent-loop/loop.env" || fail "마이그레이션이 loop.env 를 잃음"
+[[ -f "$M/.agent-loop/loop-1012.log" ]] || fail "마이그레이션이 로그를 잃음"
+[[ ! -e "$M/.claude/skills/setup-orca-loop" && -f "$M/.claude/skills/setup-agent-loop/SKILL.md" ]] || fail "옛 스킬이 남았거나 새 스킬이 없음"
+grep -q '^/\.orca-loop/' "$M/.gitignore" && fail ".gitignore 에 옛 줄이 남음"
+grep -qxF '/.agent-loop/*.log' "$M/.gitignore" || fail ".gitignore 에 새 줄이 없음"
+git -C "$M" status --porcelain | grep -q '^R  .orca-loop/worker-rules.md -> .agent-loop/worker-rules.md' || fail "git mv 로 옮기지 않음(이력 끊김)"
+echo "ok  0.2 → .agent-loop 마이그레이션"
 
 (cd "$T" && bash scripts/ticket-loop.sh --help >/dev/null) || fail "ticket-loop.sh --help"
 echo "ok  ticket-loop.sh --help"
@@ -92,22 +109,22 @@ echo "ok  스펙 리포트 렌더"
 # 두 번째 실행은 loop.env 를 건드리지 않고, cmux 는 아직 거절한다
 N="$T/npx"; mkdir -p "$N"; git -C "$N" init -q -b main; git -C "$N" commit -q --allow-empty -m init
 (cd "$N" && node "$KIT/bin/agent-loop-kit.js" init --yes --no-skills --no-github --no-git-credential --no-orca >/dev/null) || fail "npx 껍질 init 실패"
-[[ -x "$N/scripts/ticket-loop.sh" && -f "$N/.claude/skills/setup-orca-loop/SKILL.md" ]] || fail "npx 껍질이 install.sh 를 부르지 않음"
-grep -qxF 'BACKEND="${BACKEND:-orca}"' "$N/.orca-loop/loop.env" || fail "loop.env 에 BACKEND 줄 없음"
-[[ "$(jq -r .commit "$N/.orca-loop/kit.json")" == "$(git -C "$KIT" rev-parse HEAD)" ]] || fail "kit.json commit 이 키트 HEAD 와 다르다"
-[[ "$(jq -r .ref "$N/.orca-loop/kit.json")" == "local" ]] || fail "kit.json ref 가 local 이 아니다"
-printf 'CI_SKIP_REGEX="${CI_SKIP_REGEX:-^docs/}"\n' >> "$N/.orca-loop/loop.env"; cp "$N/.orca-loop/loop.env" "$N/before.env"
+[[ -x "$N/scripts/ticket-loop.sh" && -f "$N/.claude/skills/setup-agent-loop/SKILL.md" ]] || fail "npx 껍질이 install.sh 를 부르지 않음"
+grep -qxF 'BACKEND="${BACKEND:-orca}"' "$N/.agent-loop/loop.env" || fail "loop.env 에 BACKEND 줄 없음"
+[[ "$(jq -r .commit "$N/.agent-loop/kit.json")" == "$(git -C "$KIT" rev-parse HEAD)" ]] || fail "kit.json commit 이 키트 HEAD 와 다르다"
+[[ "$(jq -r .ref "$N/.agent-loop/kit.json")" == "local" ]] || fail "kit.json ref 가 local 이 아니다"
+printf 'CI_SKIP_REGEX="${CI_SKIP_REGEX:-^docs/}"\n' >> "$N/.agent-loop/loop.env"; cp "$N/.agent-loop/loop.env" "$N/before.env"
 (cd "$N" && node "$KIT/bin/agent-loop-kit.js" init --yes --no-skills --no-github --no-git-credential --no-orca >/dev/null) || fail "npx 껍질 재실행 실패"
-cmp -s "$N/before.env" "$N/.orca-loop/loop.env" || fail "재실행이 loop.env 를 바꿈"
-sed -i.bak '/^BACKEND=/d' "$N/.orca-loop/loop.env"
+cmp -s "$N/before.env" "$N/.agent-loop/loop.env" || fail "재실행이 loop.env 를 바꿈"
+sed -i.bak '/^BACKEND=/d' "$N/.agent-loop/loop.env"
 (cd "$N" && node "$KIT/bin/agent-loop-kit.js" init --yes --no-skills --no-github --no-git-credential --no-orca >/dev/null) || fail "npx 껍질 세 번째 실행 실패"
-grep -qxF 'BACKEND="${BACKEND:-orca}"' "$N/.orca-loop/loop.env" || fail "BACKEND 줄이 없는 loop.env 에 줄을 덧붙이지 않음"
-grep -q 'CI_SKIP_REGEX' "$N/.orca-loop/loop.env" || fail "BACKEND 줄을 덧붙이며 기존 줄을 잃음"
+grep -qxF 'BACKEND="${BACKEND:-orca}"' "$N/.agent-loop/loop.env" || fail "BACKEND 줄이 없는 loop.env 에 줄을 덧붙이지 않음"
+grep -q 'CI_SKIP_REGEX' "$N/.agent-loop/loop.env" || fail "BACKEND 줄을 덧붙이며 기존 줄을 잃음"
 (cd "$N" && node "$KIT/bin/agent-loop-kit.js" init --yes --backend bogus >/dev/null 2>&1) && fail "모르는 백엔드를 거절해야 한다"
 C="$T/npx-cmux"; mkdir -p "$C"; git -C "$C" init -q -b main; git -C "$C" commit -q --allow-empty -m init
 (cd "$C" && node "$KIT/bin/agent-loop-kit.js" init --yes --backend cmux --no-skills --no-github --no-git-credential >/dev/null) || fail "cmux 백엔드 init 실패"
-grep -qxF 'BACKEND="${BACKEND:-cmux}"' "$C/.orca-loop/loop.env" || fail "cmux 선택이 loop.env 에 반영되지 않음"
-grep -q 'WORKTREE_SETUP_CMD' "$C/.orca-loop/loop.env" || fail "cmux loop.env 에 WORKTREE_SETUP_CMD 안내가 없음"
+grep -qxF 'BACKEND="${BACKEND:-cmux}"' "$C/.agent-loop/loop.env" || fail "cmux 선택이 loop.env 에 반영되지 않음"
+grep -q 'WORKTREE_SETUP_CMD' "$C/.agent-loop/loop.env" || fail "cmux loop.env 에 WORKTREE_SETUP_CMD 안내가 없음"
 (cd "$N" && node "$KIT/bin/agent-loop-kit.js" init --bogus >/dev/null 2>&1) && fail "모르는 인자를 거절해야 한다"
 echo "ok  npx 껍질 설치·재실행·백엔드 선택·거절"
 echo "smoke 통과"

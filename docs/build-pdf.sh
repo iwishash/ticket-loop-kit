@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# guide.html → docs/orca-ticket-loop-guide.pdf (A4, 머리글·바닥글 없음)
+# guide.html → docs/ticket-loop-guide.pdf (A4, 머리글·바닥글 없음)
 # ticket-loop.sh를 고쳤으면 먼저 python3 docs/sync-guide.py로 부록 D를 다시 채운다.
 #   bash docs/build-pdf.sh
 
@@ -14,5 +14,5 @@ if [[ -z "$CHROME" ]]; then
 fi
 [[ -n "$CHROME" ]] || { echo "Chrome/Chromium이 없습니다 (CHROME=경로로 지정)" >&2; exit 1; }
 "$CHROME" --headless=new --disable-gpu --no-pdf-header-footer \
-  --print-to-pdf="$DIR/orca-ticket-loop-guide.pdf" "file://$DIR/guide.html" 2>/dev/null
-echo "→ $DIR/orca-ticket-loop-guide.pdf"
+  --print-to-pdf="$DIR/ticket-loop-guide.pdf" "file://$DIR/guide.html" 2>/dev/null
+echo "→ $DIR/ticket-loop-guide.pdf"
