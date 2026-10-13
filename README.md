@@ -21,19 +21,18 @@ bash <(gh api repos/iwishash/ticket-loop-kit/contents/install.sh -H "Accept: app
 
 Then, in Claude Code:
 
-1. `/setup-matt-pocock-skills` — when `docs/agents/issue-tracker.md` does not exist yet
-2. `/setup-ticket-loop` — fills in the verification commands, `orca.yaml`, CI, worker rules, and `implement` for this repository, then opens a PR
+1. `/setup-ticket-loop` — fills in the verification commands, `orca.yaml`, CI, worker rules, and `implement` for this repository, then opens a PR
 
 Finally, in the Orca app: Settings → Projects → <repository> → Worktree Hooks → Advanced: set Command Source to **"orca.yaml only"** and turn on **"Wait for setup to complete before starting agent"**. After merging the PR, run `bash scripts/ticket-loop.sh --dry-run`, then `--max 1`.
 
-Required tools: `git`, `gh` (logged in), `jq`, `rsync`, the Orca app and CLI, Claude Code.
+Required tools: `git`, `gh` (logged in), `jq`, the Orca app and CLI, Claude Code.
 
 ## Who does what
 
 | Actor | Responsibility |
 |---|---|
 | `npx … init` (`bin/ticket-loop-kit.js`) — questions and wrapper | Backend selection, the `BACKEND=` line in `.ticket-loop/loop.env` (only when absent), toggling install steps, tool checks, passing the installed kit commit to `install.sh` |
-| `install.sh` — the part that is the same in every repository | Installs the loop, diagnostics, and skill-sync scripts plus the `setup-ticket-loop` skill, vendors the mattpocock skills (`code-review` → `ticket-review`), merges `.gitignore` and `deny` entries, creates 6 labels, sets up git credentials (gh), registers with Orca, writes `.ticket-loop/kit.json` |
+| `install.sh` — the part that is the same in every repository | Checks for conflicting skill installs (below), installs the loop, diagnostics, and skill-sync scripts plus the `setup-ticket-loop` skill, vendors the mattpocock skills (`tdd`, `ticket-review`, and the planning set when chosen), places the `docs/agents/issue-tracker.md` template, merges `.gitignore` and `deny` entries, creates 6 labels, sets up git credentials (gh), registers with Orca, writes `.ticket-loop/kit.json` |
 | `/setup-ticket-loop` — the part that requires reading the repository | Fills the `__PLACEHOLDER__`s in `implement`, `pr`, and `worker-rules.md` (verification commands, the heavy suite and the command that runs one file of it — the worker runs only the files it touched, once, right before the PR; the loop runs the full suite after merge), the `verify` command, `orca.yaml`, CI, `.ticket-loop/loop.env`, `docs/agents/ticket-loop.md`, a `CLAUDE.md` pointer → PR |
 | Human | Orca app settings (Command Source "orca.yaml only"), merging the PR, watching the `--max 1` trial |
 
@@ -43,7 +42,7 @@ If the repository's CI uses path filters (`paths`/`paths-ignore`) and therefore 
 
 After a ticket is merged and closed, and when a `--parent` run finishes, the loop counts the spec issue's sub-issues and, if all of them are closed, closes the spec issue with a comment (it counts the list, not the summary value). If any sub-issue is still open, it leaves the spec alone.
 
-The loop leaves three things behind. The progress log `.ticket-loop/loop-MMDD.log` (for humans), the per-ticket records `.ticket-loop/tickets.jsonl` (per machine, not committed), and, when a `--parent <spec>` run exits normally, the spec report `docs/loop-reports/spec-<N>.html` (one table of status, result brief, elapsed time, and model per ticket; a human reviews it and commits it via PR). The report's fixed text is English; issue and PR titles from GitHub and stop reasons from the records are kept verbatim. In repositories that set `POST_MERGE_PORT`, when the port is busy the loop logs the occupying process and re-checks every 30 seconds. If the port is already busy at startup, it logs one "warning" line.
+The loop leaves three things behind. The progress log `.ticket-loop/loop-MMDD.log` (for humans), the per-ticket records `.ticket-loop/tickets.jsonl` (per machine, not committed), and, when a `--parent <spec>` run exits normally, the spec report `docs/loop-reports/spec-<N>.html` (one table of status, result brief, elapsed time, and model per ticket; a human reviews it and commits it via PR). When a spec was completed in this run, the loop ends with one line suggesting a `/retro` pass and listing what to read. It is a suggestion only; the loop never runs the retrospective itself. The report's fixed text is English; issue and PR titles from GitHub and stop reasons from the records are kept verbatim. In repositories that set `POST_MERGE_PORT`, when the port is busy the loop logs the occupying process and re-checks every 30 seconds. If the port is already busy at startup, it logs one "warning" line.
 
 ## Backends
 
@@ -71,7 +70,8 @@ Both backends have been verified with one real ticket each (boiler-webapp #34 on
 | `templates/.claude/skills/implement/`, `pr/` | Same path | Only when absent (project-owned afterwards) |
 | `templates/.ticket-loop/worker-rules.md` | Same path | Only when absent |
 | `templates/docs/loop-reports/README.md` | Same path | Only when absent |
-| — | `.claude/skills/<mattpocock skill>` | Vendored by `sync-mattpocock-skills.sh` |
+| `templates/docs/agents/issue-tracker.md` | Same path | Only when absent — GitHub tracker conventions read by the vendored skills and `implement` |
+| — | `.claude/skills/tdd`, `ticket-review` (+ 7 planning skills) | Vendored by `sync-mattpocock-skills.sh` |
 | — | `.gitignore` (`/.ticket-loop/*.log`, `/.ticket-loop/*.jsonl`), `deny` in `.claude/settings.json` | Lines and entries merged |
 | — | 6 GitHub labels, repository git credentials (gh), Orca registration | Created when missing |
 | — | `.ticket-loop/kit.json` | Records the installed kit commit |
@@ -82,7 +82,30 @@ Project-specific values live in the target repository's `.ticket-loop/loop.env` 
 
 Run the same install command again. Only kit-owned files and the mattpocock skills change; project-owned files (including `loop.env`) stay as they are. In repositories installed by 0.3 or earlier, the installer `git mv`s `.agent-loop/` (or `.orca-loop/` for 0.2 and earlier) to `.ticket-loop/` (logs and records included), and removes the old skills `setup-agent-loop` and `setup-orca-loop` and the old `.gitignore` lines. It then lists any files that still point at the old paths (`docs/agents/ticket-loop.md`, `CLAUDE.md`, `REPORT_DIR` in `loop.env`, etc.) so you can fix them by hand in the same PR. To pin a version: `npx github:iwishash/ticket-loop-kit#v0.5.1 init` (the bash path takes `--ref v0.3.0`). Review the changes with `git diff` and open a PR. npx caches a repository once fetched, so to re-fetch the same ref use `npx --yes --prefer-online` or `npm cache clean --force`.
 
-Options: `--yes`, `--backend <orca|cmux>`, `--no-skills`, `--no-github`, `--no-git-credential`, `--no-orca` (`npx github:iwishash/ticket-loop-kit --help`). The bash path also takes `--ref <ref>` (`bash install.sh --help`).
+Options: `--yes`, `--backend <orca|cmux>`, `--no-skills`, `--workflow-skills`/`--no-workflow-skills`, `--force-skills`, `--prune-skills`, `--no-github`, `--no-git-credential`, `--no-orca` (`npx github:iwishash/ticket-loop-kit --help`). The bash path also takes `--ref <ref>` (`bash install.sh --help`).
+
+## mattpocock skills: what is vendored, what is checked
+
+The loop script itself does not depend on any skill. It sends `/implement N` to the worker, and that `implement` (a project-owned template) calls `tdd` and `ticket-review` through the Skill tool. So the kit vendors only two sets from upstream [mattpocock/skills](https://github.com/mattpocock/skills) (MIT) into `.claude/skills/` as files. Files rather than a plugin, because worker worktrees and cloud sessions then get the same version from a plain clone, and an automatic update cannot change behaviour in the middle of an unattended run.
+
+| Set | Skills | Default |
+|---|---|---|
+| core | `tdd`, `code-review` → `ticket-review` (the name clashes with the built-in `/code-review`) | Always |
+| workflow | `grill-with-docs`, `to-spec`, `to-tickets`, `retro`, plus the `grilling`, `domain-modeling`, `writing-for-agents` they call | Off. `--workflow-skills` or the interactive checklist; kept if a previous install had them |
+| kept | Whatever an earlier install (0.5 and before vendored all 26) placed outside the two sets, e.g. `implement-spec`, `grill-me`, `triage` | Kept and synced with the rest; never added to a fresh install. `--prune-skills` (or the checklist item) removes them |
+
+The other upstream skills (`ask-matt`, `wizard`, `teach`, …) are not vendored into a fresh install. Install the plugin (`claude plugin install mattpocock-skills@claude-plugins-official`) if you want them. A repo that already has them keeps them: the kit put them there, so you may be using them, and the kit keeps updating them from the same upstream commit. The manifest `.claude/skills/.mattpocock.json` lists them under `kept`. A skill you deleted by hand is not brought back, and one upstream has dropped is left as is. The only exception is `setup-matt-pocock-skills`, which is removed because `/setup-matt-pocock-skills` is no longer needed: the `docs/agents/issue-tracker.md` it used to write comes from a kit template, and `/setup-ticket-loop` writes the `## Agent skills` block in `CLAUDE.md`.
+
+Before changing anything, the installer looks for the same skills installed another way (Claude Code does not warn about duplicates; run `bash scripts/sync-mattpocock-skills.sh --check` to see the result on its own).
+
+| Found | What happens | Handling |
+|---|---|---|
+| The `mattpocock-skills` plugin enabled for this repo (`enabledPlugins`, user < project < local) | Both load: `/tdd` and `/mattpocock-skills:tdd` appear side by side | Warning. The interactive checklist offers "disable the plugin for this repo", which runs `claude plugin disable … --scope project` |
+| The same skill in `~/.claude/skills/<name>` | A personal skill shadows the project skill, so the machine's copy runs instead of the committed one | Warning with the names. Remove them or accept it |
+| `skills-lock.json` from `npx skills add`, or a `.claude/skills/*` symbolic link | Two tools overwrite the same directories in turn | **Install stops**. Remove with `npx skills remove` and rerun (`--force-skills` to override, `--no-skills` to skip vendoring) |
+| A `.claude/skills/code-review` directory | A project skill replaces the built-in `/code-review`; the kit uses `ticket-review` | Warning with an `rm -rf` hint |
+| A same-named directory not in the manifest, or `.claude/commands/<name>.md` | Overwritten / the skill wins but both remain | Notice |
+| Skills an earlier install vendored outside the selected sets | Kept and synced | Notice with the names. `--prune-skills` removes them |
 
 ## Running the same repository on several computers
 

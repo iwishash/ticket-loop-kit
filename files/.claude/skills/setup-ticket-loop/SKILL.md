@@ -11,7 +11,8 @@ disable-model-invocation: true
 ## 1. 전제 확인
 
 - `.ticket-loop/kit.json`이 있다. 없으면 키트 설치부터 하라고 안내하고 멈춘다.
-- `docs/agents/issue-tracker.md`가 있다. 없으면 사용자에게 `/setup-matt-pocock-skills`를 먼저 실행하라고 하고 멈춘다(사용자만 부를 수 있는 스킬이다).
+- `docs/agents/issue-tracker.md`가 있다. 설치기가 템플릿(GitHub 이슈를 `gh`로 읽고 쓰는 관례, 라벨, 티켓 루프 관례)을 없을 때만 놓는다. 없으면(0.5 이하 키트로 설치한 저장소) 설치 명령을 다시 실행하라고 안내하고 멈춘다. 벤더링된 `ticket-review`·`to-tickets`·`to-spec`과 이 저장소의 `implement`가 이 파일을 읽는다.
+- `.claude/skills/tdd`와 `.claude/skills/ticket-review`가 있다(`implement`가 Skill 도구로 부른다). 없으면 `bash scripts/sync-mattpocock-skills.sh`를 돌리라고 안내한다.
 
 ## 2. 탐색
 
@@ -60,7 +61,7 @@ disable-model-invocation: true
 5. **CI**: PR에서 도는 워크플로가 없으면 `__VERIFY__`를 도는 최소 워크플로를 만든다(비밀 값 없이, 경로 필터 없이 — 필터는 저장소가 원할 때 두는 것이다). 이미 경로 필터가 있으면 `CI_SKIP_REGEX` 또는 `CI_SKIP_CMD`를 같은 판정이 나오게 맞추고, 문서만 바꾸는 PR과 코드 PR을 하나씩 떠올려 둘 다 맞는지 확인한다.
 6. **`docs/agents/ticket-loop.md`**: 이 저장소의 운영 문서. 흐름(`/grill-with-docs` → `/to-spec` → `/to-tickets` → `bash scripts/ticket-loop.sh --parent <스펙>` → 스펙 리포트 `docs/loop-reports/spec-<N>.html` 검수 → `/retro`), 실행 명령, 위 결정 표, 사람이 할 일(Orca 앱 설정, 병합, 리포트 PR 커밋), 복구는 가이드북 10장과 `bash scripts/ticket-state.sh N`을 가리킨다. `POST_MERGE_PORT`가 있으면 "실행 전 `lsof -nP -iTCP:<포트> -sTCP:LISTEN`으로 비어 있는지 본다"와 "로그가 '포트 … 사용 중'에서 조용하면 멈춤이 아니라 대기다(가이드북 R10)"를 적는다. 키트 버전은 `.ticket-loop/kit.json`을 가리킨다.
    `docs/loop-reports/README.md`(키트 템플릿)는 `REPORT_DIR`를 바꿨을 때만 그 경로로 옮긴다.
-7. **`CLAUDE.md`**(없으면 `AGENTS.md`)의 `## Agent skills` 블록에 두 줄을 더한다: 작업 흐름은 `docs/agents/ticket-loop.md`, 티켓 구현 절차는 `.claude/skills/implement/SKILL.md`가 단일 진실. 리뷰는 `ticket-review`.
+7. **`CLAUDE.md`**(없으면 `AGENTS.md`)의 `## Agent skills` 블록. 없으면 만든다. 블록 안에 `### Issue tracker` 소제목과 "Issues live in GitHub Issues. See `docs/agents/issue-tracker.md`." 한 줄이 있어야 한다 — 벤더링된 스킬은 트래커 설정을 이 블록으로 받는다(없으면 `/setup-ticket-loop`를 실행하라고 사용자에게 되묻는다). 이어서 두 줄을 더한다: 작업 흐름은 `docs/agents/ticket-loop.md`, 티켓 구현 절차는 `.claude/skills/implement/SKILL.md`가 단일 진실. 리뷰는 `ticket-review`. 블록이 이미 있으면 그 안을 고치고 중복 블록을 만들지 않는다.
 
 ## 5. 검증
 

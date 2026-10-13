@@ -34,14 +34,18 @@ Usage
 Options
   -y, --yes              Use defaults without asking (automatic when not a TTY)
   --backend <name>       ${Object.entries(BACKENDS).map(([k, b]) => `${k}${b.available ? '' : ' (coming soon)'}`).join(' | ')}  (default: orca)
-  --no-skills            Skip syncing the mattpocock skills
+  --no-skills            Skip vendoring the mattpocock skills (implement calls tdd and ticket-review — only skip if you vendor them yourself)
+  --workflow-skills      Also vendor the planning skills: grill-with-docs, to-spec, to-tickets, retro (+ 3 skills they call)
+  --no-workflow-skills   Remove the planning skills if a previous install vendored them (default: keep the previous choice)
+  --force-skills         Vendor even when another tool (npx skills) manages mattpocock skills in this repo
+  --prune-skills         Remove skills an earlier install vendored outside the selected sets (default: keep and sync them)
   --no-github            Do not create the GitHub labels
   --no-git-credential    Leave the repo's git credential helper alone
   --no-orca              Skip registering the repo with Orca
   --ref <ref>            Kit ref to record in .ticket-loop/kit.json (default: the #ref of the npx spec, else "npx")
 
 Pin a kit version with a tag on the npx spec:  npx github:iwishash/ticket-loop-kit#v0.4.0 init
-Requires git, gh (logged in), jq, rsync and bash. The backend app (Orca or cmux) and Claude Code are needed to run the loop.
+Requires git, gh (logged in), jq and bash. The backend app (Orca or cmux) and Claude Code are needed to run the loop.
 `;
 
 // ---------- 색 ----------
@@ -161,7 +165,7 @@ async function checklist(title, items) {
 }
 
 function parseArgs(argv) {
-  const o = { command: null, yes: false, backend: null, ref: null, skills: true, github: true, credential: true, orca: true };
+  const o = { command: null, yes: false, backend: null, ref: null, skills: true, workflow: null, forceSkills: false, pruneSkills: false, github: true, credential: true, orca: true };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     switch (a) {
@@ -170,6 +174,10 @@ function parseArgs(argv) {
       case '--backend': o.backend = argv[++i]; break;
       case '--ref': o.ref = argv[++i]; break;
       case '--no-skills': o.skills = false; break;
+      case '--workflow-skills': o.workflow = true; break;
+      case '--no-workflow-skills': o.workflow = false; break;
+      case '--force-skills': o.forceSkills = true; break;
+      case '--prune-skills': o.pruneSkills = true; break;
       case '--no-github': o.github = false; break;
       case '--no-git-credential': o.credential = false; break;
       case '--no-orca': o.orca = false; break;
@@ -260,7 +268,6 @@ async function init(o) {
 
   if (!has('gh')) warn('gh is not installed: labels, credential and Orca registration will be skipped, and the loop itself needs gh.');
   else if (!run('gh', ['auth', 'status']).ok) warn('gh is not logged in (gh auth login).');
-  if (!has('rsync')) warn('rsync is not installed: the mattpocock skill sync will be skipped.');
 
   // 백엔드
   let backend = o.backend;
@@ -279,10 +286,33 @@ async function init(o) {
   const sshRemote = /^(git@|ssh:\/\/|git\+ssh:\/\/)|^[^/]+@[^:]+:/.test(originUrl);
   if (sshRemote && o.credential && !o.yes) o.credential = false;   // 기본값만 끈다. --yes 는 install.sh 가 알아서 한다(SSH 면 설정해도 무해)
 
+  // 스킬 충돌 검사 — 같은 mattpocock 스킬이 플러그인·~/.claude/skills·`npx skills` 로 이미 있으면 보여 준다(Claude Code 는 중복을 경고하지 않는다).
+  // 다른 도구가 .claude/skills 를 관리하면(차단) 멈춘다. 지난 설치가 workflow 묶음을 들였으면 그 선택을 기본값으로 이어 간다
+  const manifest = readJson(path.join(root, '.claude', 'skills', '.mattpocock.json'));
+  if (o.workflow === null) o.workflow = !!(manifest && (manifest.workflow === true || (Array.isArray(manifest.skills) && manifest.skills.includes('to-tickets'))));
+  const findings = o.skills ? skillConflicts(root, o.workflow) : [];
+  const plugins = findings.filter((f) => f.kind === 'plugin');
+  const kept = findings.find((f) => f.kind === 'kept');   // 지난 설치가 들였지만 이번 묶음에 없는 스킬 — 기본은 유지
+  if (findings.length) {
+    console.log('');
+    say('Existing mattpocock skill installs');
+    for (const f of findings) {
+      const tag = f.severity === 'block' ? c.red('✗') : f.severity === 'warn' ? c.yellow('!') : c.dim('·');
+      console.log(`  ${tag} ${f.detail}`);
+      if (f.fix) console.log(c.dim(`    → ${f.fix}`));
+    }
+    if (findings.some((f) => f.severity === 'block') && !o.forceSkills) {
+      die('Another tool manages mattpocock skills in this repo. Remove that install first, or pass --force-skills, or skip vendoring with --no-skills.');
+    }
+  }
+
   // 설치 단계 — Enter 만 치면 기본값
   if (interactive) {
     const items = [
-      { key: 'skills', label: 'Vendor the mattpocock skills', note: 'copy 26 skills into .claude/skills/ at the pinned upstream version — overwrites vendored ones, leaves implement·pr alone', on: o.skills },
+      { key: 'skills', label: 'Vendor tdd + ticket-review', note: 'the two mattpocock skills implement calls, pinned into .claude/skills/ (code-review is renamed ticket-review); leaves implement·pr alone', on: o.skills },
+      { key: 'workflow', label: 'Also vendor the planning skills', note: `grill-with-docs · to-spec · to-tickets · retro + the 3 skills they call — for the spec → tickets → retro flow inside Claude Code${manifest ? (o.workflow ? ' (kept from the previous install)' : ' (previous install did not have them)') : ''}`, on: o.workflow },
+      ...(kept ? [{ key: 'pruneSkills', label: 'Remove the other skills an earlier install vendored', note: `${kept.names.length > 6 ? `${kept.names.slice(0, 6).join(' · ')} +${kept.names.length - 6} more` : kept.names.join(' · ')} — off: keep them and sync them with the rest; on: delete them`, on: o.pruneSkills }] : []),
+      ...plugins.map((f) => ({ key: `disable:${f.id}`, label: `Disable plugin ${f.id} for this repo`, note: 'writes enabledPlugins=false to .claude/settings.json so the vendored copies are the only ones that load', on: true })),
       { key: 'github', label: 'Create the 6 GitHub labels', note: 'ready-for-agent · in-review …', on: o.github },
       { key: 'credential', label: 'Use the gh token for git push',
         note: sshRemote ? 'SSH remote detected — not needed (default off)' : 'this repo only; keeps unattended HTTPS push from waiting on the keychain', on: o.credential },
@@ -300,6 +330,9 @@ async function init(o) {
   // install.sh 가 먼저 돈다 — 옛 .agent-loop/ (.orca-loop/) 를 .ticket-loop/ 로 옮기는 마이그레이션이 거기 있어서, loop.env 는 그 뒤에 쓴다
   const args = [INSTALL_SH, '--ref', o.ref || kitRef()];
   if (!o.skills) args.push('--no-skills');
+  if (o.skills) args.push(o.workflow ? '--workflow-skills' : '--no-workflow-skills');
+  if (o.forceSkills) args.push('--force-skills');
+  if (o.skills && o.pruneSkills) args.push('--prune-skills');
   if (!o.github) args.push('--no-github');
   if (!o.credential) args.push('--no-git-credential');
   if (!o.orca) args.push('--no-orca');
@@ -307,6 +340,30 @@ async function init(o) {
   if (r.error) die(`Failed to run install.sh: ${r.error.message}`);
   if (r.status !== 0) process.exit(r.status == null ? 1 : r.status);
   say(writeLoopEnv(root, backend));
+
+  // 이 저장소에서 플러그인 끄기(사용자가 체크리스트에서 골랐을 때만). 프로젝트 범위라 .claude/settings.json 에 남아 팀이 같이 받는다
+  for (const f of plugins) {
+    if (!o[`disable:${f.id}`]) continue;
+    const d = run('claude', ['plugin', 'disable', f.id, '--scope', 'project'], { cwd: root });
+    if (d.ok) say(`Disabled plugin ${f.id} for this repo (.claude/settings.json)`);
+    else warn(`Could not disable ${f.id}: ${d.err || d.out || 'claude CLI not found'} — run: claude plugin disable ${f.id} --scope project`);
+  }
+}
+
+// 충돌 검사는 bash 스크립트(files/scripts/sync-mattpocock-skills.sh --check --json)가 한다 — 설치기 두 경로가 같은 판정을 내도록.
+// 반환: [{severity, kind, detail, fix, id?, names?}]. 스크립트가 없거나 깨지면 빈 목록(검사 실패가 설치를 막지는 않는다)
+function skillConflicts(root, workflow) {
+  const r = run('bash', [path.join(PKG_ROOT, 'files', 'scripts', 'sync-mattpocock-skills.sh'), '--check', '--json', workflow ? '--workflow' : '--no-workflow'], { cwd: root });
+  let list;
+  try { list = JSON.parse(r.out); } catch { return []; }
+  if (!Array.isArray(list)) return [];
+  return list.map((f) => {
+    const m = f.kind === 'plugin' && String(f.detail).match(/plugin (\S+) is enabled/);
+    if (m) return { ...f, id: m[1] };
+    const k = f.kind === 'kept' && String(f.detail).match(/\(([^)]*)\)/);
+    if (k) return { ...f, names: k[1].split(/\s+/).filter(Boolean) };
+    return f;
+  });
 }
 
 (async () => {

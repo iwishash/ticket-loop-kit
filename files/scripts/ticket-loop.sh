@@ -15,6 +15,8 @@ set -euo pipefail
 #      (자동 선택이면 대상 재계산)
 #   7. `--parent` 실행이 정상 종료하면 하위 이슈가 모두 닫힌 스펙 이슈를 닫고(아직 열려 있으면), 스펙 리포트 HTML(티켓별 결과·경과 시간·
 #      모델 표)을 REPORT_DIR/spec-<N>.html에 쓴다
+#   8. 이번 실행에서 끝난 스펙이 있으면 회고를 권하는 안내 한 줄을 남긴다(/retro로 읽을 자료 안내). 권고일 뿐 아무것도 실행하지 않는다 —
+#      회고는 사람이 후보를 보고 고르는 단계라 무인으로 돌리지 않는다
 #
 # 사용법:
 #   ticket-loop.sh                     # 준비된 티켓 전부
@@ -92,6 +94,7 @@ fi
 WORKTREE_DIR="${WORKTREE_DIR:-}"
 WORKTREE_SETUP_CMD="${WORKTREE_SETUP_CMD:-}"
 PARENT="${SPEC_ISSUE:-}"
+CLOSED_SPECS=""   # 이번 실행에서 닫은 스펙 이슈 번호들(끝날 때 회고 안내에 쓴다)
 SCOPE_LABEL="${SCOPE_LABEL:-}"
 READY_LABEL="${READY_LABEL:-ready-for-agent}"
 IN_REVIEW_LABEL="${IN_REVIEW_LABEL:-in-review}"
@@ -624,9 +627,24 @@ close_spec_if_done() {
   [[ "${total:-0}" -gt 0 && "${open:-1}" -eq 0 ]] || return 0
   if gh issue close "$spec" --comment "하위 이슈 ${total}건이 모두 닫혀 완료 (ticket-loop)" >/dev/null 2>&1; then
     log "스펙 #${spec}: 하위 이슈 ${total}건 모두 닫힘 → 스펙 이슈를 닫았다"
+    CLOSED_SPECS="${CLOSED_SPECS:-} ${spec}"
   else
     log "스펙 #${spec}: 하위 이슈 ${total}건이 모두 닫혔지만 스펙 이슈를 닫지 못했다 — gh issue close ${spec}"
   fi
+}
+
+# 끝난 스펙이 있으면 회고를 권한다 — 안내일 뿐, 아무것도 실행하지 않는다. /retro 는 사람이 후보를 보고 고르는 스킬이라 무인 단계로 두지 않는다
+suggest_retro() {
+  local spec report skill="/retro" log_src
+  [[ -n "${CLOSED_SPECS// /}" ]] || return 0
+  [[ -d "${ROOT:-.}/.claude/skills/retro" ]] || skill="/retro(이 저장소에는 아직 없다 — 키트 설치 때 --workflow-skills 로 들일 수 있다)"
+  log_src="$LOG_FILE"; [[ "$LOG_FILE" != "/dev/null" ]] || log_src="(로그를 꺼 둬서 없음)"
+  for spec in $CLOSED_SPECS; do
+    report="$REPORT_DIR/spec-${spec}.html"
+    if [[ -f "$report" || -f "${ROOT:-.}/$report" ]]; then report="리포트 ${report}"
+    else report="리포트는 ticket-loop.sh --parent ${spec} 로 뽑을 수 있다"; fi
+    log "스펙 #${spec} 완료. 원하면 ${skill}로 이번 묶음을 돌아보세요 — 읽을 자료: 로그 ${log_src}, ${report}, 병합된 PR 본문의 '남은 판단 사항'·'검증하지 못한 것'. 환경(스킬·worker-rules.md·자동 검사)을 고치게 되면 PR로 올리는 것을 권합니다"
+  done
 }
 
 record_ticket() {
@@ -852,7 +870,7 @@ if [[ $POST_MERGE -eq 1 && -n "$POST_MERGE_PORT" ]] && port_in_use "$POST_MERGE_
   log "주의: 포트 ${POST_MERGE_PORT} 사용 중($(port_holder "$POST_MERGE_PORT" || true)) — 루프가 도는 동안 비워 두세요. 그대로면 병합마다 비기를 최대 $((PORT_WAIT_SEC / 60))분 기다린다(끄려면 --skip-post-merge)"
 fi
 # 티켓이 더 없어도 --parent면 스펙 닫기·리포트는 다시 한다(사람이 마지막 티켓을 닫은 스펙, 끝난 스펙의 리포트를 다시 뽑는 길)
-[[ -n "$targets" ]] || { log "처리할 티켓이 없습니다."; [[ $DRY_RUN -eq 1 ]] || { close_spec_if_done "$PARENT"; write_spec_report; }; exit 0; }
+[[ -n "$targets" ]] || { log "처리할 티켓이 없습니다."; [[ $DRY_RUN -eq 1 ]] || { close_spec_if_done "$PARENT"; write_spec_report; suggest_retro; }; exit 0; }
 log "대상(현재 선행 이슈가 모두 닫힌 것):"; printf '%s\n' "$targets" | sed 's/^/  #/' >&2
 [[ $DRY_RUN -eq 0 ]] || exit 0
 
@@ -884,5 +902,6 @@ done
 
 close_spec_if_done "$PARENT"
 write_spec_report
+suggest_retro
 log "완료: ${done_count}건"
-notify "티켓 루프 종료" "${done_count}건 완료"
+notify "티켓 루프 종료" "${done_count}건 완료$([[ -z "${CLOSED_SPECS// /}" ]] || echo " · 스펙${CLOSED_SPECS// / #} 끝 — 원하면 /retro로 회고")"

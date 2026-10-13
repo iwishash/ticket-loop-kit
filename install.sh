@@ -13,8 +13,12 @@ set -euo pipefail
 #   1. Overwrites the managed files: scripts/ticket-loop.sh, scripts/ticket-state.sh, scripts/sync-mattpocock-skills.sh,
 #      .claude/skills/setup-ticket-loop/
 #   2. Places templates only when missing (project-owned afterwards): .claude/skills/implement and pr, .ticket-loop/worker-rules.md,
-#      docs/loop-reports/README.md
-#   3. Vendors the mattpocock skills into .claude/skills/ (code-review → ticket-review)
+#      docs/loop-reports/README.md, docs/agents/issue-tracker.md (GitHub tracker facts the vendored skills read)
+#   3. Vendors the mattpocock skills the loop uses into .claude/skills/: always tdd and code-review (→ ticket-review), which the
+#      implement skill calls; the planning set (grill-with-docs, to-spec, to-tickets, retro + their 3 dependencies) only with
+#      --workflow-skills (default: keep what the previous install chose). Skills an earlier install vendored outside those sets
+#      are kept and synced, never removed, unless --prune-skills is given. Before touching anything it checks for the same skills
+#      installed another way (plugin, ~/.claude/skills, `npx skills`) and stops when two tools would fight over the same files
 #   4. Adds /.ticket-loop/*.log and /.ticket-loop/*.jsonl to .gitignore; merges deny rules into .claude/settings.json
 #      (no gh pr merge, no force push, no direct push to the default branch)
 #   5. Creates the 6 GitHub labels, sets the repo-scoped git credential helper (gh), registers the repo with Orca
@@ -24,6 +28,9 @@ set -euo pipefail
 # Options:
 #   --ref <ref>          kit tag, branch or commit (default main)
 #   --no-skills          skip the mattpocock skill sync
+#   --workflow-skills    also vendor the planning skills (grill-with-docs, to-spec, to-tickets, retro + deps); --no-workflow-skills removes them
+#   --force-skills       vendor even when another tool (npx skills) manages mattpocock skills in this repo
+#   --prune-skills       remove skills an earlier install vendored outside the selected sets (default: keep and sync them)
 #   --no-github          do not create the labels
 #   --no-git-credential  leave the repo's git credential helper alone
 #   --no-orca            skip registering the repo with Orca
@@ -34,6 +41,9 @@ KIT_REPO="${KIT_REPO:-iwishash/ticket-loop-kit}"
 KIT_DIR="${KIT_DIR:-}"
 REF="main"
 DO_SKILLS=1
+WORKFLOW_FLAG=""
+FORCE_SKILLS=0
+PRUNE_FLAG=""
 DO_GITHUB=1
 DO_CREDENTIAL=1
 DO_ORCA=1
@@ -42,6 +52,10 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --ref) REF="$2"; shift ;;
     --no-skills) DO_SKILLS=0 ;;
+    --workflow-skills) WORKFLOW_FLAG="--workflow" ;;
+    --no-workflow-skills) WORKFLOW_FLAG="--no-workflow" ;;
+    --force-skills) FORCE_SKILLS=1 ;;
+    --prune-skills) PRUNE_FLAG="--prune" ;;
     --no-github) DO_GITHUB=0 ;;
     --no-git-credential) DO_CREDENTIAL=0 ;;
     --no-orca) DO_ORCA=0 ;;
@@ -90,6 +104,19 @@ if [[ -z "$BASE" ]] && command -v gh >/dev/null 2>&1; then
 fi
 BASE="${BASE:-main}"
 
+# ---------- 스킬 충돌 검사 (아무것도 바꾸기 전에) ----------
+# 같은 mattpocock 스킬이 플러그인·~/.claude/skills·`npx skills` 로 이미 있으면 알린다. Claude Code 는 중복을 경고하지 않는다.
+# 다른 도구가 .claude/skills 를 관리하는 경우(차단)는 설치를 멈춘다 — 두 도구가 같은 파일을 번갈아 덮어쓰기 때문이다
+if [[ $DO_SKILLS -eq 1 ]]; then
+  rc=0
+  bash "$KIT_DIR/files/scripts/sync-mattpocock-skills.sh" --check $WORKFLOW_FLAG $PRUNE_FLAG || rc=$?
+  if [[ $rc -eq 3 && $FORCE_SKILLS -eq 0 ]]; then
+    die "Another tool manages mattpocock skills in this repo (see above). Remove that install, or rerun with --force-skills, or skip vendoring with --no-skills."
+  elif [[ $rc -ne 0 ]]; then
+    warn "Skill conflicts found (above) — the vendored copies are still installed; fix the listed items so the loop runs the committed versions."
+  fi
+fi
+
 # ---------- 0. 옛 경로 마이그레이션 (0.3 이하: .agent-loop/ · setup-agent-loop, 0.2 이하: .orca-loop/ · setup-orca-loop) ----------
 for old in .agent-loop .orca-loop; do
   [[ -d "$old" ]] || continue
@@ -136,12 +163,10 @@ done < <(find "$KIT_DIR/templates" -type f -print0 | sort -z)
 
 # ---------- 3. mattpocock 스킬 ----------
 if [[ $DO_SKILLS -eq 1 ]]; then
-  if command -v rsync >/dev/null 2>&1; then
-    say "Syncing the mattpocock skills"
-    bash scripts/sync-mattpocock-skills.sh || warn "Skill sync failed — run bash scripts/sync-mattpocock-skills.sh later"
-  else
-    warn "rsync is not installed — skipping the skill sync."
-  fi
+  say "Syncing the mattpocock skills"
+  force=""; [[ $FORCE_SKILLS -eq 1 ]] && force="--force"
+  bash scripts/sync-mattpocock-skills.sh --no-check $WORKFLOW_FLAG $PRUNE_FLAG $force \
+    || warn "Skill sync failed — run bash scripts/sync-mattpocock-skills.sh ${WORKFLOW_FLAG} ${PRUNE_FLAG} later"
 fi
 
 # ---------- 4. .gitignore · settings.json ----------
@@ -222,9 +247,8 @@ $(printf '  %s\n' $stale)"
 
 step() { printf '  %s%s.%s %s\n' "$C_C" "$1" "$C_0" "$2"; }
 printf '\n%sNext steps%s\n' "$C_B" "$C_0"
-step 1 "In Claude Code: ${C_C}/setup-matt-pocock-skills${C_0} ${C_D}(if docs/agents/issue-tracker.md does not exist yet)${C_0}"
-step 2 "In Claude Code: ${C_C}/setup-ticket-loop${C_0} — fills in the verify command, orca.yaml, CI and worker rules for this repo and opens a PR"
-step 3 "Orca Settings → Projects → <repo> → Worktree Hooks → Advanced:"
+step 1 "In Claude Code: ${C_C}/setup-ticket-loop${C_0} — fills in the verify command, orca.yaml, CI and worker rules for this repo and opens a PR"
+step 2 "Orca Settings → Projects → <repo> → Worktree Hooks → Advanced:"
 printf '     Command Source %s"orca.yaml only"%s, enable %s"Wait for setup to complete before starting agent"%s\n' "$C_C" "$C_0" "$C_C" "$C_0"
-step 4 "After the PR is merged: ${C_C}bash scripts/ticket-loop.sh --dry-run${C_0}, then ${C_C}--max 1${C_0}"
+step 3 "After the PR is merged: ${C_C}bash scripts/ticket-loop.sh --dry-run${C_0}, then ${C_C}--max 1${C_0}"
 printf '\n%sChanged files:%s git status\n' "$C_D" "$C_0"

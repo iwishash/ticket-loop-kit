@@ -35,7 +35,7 @@ run() { (cd "$T" && KIT_DIR="$KIT" bash "$KIT/install.sh" --no-skills --no-githu
 run
 for f in scripts/ticket-loop.sh scripts/ticket-state.sh scripts/sync-mattpocock-skills.sh \
          .claude/skills/setup-ticket-loop/SKILL.md .claude/skills/implement/SKILL.md .claude/skills/pr/SKILL.md \
-         .ticket-loop/worker-rules.md .ticket-loop/kit.json docs/loop-reports/README.md; do
+         .ticket-loop/worker-rules.md .ticket-loop/kit.json docs/loop-reports/README.md docs/agents/issue-tracker.md; do
   [[ -f "$T/$f" ]] || fail "설치 뒤 $f 없음"
 done
 [[ -x "$T/scripts/ticket-loop.sh" ]] || fail "ticket-loop.sh 실행 권한 없음"
@@ -46,10 +46,12 @@ echo "ok  첫 설치"
 
 # 프로젝트 소유 파일은 두 번째 설치에서 유지돼야 한다
 echo "project edit" >> "$T/.ticket-loop/worker-rules.md"
+echo "tracker edit" >> "$T/docs/agents/issue-tracker.md"
 jq '.permissions.deny += ["Bash(rm -rf:*)"]' "$T/.claude/settings.json" > "$T/s.json" && mv "$T/s.json" "$T/.claude/settings.json"
 cp "$T/.claude/settings.json" "$T/before.json"; cp "$T/.gitignore" "$T/before.gitignore"
 run
 grep -q "project edit" "$T/.ticket-loop/worker-rules.md" || fail "재설치가 프로젝트 소유 파일을 덮어씀"
+grep -q "tracker edit" "$T/docs/agents/issue-tracker.md" || fail "재설치가 docs/agents/issue-tracker.md 를 덮어씀"
 cmp -s "$T/before.json" "$T/.claude/settings.json" || fail "재설치가 settings.json을 바꿈"
 cmp -s "$T/before.gitignore" "$T/.gitignore" || fail "재설치가 .gitignore에 줄을 또 넣음"
 echo "ok  재설치 멱등"
@@ -95,6 +97,94 @@ out="$(cd "$M4" && KIT_DIR="$KIT" bash "$KIT/install.sh" --no-skills --no-github
 [[ "$(cat "$M4/.ticket-loop/loop.env")" == new && -d "$M4/.orca-loop" ]] || fail ".agent-loop 가 아니라 .orca-loop 를 옮겼거나 .orca-loop 를 지움"
 grep -q 'Both .orca-loop/ and .ticket-loop/ exist' <<<"$out" || fail "남은 .orca-loop 에 경고가 없음"
 echo "ok  0.3 → .ticket-loop 마이그레이션 · 두 옛 경로"
+
+# 스킬 동기화: 가짜 upstream(plugin.json + 스킬 디렉터리)으로 네트워크 없이 — 묶음 선택, 이름 바꾸기, 본문 치환, 지난 설치 스킬 유지(kept)·--prune
+U="$T/upstream"; mkdir -p "$U/.claude-plugin" "$U/.changeset"; git -C "$U" init -q -b main
+ALL=(tdd code-review grill-with-docs to-spec to-tickets retro grilling domain-modeling writing-for-agents implement pr ask-matt wizard)
+for sk in "${ALL[@]}"; do
+  mkdir -p "$U/skills/engineering/$sk/agents"
+  printf -- '---\nname: %s\ndescription: x\n---\nUses the `code-review` skill. If missing, run `/setup-matt-pocock-skills`. See /code-review and "code-review".\n' "$sk" > "$U/skills/engineering/$sk/SKILL.md"
+  echo ref > "$U/skills/engineering/$sk/agents/openai.yaml"
+done
+printf '{"name":"mattpocock-skills","version":"9.9.9","skills":[%s]}\n' "$(printf '"./skills/engineering/%s",' "${ALL[@]}" | sed 's/,$//')" > "$U/.claude-plugin/plugin.json"
+echo readme > "$U/.changeset/README.md"; echo cs > "$U/.changeset/one.md"
+git -C "$U" add -A >/dev/null; git -C "$U" -c user.name=t -c user.email=t@t commit -q -m up
+W="$T/sync"; mkdir -p "$W/.claude/skills/implement"; git -C "$W" init -q -b main; echo mine > "$W/.claude/skills/implement/SKILL.md"
+SYNC="$KIT/files/scripts/sync-mattpocock-skills.sh"
+sync_run() { (cd "$W" && HOME="$T/emptyhome" CLAUDE_CONFIG_DIR="$T/emptyhome/.claude" MATTPOCOCK_UPSTREAM="$U" bash "$SYNC" "$@" 2>&1); }
+mkdir -p "$T/emptyhome/.claude"
+out="$(sync_run)" || fail "동기화(core) 실패: $out"
+[[ -f "$W/.claude/skills/tdd/SKILL.md" && -f "$W/.claude/skills/ticket-review/SKILL.md" && -f "$W/.claude/skills/ticket-review/agents/openai.yaml" ]] || fail "core 스킬이 없음"
+for sk in code-review grill-with-docs to-tickets ask-matt wizard pr; do [[ ! -e "$W/.claude/skills/$sk" ]] || fail "들이지 않을 스킬 $sk 가 놓임"; done
+[[ "$(cat "$W/.claude/skills/implement/SKILL.md")" == mine ]] || fail "프로젝트 소유 implement 가 바뀜"
+grep -q '^name: ticket-review$' "$W/.claude/skills/ticket-review/SKILL.md" || fail "code-review → ticket-review 이름 변경 안 됨"
+grep -q '`ticket-review` skill' "$W/.claude/skills/tdd/SKILL.md" && grep -q '/ticket-review and "ticket-review"' "$W/.claude/skills/tdd/SKILL.md" || fail "본문의 code-review 참조가 안 바뀜"
+grep -q '/setup-ticket-loop' "$W/.claude/skills/tdd/SKILL.md" && ! grep -q 'setup-matt-pocock' "$W/.claude/skills/tdd/SKILL.md" || fail "/setup-matt-pocock-skills 안내가 안 바뀜"
+M="$W/.claude/skills/.mattpocock.json"
+[[ "$(jq -c '.skills' "$M")" == '["tdd","ticket-review"]' && "$(jq -r .workflow "$M")" == false && "$(jq -r .pending_changesets "$M")" == 1 && "$(jq -r .version "$M")" == 9.9.9 ]] || fail "매니페스트(core) 내용이 다름: $(cat "$M")"
+grep -q '2 skills synced (core)' <<<"$out" || fail "요약 줄 없음: $out"
+out="$(sync_run --workflow)" || fail "동기화(--workflow) 실패: $out"
+[[ "$(jq -r '.skills | length' "$M")" == 9 && "$(jq -r .workflow "$M")" == true ]] || fail "workflow 묶음이 9개가 아님"
+[[ -f "$W/.claude/skills/grilling/SKILL.md" && -f "$W/.claude/skills/writing-for-agents/SKILL.md" ]] || fail "workflow 의존 스킬이 없음"
+sync_run >/dev/null || fail "동기화(auto) 실패"
+[[ "$(jq -r '.skills | length' "$M")" == 9 ]] || fail "플래그 없이 다시 돌리면 지난 선택(workflow)을 유지해야 한다"
+out="$(sync_run --no-workflow)" || fail "동기화(--no-workflow) 실패: $out"
+[[ "$(jq -c '.skills' "$M")" == '["tdd","ticket-review"]' && ! -e "$W/.claude/skills/to-tickets" ]] || fail "--no-workflow 가 workflow 묶음을 지우지 않음"
+grep -q 'removed to-tickets' <<<"$out" || fail "제거 로그 없음"
+# 0.5 이하가 들인 매니페스트(workflow 키 없음; 두 묶음 밖의 wizard·ask-matt, upstream 에서 사라진 gone, setup-matt-pocock-skills, 손으로 지운 handoff)
+# → to-tickets 가 있었으니 workflow 켜짐. wizard·ask-matt 는 kept 로 유지·동기화, gone 은 그대로, setup-matt-pocock-skills 는 지움, handoff 는 다시 들이지 않음
+for sk in wizard ask-matt gone setup-matt-pocock-skills; do mkdir -p "$W/.claude/skills/$sk"; echo old > "$W/.claude/skills/$sk/SKILL.md"; done
+jq '.skills = ["tdd","ticket-review","wizard","ask-matt","gone","handoff","setup-matt-pocock-skills","to-tickets","grilling"] | del(.workflow)' "$M" > "$M.tmp" && mv "$M.tmp" "$M"
+rc=0; out="$(sync_run --check)" || rc=$?
+[[ $rc -eq 0 ]] && grep -q '3 skills from an earlier install are outside the selected sets (ask-matt gone wizard)' <<<"$out" && grep -q 'setup-matt-pocock-skills will be removed' <<<"$out" \
+  || fail "--check 가 kept 를 알리지 않음(rc=$rc): $out"
+out="$(sync_run)" || fail "0.5 매니페스트에서 동기화 실패: $out"
+[[ -f "$W/.claude/skills/to-tickets/SKILL.md" && "$(jq -r .workflow "$M")" == true ]] || fail "0.5 매니페스트에서 workflow 가 유지되지 않음"
+[[ -f "$W/.claude/skills/wizard/SKILL.md" && "$(cat "$W/.claude/skills/wizard/SKILL.md")" != old ]] || fail "kept 스킬 wizard 가 유지·동기화되지 않음"
+grep -q '`ticket-review` skill' "$W/.claude/skills/ask-matt/SKILL.md" || fail "kept 스킬 본문 치환 안 됨"
+[[ "$(cat "$W/.claude/skills/gone/SKILL.md")" == old ]] || fail "upstream 에 없는 kept 스킬 gone 이 바뀌었거나 지워짐"
+[[ ! -e "$W/.claude/skills/setup-matt-pocock-skills" && ! -e "$W/.claude/skills/handoff" ]] || fail "setup-matt-pocock-skills 가 남았거나 handoff 가 다시 들어옴"
+[[ "$(jq -c '.kept' "$M")" == '["ask-matt","gone","wizard"]' && "$(jq -r '.skills | length' "$M")" == 12 ]] || fail "매니페스트 kept 가 다름: $(jq -c '{kept, skills}' "$M")"
+grep -q 'kept 3 from an earlier install' <<<"$out" && grep -q 'kept    gone (no longer in upstream' <<<"$out" && grep -q 'removed setup-matt-pocock-skills (superseded' <<<"$out" || fail "kept 로그 없음: $out"
+sync_run >/dev/null || fail "kept 상태에서 재동기화 실패"
+[[ "$(jq -c '.kept' "$M")" == '["ask-matt","gone","wizard"]' ]] || fail "재동기화가 kept 를 잃음"
+out="$(sync_run --prune)" || fail "--prune 실패: $out"
+for sk in wizard ask-matt gone; do [[ ! -e "$W/.claude/skills/$sk" ]] || fail "--prune 뒤에도 $sk 가 남음"; done
+[[ "$(jq -c '.kept' "$M")" == '[]' && "$(jq -r '.skills | length' "$M")" == 9 ]] || fail "--prune 뒤 매니페스트가 다름: $(jq -c '{kept, skills}' "$M")"
+grep -q 'removed wizard (--prune)' <<<"$out" || fail "--prune 제거 로그 없음"
+echo "ok  스킬 동기화(가짜 upstream)"
+
+# 충돌 검사(--check): 가짜 HOME 으로 다섯 경우. 종료 0 없음 · 1 경고 · 3 차단
+K="$T/check"; mkdir -p "$K/.claude"; git -C "$K" init -q -b main; H="$T/home"; mkdir -p "$H/.claude"
+chk() { (cd "$K" && HOME="$H" CLAUDE_CONFIG_DIR="$H/.claude" bash "$SYNC" --check "$@" 2>&1); }
+chk >/dev/null && echo "ok  --check 깨끗" || fail "깨끗한 저장소에서 --check 가 0 이 아님"
+mkdir -p "$H/.claude/skills/tdd"; echo x > "$H/.claude/skills/tdd/SKILL.md"
+rc=0; out="$(chk)" || rc=$?; [[ $rc -eq 1 ]] && grep -q 'global' <<<"$out" && grep -q '~/.claude/skills/tdd' <<<"$out" || fail "글로벌 스킬 경고(1) 아님: rc=$rc $out"
+mkdir -p "$K/.claude/skills/code-review"; echo x > "$K/.claude/skills/code-review/SKILL.md"
+rc=0; out="$(chk)" || rc=$?; [[ $rc -eq 1 ]] && grep -q 'builtin-shadow' <<<"$out" || fail "code-review 디렉터리 경고 아님: $out"
+printf '{"enabledPlugins":{"mattpocock-skills@mattpocock":true}}\n' > "$K/.claude/settings.json"
+rc=0; out="$(chk)" || rc=$?; grep -q 'plugin mattpocock-skills@mattpocock is enabled' <<<"$out" || fail "플러그인 경고 없음: $out"
+printf '{"enabledPlugins":{"mattpocock-skills@mattpocock":false}}\n' > "$K/.claude/settings.local.json"
+rc=0; out="$(chk)" || rc=$?; grep -q 'plugin mattpocock' <<<"$out" && fail "local 의 false 가 project 의 true 를 덮어야 한다"
+rm "$K/.claude/settings.local.json"
+printf '{"version":1,"skills":{"tdd":{"source":"mattpocock/skills","sourceType":"github"}}}\n' > "$K/skills-lock.json"
+rc=0; out="$(chk --json)" || rc=$?; [[ $rc -eq 3 ]] || fail "skills-lock.json 이 차단(3)이 아님: rc=$rc"
+jq -e 'type == "array" and (map(.kind) | index("skills-cli") != null) and (map(.kind) | index("plugin") != null) and (map(.kind) | index("global") != null) and (map(.kind) | index("builtin-shadow") != null)' <<<"$out" >/dev/null || fail "--json 결과가 네 종류를 담지 않음: $out"
+jq -e '.[] | select(.kind == "plugin") | .fix | test("claude plugin disable mattpocock-skills@mattpocock --scope project")' <<<"$out" >/dev/null || fail "플러그인 해결 명령 없음"
+rm "$K/skills-lock.json"; mkdir -p "$K/.agents/skills/tdd"; ln -s ../../.agents/skills/tdd "$K/.claude/skills/tdd"
+rc=0; out="$(chk)" || rc=$?; [[ $rc -eq 3 ]] && grep -q 'symbolic link' <<<"$out" || fail "심볼릭 링크가 차단(3)이 아님: $out"
+echo "ok  --check 다섯 경우·종료 코드·--json"
+
+# 차단 충돌이면 install.sh 와 npx 껍질은 파일을 놓기 전에 멈춘다. --no-skills 면 진행한다
+B="$T/blocked"; mkdir -p "$B"; git -C "$B" init -q -b main; git -C "$B" commit -q --allow-empty -m init
+printf '{"version":1,"skills":{"tdd":{"source":"mattpocock/skills"}}}\n' > "$B/skills-lock.json"
+(cd "$B" && HOME="$T/emptyhome" CLAUDE_CONFIG_DIR="$T/emptyhome/.claude" KIT_DIR="$KIT" bash "$KIT/install.sh" --no-github --no-git-credential --no-orca >/dev/null 2>&1) && fail "차단 충돌에서 install.sh 가 멈추지 않음"
+[[ ! -e "$B/scripts/ticket-loop.sh" ]] || fail "차단 충돌인데 파일을 놓음"
+(cd "$B" && HOME="$T/emptyhome" CLAUDE_CONFIG_DIR="$T/emptyhome/.claude" node "$KIT/bin/ticket-loop-kit.js" init --yes --no-github --no-git-credential --no-orca >/dev/null 2>&1) && fail "차단 충돌에서 npx 껍질이 멈추지 않음"
+[[ ! -e "$B/scripts/ticket-loop.sh" ]] || fail "npx 껍질이 차단 충돌인데 파일을 놓음"
+(cd "$B" && HOME="$T/emptyhome" CLAUDE_CONFIG_DIR="$T/emptyhome/.claude" node "$KIT/bin/ticket-loop-kit.js" init --yes --no-skills --no-github --no-git-credential --no-orca >/dev/null 2>&1) || fail "--no-skills 로는 진행해야 한다"
+[[ -x "$B/scripts/ticket-loop.sh" ]] || fail "--no-skills 설치가 파일을 놓지 않음"
+echo "ok  차단 충돌에서 설치 중단"
 
 (cd "$T" && bash scripts/ticket-loop.sh --help >/dev/null) || fail "ticket-loop.sh --help"
 echo "ok  ticket-loop.sh --help"
@@ -149,12 +239,13 @@ esac
 SH
 chmod +x "$S/gh"
 sed -n '/^close_spec_if_done() {/,/^}/p' "$KIT/files/scripts/ticket-loop.sh" > "$S/fn.sh"
-grep -q 'gh issue close' "$S/fn.sh" || fail "close_spec_if_done 을 찾지 못함"
+sed -n '/^suggest_retro() {/,/^}/p' "$KIT/files/scripts/ticket-loop.sh" >> "$S/fn.sh"
+grep -q 'gh issue close' "$S/fn.sh" && grep -q '/retro' "$S/fn.sh" || fail "close_spec_if_done·suggest_retro 를 찾지 못함"
 spec_case() {  # $1 하위 이슈 JSON, $2 기대(closed|kept)
   local out
   printf '%s' "$1" > "$S/subs.json"; : > "$S/gh.log"
-  out="$(cd "$S" && PATH="$S:$PATH" GH_LOG="$S/gh.log" SUBS="$S/subs.json" OWNER_REPO=o/r bash -c 'set -euo pipefail; log() { echo "$*"; }; source fn.sh; close_spec_if_done 40')" || fail "close_spec_if_done 실패($2)"
-  if [[ "$2" == closed ]]; then grep -q '^issue close 40 ' "$S/gh.log" && grep -q '스펙 #40: 하위 이슈 2건 모두 닫힘' <<<"$out" || fail "모두 닫힌 스펙을 닫지 않음"
+  out="$(cd "$S" && PATH="$S:$PATH" GH_LOG="$S/gh.log" SUBS="$S/subs.json" OWNER_REPO=o/r bash -c 'set -euo pipefail; log() { echo "$*"; }; source fn.sh; close_spec_if_done 40; echo "CLOSED=${CLOSED_SPECS:-}"')" || fail "close_spec_if_done 실패($2)"
+  if [[ "$2" == closed ]]; then grep -q '^issue close 40 ' "$S/gh.log" && grep -q '스펙 #40: 하위 이슈 2건 모두 닫힘' <<<"$out" && grep -q '^CLOSED= 40$' <<<"$out" || fail "모두 닫힌 스펙을 닫지 않았거나 CLOSED_SPECS 에 적지 않음: $out"
   else ! grep -q '^issue close' "$S/gh.log" || fail "닫으면 안 되는 스펙($2)을 닫음"; fi
 }
 spec_case '[{"number":41,"state":"closed"},{"number":42,"state":"closed"}]' closed
@@ -163,6 +254,23 @@ spec_case '[]' kept
 (cd "$S" && PATH="$S:$PATH" GH_LOG="$S/gh.log" SUBS="$S/subs.json" bash -c 'set -euo pipefail; source fn.sh; log() { :; }; close_spec_if_done ""; close_spec_if_done 0') || fail "빈 스펙 번호에서 실패"
 grep -c 'close_spec_if_done "' "$KIT/files/scripts/ticket-loop.sh" | grep -qx 3 || fail "close_spec_if_done 호출이 세 곳(티켓 뒤·티켓 없음·정상 종료)이 아니다"
 echo "ok  스펙 이슈 자동 닫기"
+
+# 회고 안내: 끝난 스펙이 있을 때만, 권고 문구로, 리포트가 있으면 경로·없으면 뽑는 방법, retro 스킬이 없으면 그 사실 — 아무것도 실행하지 않는다
+mkdir -p "$S/reports" "$S/.claude/skills/retro"; : > "$S/reports/spec-40.html"
+retro_case() {  # $1 CLOSED_SPECS, $2 REPORT_DIR, $3 ROOT → 출력
+  (cd "$S" && CLOSED_SPECS="$1" REPORT_DIR="$2" ROOT="$3" LOG_FILE=".ticket-loop/loop-0101.log" bash -c 'set -euo pipefail; log() { echo "$*"; }; source fn.sh; suggest_retro')
+}
+out="$(retro_case " 40" "reports" "$S")" || fail "suggest_retro 실패"
+grep -q '^스펙 #40 완료. 원하면 /retro로' <<<"$out" && grep -q '리포트 reports/spec-40.html' <<<"$out" && grep -q 'loop-0101.log' <<<"$out" || fail "회고 안내 문구가 다름: $out"
+! grep -q -E '해야|반드시|필수' <<<"$out" || fail "회고 안내가 강제 어조: $out"
+out="$(retro_case " 40 41" "reports" "$S")" || fail "suggest_retro(둘) 실패"
+[[ "$(grep -c '^스펙 #' <<<"$out")" == 2 ]] && grep -q 'ticket-loop.sh --parent 41 로 뽑을 수 있다' <<<"$out" || fail "리포트 없는 스펙 안내가 다름: $out"
+out="$(retro_case " 40" "reports" "$T/nowhere")" || fail "suggest_retro(스킬 없음) 실패"
+grep -q '/retro(이 저장소에는 아직 없다' <<<"$out" || fail "retro 스킬이 없을 때 안내가 다름: $out"
+out="$(retro_case "" "reports" "$S")" || fail "suggest_retro(빈) 실패"
+[[ -z "$out" ]] || fail "끝난 스펙이 없는데 회고 안내가 나옴: $out"
+grep -c -E '^suggest_retro$|; suggest_retro; ' "$KIT/files/scripts/ticket-loop.sh" | grep -qx 2 || fail "suggest_retro 호출이 두 곳(티켓 없음·정상 종료)이 아니다"
+echo "ok  회고 안내"
 
 # 템플릿 자리표: 무거운 테스트는 스위트와 파일 하나 실행 명령 두 자리표로, 설정 스킬의 결정 표가 둘 다 묻는다
 for f in .ticket-loop/worker-rules.md .claude/skills/implement/SKILL.md .claude/skills/pr/SKILL.md; do

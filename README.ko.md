@@ -22,19 +22,18 @@ bash <(gh api repos/iwishash/ticket-loop-kit/contents/install.sh -H "Accept: app
 
 그다음 Claude Code에서:
 
-1. `/setup-matt-pocock-skills` — `docs/agents/issue-tracker.md`가 아직 없을 때
-2. `/setup-ticket-loop` — 검증 명령·`orca.yaml`·CI·워커 규칙·`implement`를 이 저장소에 맞춰 채우고 PR을 연다
+1. `/setup-ticket-loop` — 검증 명령·`orca.yaml`·CI·워커 규칙·`implement`를 이 저장소에 맞춰 채우고 PR을 연다
 
 마지막으로 Orca 앱에서 Settings → Projects → <저장소> → Worktree Hooks → Advanced: Command Source **"orca.yaml only"**, **"Wait for setup to complete before starting agent"** 켜기. PR을 병합한 뒤 `bash scripts/ticket-loop.sh --dry-run` → `--max 1`.
 
-필요한 도구: `git`, `gh`(로그인), `jq`, `rsync`, Orca 앱과 CLI, Claude Code.
+필요한 도구: `git`, `gh`(로그인), `jq`, Orca 앱과 CLI, Claude Code.
 
 ## 누가 무엇을 하나
 
 | 주체 | 하는 일 |
 |---|---|
 | `npx … init` (`bin/ticket-loop-kit.js`) — 질문과 껍질 | 백엔드 선택, `.ticket-loop/loop.env`의 `BACKEND=` 줄(없을 때만), 설치 단계 켜고 끄기, 도구 점검, 설치한 키트 커밋을 `install.sh`에 넘김 |
-| `install.sh` — 어느 저장소에서나 같은 부분 | 루프·진단·스킬 동기화 스크립트와 `setup-ticket-loop` 스킬 설치, mattpocock 스킬 벤더링(`code-review` → `ticket-review`), `.gitignore`·`deny` 병합, 라벨 6개, git 자격 증명(gh), Orca 등록, `.ticket-loop/kit.json` |
+| `install.sh` — 어느 저장소에서나 같은 부분 | 스킬 충돌 검사(아래), 루프·진단·스킬 동기화 스크립트와 `setup-ticket-loop` 스킬 설치, mattpocock 스킬 벤더링(`tdd`·`ticket-review`, 선택하면 기획 묶음), `docs/agents/issue-tracker.md` 템플릿, `.gitignore`·`deny` 병합, 라벨 6개, git 자격 증명(gh), Orca 등록, `.ticket-loop/kit.json` |
 | `/setup-ticket-loop` — 저장소를 읽어야 정하는 부분 | `implement`·`pr`·`worker-rules.md`의 `__PLACEHOLDER__` 채우기(검증 명령, 무거운 스위트와 그 파일 하나를 돌리는 명령 — 워커는 자기가 손댄 파일만 PR 직전 1회, 전체는 루프가 병합 뒤), `verify` 명령, `orca.yaml`, CI, `.ticket-loop/loop.env`, `docs/agents/ticket-loop.md`, `CLAUDE.md` 포인터 → PR |
 | 사람 | Orca 앱 설정(Command Source "orca.yaml only"), PR 병합, `--max 1` 시험 지켜보기 |
 
@@ -44,7 +43,7 @@ bash <(gh api repos/iwishash/ticket-loop-kit/contents/install.sh -H "Accept: app
 
 티켓을 병합해 닫은 뒤와 `--parent` 실행이 끝날 때, 루프는 그 스펙 이슈의 하위 이슈 목록을 세어 모두 닫혔으면 스펙 이슈도 코멘트와 함께 닫는다(요약 값이 아니라 목록을 센다). 하위 이슈가 하나라도 열려 있으면 그대로 둔다.
 
-루프가 남기는 것은 세 가지다. 진행 로그 `.ticket-loop/loop-MMDD.log`(사람이 읽는다), 티켓별 기록 `.ticket-loop/tickets.jsonl`(기계별, 커밋하지 않는다), 그리고 `--parent <스펙>` 실행이 정상 종료할 때 쓰는 스펙 리포트 `docs/loop-reports/spec-<N>.html`(티켓별 상태·결과 브리프·경과 시간·모델 한 표, 사람이 보고 PR로 커밋한다). `POST_MERGE_PORT`를 정한 저장소에서는 포트가 차 있을 때 점유 프로세스를 적고 30초마다 다시 보며 기다린다. 시작할 때 이미 차 있으면 "주의" 한 줄을 적는다.
+루프가 남기는 것은 세 가지다. 진행 로그 `.ticket-loop/loop-MMDD.log`(사람이 읽는다), 티켓별 기록 `.ticket-loop/tickets.jsonl`(기계별, 커밋하지 않는다), 그리고 `--parent <스펙>` 실행이 정상 종료할 때 쓰는 스펙 리포트 `docs/loop-reports/spec-<N>.html`(티켓별 상태·결과 브리프·경과 시간·모델 한 표, 사람이 보고 PR로 커밋한다). 이번 실행에서 끝난 스펙이 있으면 마지막에 `/retro`로 돌아보기를 권하는 안내 한 줄과 읽을 자료를 남긴다. 권고일 뿐 회고를 자동으로 돌리지는 않는다. `POST_MERGE_PORT`를 정한 저장소에서는 포트가 차 있을 때 점유 프로세스를 적고 30초마다 다시 보며 기다린다. 시작할 때 이미 차 있으면 "주의" 한 줄을 적는다.
 
 ## 백엔드
 
@@ -72,7 +71,8 @@ bash <(gh api repos/iwishash/ticket-loop-kit/contents/install.sh -H "Accept: app
 | `templates/.claude/skills/implement/`, `pr/` | 같은 경로 | 없을 때만(이후 프로젝트 소유) |
 | `templates/.ticket-loop/worker-rules.md` | 같은 경로 | 없을 때만 |
 | `templates/docs/loop-reports/README.md` | 같은 경로 | 없을 때만 |
-| — | `.claude/skills/<mattpocock 스킬>` | `sync-mattpocock-skills.sh`가 벤더링 |
+| `templates/docs/agents/issue-tracker.md` | 같은 경로 | 없을 때만 — GitHub 트래커 관례. 벤더링된 스킬과 `implement`가 읽는다 |
+| — | `.claude/skills/tdd`, `ticket-review` (+ 기획 묶음 7개) | `sync-mattpocock-skills.sh`가 벤더링 |
 | — | `.gitignore`(`/.ticket-loop/*.log`, `/.ticket-loop/*.jsonl`), `.claude/settings.json` `deny` | 줄·항목 병합 |
 | — | GitHub 라벨 6개, 저장소 git 자격 증명(gh), Orca 등록 | 없으면 만듦 |
 | — | `.ticket-loop/kit.json` | 설치한 키트 커밋 기록 |
@@ -83,7 +83,30 @@ bash <(gh api repos/iwishash/ticket-loop-kit/contents/install.sh -H "Accept: app
 
 같은 설치 명령을 다시 실행한다. 키트 소유 파일과 mattpocock 스킬만 바뀌고, 프로젝트 소유 파일(`loop.env` 포함)은 그대로다. 0.3 이하가 설치한 저장소는 설치기가 `.agent-loop/`(0.2 이하는 `.orca-loop/`)를 `.ticket-loop/`로 `git mv`하고(로그·기록 포함), 옛 스킬 `setup-agent-loop`·`setup-orca-loop`와 `.gitignore`의 옛 줄을 지운다. 그 뒤 옛 경로를 아직 가리키는 파일(`docs/agents/ticket-loop.md`, `CLAUDE.md`, `loop.env`의 `REPORT_DIR` 등)이 있으면 목록을 보여 주니 손으로 고쳐 같은 PR에 넣는다. 특정 버전으로 고정하려면 `npx github:iwishash/ticket-loop-kit#v0.5.1 init`(bash 경로는 `--ref v0.3.0`). 바뀐 것은 `git diff`로 보고 PR로 올린다. npx는 한 번 받은 저장소를 캐시하므로, 같은 ref로 다시 받으려면 `npx --yes --prefer-online` 또는 `npm cache clean --force`.
 
-옵션: `--yes`, `--backend <orca|cmux>`, `--no-skills`, `--no-github`, `--no-git-credential`, `--no-orca` (`npx github:iwishash/ticket-loop-kit --help`). bash 경로는 `--ref <ref>`도 받는다(`bash install.sh --help`).
+옵션: `--yes`, `--backend <orca|cmux>`, `--no-skills`, `--workflow-skills`/`--no-workflow-skills`, `--force-skills`, `--prune-skills`, `--no-github`, `--no-git-credential`, `--no-orca` (`npx github:iwishash/ticket-loop-kit --help`). bash 경로는 `--ref <ref>`도 받는다(`bash install.sh --help`).
+
+## mattpocock 스킬: 무엇을 들이고, 무엇을 검사하나
+
+루프 스크립트 자체는 스킬에 기대지 않는다. 워커에게 `/implement N`을 보낼 뿐이고, 그 `implement`(프로젝트 소유 템플릿)가 Skill 도구로 `tdd`와 `ticket-review`를 부른다. 그래서 키트는 upstream [mattpocock/skills](https://github.com/mattpocock/skills)(MIT) 중 두 묶음만 `.claude/skills/`에 파일로 들인다(벤더링). 플러그인이 아니라 파일인 이유는 워커 워크트리와 클라우드 세션이 clone만으로 같은 버전을 쓰고, 무인 루프 도중 자동 업데이트로 동작이 바뀌지 않게 하려는 것이다.
+
+| 묶음 | 스킬 | 기본 |
+|---|---|---|
+| core | `tdd`, `code-review` → `ticket-review`(내장 `/code-review`와 이름이 겹쳐서) | 항상 |
+| workflow | `grill-with-docs`, `to-spec`, `to-tickets`, `retro`와 그것들이 부르는 `grilling`, `domain-modeling`, `writing-for-agents` | 꺼짐. `--workflow-skills` 또는 대화형 체크리스트. 지난 설치가 들였으면 유지 |
+| kept | 지난 설치(0.5 이하는 26개 전부)가 두 묶음 밖에 놓은 것. 예: `implement-spec`, `grill-me`, `triage` | 유지하고 함께 동기화한다. 새 설치에는 들이지 않는다. `--prune-skills`(또는 체크리스트 항목)로만 지운다 |
+
+나머지 upstream 스킬(`ask-matt`, `wizard`, `teach` …)은 새 설치에는 들이지 않는다. 쓰고 싶으면 플러그인(`claude plugin install mattpocock-skills@claude-plugins-official`)으로 따로 설치한다. 이미 들어 있는 저장소에서는 그대로 둔다 — 키트가 넣은 것이니 사용자가 쓰고 있을 수 있고, 갱신도 키트가 같은 upstream 커밋으로 계속 한다. 매니페스트(`.claude/skills/.mattpocock.json`)의 `kept`에 목록이 남는다. 손으로 지운 스킬은 다시 들이지 않고, upstream에서 사라진 스킬은 그대로 둔다. 예외는 `setup-matt-pocock-skills` 하나로, 이 키트가 그 역할을 대신하므로 지운다. `/setup-matt-pocock-skills`는 더는 필요 없다 — 그 스킬이 만들던 `docs/agents/issue-tracker.md`는 키트 템플릿이 놓고, `CLAUDE.md`의 `## Agent skills` 블록은 `/setup-ticket-loop`가 쓴다.
+
+설치기는 바꾸기 전에 같은 스킬이 다른 경로로 이미 있는지 본다(Claude Code는 중복을 경고하지 않는다. `bash scripts/sync-mattpocock-skills.sh --check`로 따로 돌릴 수 있다).
+
+| 발견 | 무슨 일이 생기나 | 처리 |
+|---|---|---|
+| `mattpocock-skills` 플러그인이 이 저장소에 켜져 있음(`enabledPlugins`, user < project < local) | 둘 다 로드돼 `/tdd`와 `/mattpocock-skills:tdd`가 함께 뜬다 | 경고. 대화형이면 "이 저장소에서 플러그인 끄기"를 체크리스트에 보여 주고, 고르면 `claude plugin disable … --scope project` |
+| `~/.claude/skills/<이름>`에 같은 스킬 | 개인 스킬이 프로젝트 스킬을 가려, 커밋한 버전이 아니라 그 PC의 사본이 돈다 | 경고 + 이름 목록. 지우거나 감수 |
+| `npx skills add`가 둔 `skills-lock.json`이나 `.claude/skills/*` 심볼릭 링크 | 두 도구가 같은 디렉터리를 번갈아 덮어쓴다 | **설치 중단**. `npx skills remove`로 걷어낸 뒤 재실행(`--force-skills`로 강행, `--no-skills`로 건너뜀) |
+| `.claude/skills/code-review` 디렉터리 | 프로젝트 스킬이 내장 `/code-review`를 대체한다. 키트는 `ticket-review`를 쓴다 | 경고 + `rm -rf` 안내 |
+| 매니페스트에 없는 같은 이름 디렉터리, `.claude/commands/<이름>.md` | 덮어쓴다 / 스킬이 우선하지만 둘이 남는다 | 알림 |
+| 지난 설치가 두 묶음 밖에 들인 스킬 | 유지·동기화 | 알림 + 이름 목록. `--prune-skills`로 지운다 |
 
 ## 여러 컴퓨터에서 같은 저장소를 돌릴 때
 

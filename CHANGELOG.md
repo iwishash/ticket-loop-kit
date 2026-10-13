@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.6.0 — 2026-10-13
+
+mattpocock 스킬을 "26개 전부 기본 설치"에서 "루프가 부르는 것만"으로 줄이고, 설치 전에 같은 스킬의 다른 설치를 검사한다. 질문은 "GitHub 이슈 구현 자동화 키트가 설치자에게 다른 사람의 방법론 스킬 26개를 강요하는 게 맞나"였다. 조사 결과 루프 스크립트는 스킬에 기대지 않고, `implement` 템플릿이 `tdd`와 `ticket-review` 둘만 Skill 도구로 부른다.
+
+- `sync-mattpocock-skills.sh`: upstream `plugin.json` 전체 대신 두 묶음만 들인다. core(`tdd`, `code-review` → `ticket-review`)는 항상, workflow(`grill-with-docs`·`to-spec`·`to-tickets`·`retro`와 그것들이 부르는 `grilling`·`domain-modeling`·`writing-for-agents`)는 `--workflow`일 때만. 플래그가 없으면 지난 매니페스트의 선택을 따른다(0.5 이하 설치본은 `to-tickets`가 있었으니 유지). 지난 설치가 두 묶음 밖에 들인 스킬(0.5 이하의 26개 중 나머지 17개)은 **지우지 않고** `kept`로 이어 가며 같은 upstream 커밋으로 계속 동기화한다 — 키트가 넣은 것이니 사용자가 쓰고 있을 수 있다(`implement-spec`, `grill-me` 등). `--prune`을 줄 때만 지운다. 손으로 지운 것은 다시 들이지 않고, upstream에서 사라진 것은 그대로 둔다. `setup-matt-pocock-skills`만 역할이 대체됐으니 지운다. 본문의 `/setup-matt-pocock-skills` 안내는 `/setup-ticket-loop`로 바꾼다. `rsync` 대신 `rm -rf` + `cp -R`이라 `rsync`가 더는 필요 없다. `--ref <ref>`(옛 위치 인자도 받음), `--check [--json]`, `--force`, `--no-check`, `--prune`. 매니페스트에 `sets`·`workflow`·`kept`가 추가됐다. 테스트용 `MATTPOCOCK_UPSTREAM`
+- 충돌 사전 검사(`--check`): Claude Code 문서의 이름 충돌 규칙을 근거로 다섯 가지를 본다 — 플러그인이 이 저장소에 켜짐(`enabledPlugins`를 user < project < local 순으로 병합, 둘 다 로드됨), `~/.claude/skills/<이름>`(개인 스킬이 프로젝트 스킬을 가림), `npx skills`의 `skills-lock.json`·심볼릭 링크(두 도구가 같은 디렉터리를 덮어씀 → 차단), `.claude/skills/code-review`(내장 `/code-review`를 대체), 매니페스트에 없는 같은 이름·`.claude/commands/`. 종료 코드 0 없음 · 1 경고 · 3 차단. Claude Code 자체는 중복을 경고하지 않는다
+- `install.sh`: 아무것도 바꾸기 전에 `--check`를 돌려 차단이면 멈춘다(`--force-skills`로 강행, `--no-skills`로 건너뜀). `--workflow-skills`/`--no-workflow-skills`, `--prune-skills`. 템플릿 `docs/agents/issue-tracker.md`(upstream `issue-tracker-github.md` + 티켓 루프 관례, 없을 때만). Next steps에서 `/setup-matt-pocock-skills` 단계 제거
+- `bin/ticket-loop-kit.js`: 설치 단계 체크리스트 전에 충돌 목록을 보여 주고, 항목이 "Vendor tdd + ticket-review"와 "Also vendor the planning skills"(지난 설치의 선택을 기본값으로)로 나뉘었다. 지난 설치가 두 묶음 밖에 들인 스킬이 있으면 "Remove the other skills an earlier install vendored" 항목이 생긴다(기본 꺼짐 = 유지). 플러그인이 켜져 있으면 "Disable plugin … for this repo" 항목이 생기고, 고르면 설치 뒤 `claude plugin disable <id> --scope project`를 돈다(`.claude/settings.json`에 남아 팀이 같이 받는다). `rsync` 경고 제거
+- `setup-ticket-loop`: 전제에서 `/setup-matt-pocock-skills`를 뺐다. `docs/agents/issue-tracker.md`는 설치기 템플릿이 놓고, 없으면 설치 명령 재실행을 안내한다. `tdd`·`ticket-review` 존재 확인. 7단계가 `CLAUDE.md`의 `## Agent skills` 블록에 `### Issue tracker` 소제목을 보장한다(벤더링된 스킬이 트래커 설정을 그 블록으로 받는다)
+- README(영·한)에 「mattpocock 스킬: 무엇을 들이고, 무엇을 검사하나」 절. 필요한 도구에서 `rsync` 제거. 가이드북 3장 표·4장 5·6단계·부록 E. PDF 재빌드
+- `tests/smoke.sh`: 가짜 upstream 저장소로 동기화를 네트워크 없이 검사한다(core만 → 2개, `--workflow` → 9개, 자동 유지, `--no-workflow` → 7개 제거, 0.5 매니페스트에서 두 묶음 밖 스킬 유지·동기화(`kept`)·upstream에 없는 것 그대로·손으로 지운 것 복구 안 함·`setup-matt-pocock-skills` 제거·`--prune`으로 삭제, 이름 바꾸기·본문 치환, 프로젝트 소유 `implement` 유지). `--check`는 가짜 `HOME`으로 다섯 경우와 종료 코드, local이 project를 덮는 플러그인 판정, `--json`. `install.sh`와 npx 껍질이 차단 충돌에서 파일을 놓지 않고 멈춤. `issue-tracker.md` 템플릿 배치·유지
+- `ticket-loop.sh`: 이번 실행에서 끝난 스펙(하위 이슈가 모두 닫혀 루프가 닫은 것)이 있으면 끝날 때 회고를 권하는 안내 한 줄을 남긴다 — `/retro`가 읽을 자료(로그, 스펙 리포트 또는 뽑는 방법, 병합된 PR 본문의 "남은 판단 사항"·"검증하지 못한 것")와, 저장소에 `retro` 스킬이 없으면 그 사실. 종료 알림에도 한 줄 붙는다. 권고일 뿐 회고를 자동으로 돌리지 않는다. `/retro`는 사람이 후보를 보고 고르는 대화형 스킬이고, 환경 수정은 PR로 가는 것이 맞고, 워커 세션 기록은 다른 경로·머신에 있을 수 있어서다
+- 이미 설치된 저장소: 재설치해도 스킬이 사라지지 않는다. workflow 묶음과 두 묶음 밖의 17개가 모두 유지·갱신되고 `setup-matt-pocock-skills`만 지워진다. 덜어내고 싶으면 `--prune-skills`. `docs/agents/issue-tracker.md`가 이미 있으면(`/setup-matt-pocock-skills`가 만든 것) 그대로 둔다. 바뀐 것은 `git diff --stat .claude/skills`로 보고 PR에 넣는다
+
 ## 0.5.1 — 2026-10-13
 
 - README를 영어로 바꿨다. 한국어 원문은 `README.ko.md`로 남긴다(같은 내용, 서로 링크)
