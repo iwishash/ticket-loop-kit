@@ -651,16 +651,22 @@ record_ticket() {
 
 # 스펙 리포트 HTML — jq 하나로 그린다(의존 도구를 늘리지 않는다). 표: 이슈·티켓·상태·결과 브리프(PR 제목, 본문의
 # 인수 조건 체크 수, 중단 사유, CI·수리·병합 뒤 검증)·경과 시간·모델·마친 시각. 문자열은 전부 @html로 이스케이프한다.
+# 리포트의 고정 문구는 영어, GitHub에서 가져온 값(이슈·PR 제목, 본문)과 기록의 중단 사유는 그대로(한국어면 한국어) 둔다.
+# 기록의 post_merge("통과 N초"·"실패 N초"·"건너뜀")는 표시할 때만 영어로 바꾼다(기록 파일은 그대로).
 read -r -d '' REPORT_JQ <<'JQ' || true
-def dur: if . == null then "—" elif . >= 3600 then "\(. / 3600 | floor)시간 \((. % 3600) / 60 | floor)분"
-         elif . >= 60 then "\(. / 60 | floor)분" else "\(. | floor)초" end;
+def dur: if . == null then "—" elif . >= 3600 then "\(. / 3600 | floor)h \((. % 3600) / 60 | floor)m"
+         elif . >= 60 then "\(. / 60 | floor)m" else "\(. | floor)s" end;
 def epoch: if . == null or . == "" then null else (sub("\\.[0-9]+Z$"; "Z") | fromdate) end;
 def when: epoch | if . == null then "—" else strflocaltime("%Y-%m-%d %H:%M") end;
 def order: (.title | capture("^T(?<n>[0-9]+)") | .n | tonumber) // 999999;
 # jq(Oniguruma Perl 문법)의 ^는 줄 머리가 아니라 문자열 머리다 — 앞에 \n을 붙여 줄 머리를 \n으로 잡는다
 def checks: ("\n" + .) | {checked: ([scan("\n[ \t]*[-*] \\[x\\]"; "i")] | length), total: ([scan("\n[ \t]*[-*] \\[[ x]\\]"; "i")] | length)};
-def badge: {merged: ["병합", "ok"], "closed-without-pr": ["PR 없이 닫힘", "muted"], "pr-open": ["PR 열림", "warn"],
-            "in-progress": ["진행 중", "warn"], stopped: ["중단", "bad"], pending: ["미착수", "muted"]}[.];
+def badge: {merged: ["Merged", "ok"], "closed-without-pr": ["Closed without PR", "muted"], "pr-open": ["PR open", "warn"],
+            "in-progress": ["In progress", "warn"], stopped: ["Stopped", "bad"], pending: ["Not started", "muted"]}[.];
+# 기록의 post_merge 값을 표시용 영어로. 모르는 값은 그대로.
+def post: if . == "건너뜀" then "skipped"
+          else (capture("^(?<k>통과|실패) (?<s>[0-9]+)초$") // null) as $m
+          | if $m == null then . else "\(if $m.k == "통과" then "passed" else "failed" end) in \($m.s)s" end end;
 ($issues | sort_by(order, .number) | map(. as $i
   | ($recs | map(select(.issue == $i.number)) | sort_by(.finished)) as $rs | ($rs | last) as $r
   | ($prs | map(select(.headRefName | startswith($prefix + ($i.number | tostring) + "-")))
@@ -671,16 +677,16 @@ def badge: {merged: ["병합", "ok"], "closed-without-pr": ["PR 없이 닫힘", 
               elif ($i.assignees // 0) > 0 then "in-progress" else "pending" end),
      wall: (if $r.wall_sec != null then {sec: $r.wall_sec, src: "loop"}
             elif $pr.mergedAt != null then {sec: (($pr.mergedAt | epoch) - ($pr.createdAt | epoch)), src: "pr"} else null end),
-     model: ($r.model // "미기록")})) as $rows
+     model: ($r.model // "not recorded")})) as $rows
 | ($rows | map(select(.status == "merged")) | length) as $merged
 | ($rows | map(select(.issue.state == "closed")) | length) as $closed
 | ($rows | map(select(.wall.src == "loop") | .wall.sec) | add // 0) as $total
-| ($rows | map(.model) | map(select(. != "미기록")) | unique | join(", ")) as $models
-| "<!doctype html>\n<html lang=\"ko\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
-  + @html "<title>#\($spec.number) \($spec.title) — 루프 리포트</title>"
+| ($rows | map(.model) | map(select(. != "not recorded")) | unique | join(", ")) as $models
+| "<!doctype html>\n<html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
+  + @html "<title>#\($spec.number) \($spec.title) — Loop report</title>"
   + "<style>:root{--ink:#1c1f24;--muted:#5b6270;--line:#d9dde3;--soft:#f4f6f8;--bg:#fff;--accent:#2457c5;--ok:#1f7a4d;--ok-soft:#e6f4ec;--warn:#9a6700;--warn-soft:#fff6d6;--bad:#b4441c;--bad-soft:#fbeee8}"
   + "@media (prefers-color-scheme:dark){:root{--ink:#e6e8eb;--muted:#9aa3ad;--line:#3a4047;--soft:#22262b;--bg:#15181b;--accent:#7ea2ff;--ok:#5fcf8f;--ok-soft:#1c3327;--warn:#e3b341;--warn-soft:#3a3012;--bad:#ff8a65;--bad-soft:#3b2219}}"
-  + "*{box-sizing:border-box}body{margin:0;padding:24px 16px 48px;color:var(--ink);background:var(--bg);font-family:\"Apple SD Gothic Neo\",\"Noto Sans KR\",system-ui,sans-serif;font-size:14px;line-height:1.55}"
+  + "*{box-sizing:border-box}body{margin:0;padding:24px 16px 48px;color:var(--ink);background:var(--bg);font-family:system-ui,-apple-system,\"Segoe UI\",\"Apple SD Gothic Neo\",\"Noto Sans KR\",sans-serif;font-size:14px;line-height:1.55}"
   + "main{max-width:1200px;margin:0 auto}h1{font-size:22px;margin:0 0 4px}a{color:var(--accent);text-decoration:none}.kicker{color:var(--accent);font-weight:700;font-size:12px;letter-spacing:.06em}"
   + ".meta{color:var(--muted);font-size:13px;margin:0 0 18px}.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;margin:0 0 20px}"
   + ".kpi{background:var(--soft);border:1px solid var(--line);border-radius:8px;padding:10px 12px}.kpi .v{font-size:20px;font-weight:700}.kpi .l{color:var(--muted);font-size:12px}"
@@ -688,30 +694,30 @@ def badge: {merged: ["병합", "ok"], "closed-without-pr": ["PR 없이 닫힘", 
   + "td.nw{white-space:nowrap}.bits{margin-top:4px;color:var(--muted);font-size:12px}.reason{margin-top:4px;color:var(--bad);font-size:12px}.muted{color:var(--muted)}.small{font-size:12px}"
   + ".badge{display:inline-block;font-size:12px;font-weight:700;border-radius:10px;padding:0 8px;border:1px solid var(--line);white-space:nowrap}.badge.ok{color:var(--ok);background:var(--ok-soft)}"
   + ".badge.warn{color:var(--warn);background:var(--warn-soft)}.badge.bad{color:var(--bad);background:var(--bad-soft)}.badge.muted{color:var(--muted);background:var(--soft)}footer{margin-top:20px;color:var(--muted);font-size:12px}</style></head>"
-  + "<body><main><div class=\"kicker\">티켓 무인 루프 · 스펙 리포트</div>"
+  + "<body><main><div class=\"kicker\">Unattended ticket loop · Spec report</div>"
   + @html "<h1><a href=\"\($spec.url)\">#\($spec.number)</a> \($spec.title)</h1>"
-  + "<p class=\"meta\">스펙 " + (if ($rows | length) > 0 and $closed == ($rows | length) then "완료(하위 티켓 전부 닫힘)" else "진행 중(\($closed)/\($rows | length) 닫힘)" end)
-  + " · 생성 \($now) · 스펙 이슈 " + (if $spec.state == "CLOSED" then "닫힘" else "열림" end) + "</p>"
-  + "<div class=\"kpis\"><div class=\"kpi\"><div class=\"v\">\($rows | length)</div><div class=\"l\">티켓</div></div><div class=\"kpi\"><div class=\"v\">\($merged)</div><div class=\"l\">병합</div></div>"
-  + "<div class=\"kpi\"><div class=\"v\">\($total | dur)</div><div class=\"l\">루프 벽시계 합계(기록 있는 티켓)</div></div>"
-  + @html "<div class=\"kpi\"><div class=\"v\">\(if $models == "" then "미기록" else $models end)</div><div class=\"l\">사용 모델</div></div></div>"
-  + "<div class=\"wrap\"><table><thead><tr><th>이슈</th><th>티켓</th><th>상태</th><th>작업 결과 브리프</th><th>경과 시간</th><th>사용 모델</th><th>마친 시각</th></tr></thead><tbody>"
+  + "<p class=\"meta\">Spec " + (if ($rows | length) > 0 and $closed == ($rows | length) then "complete (all sub-tickets closed)" else "in progress (\($closed)/\($rows | length) closed)" end)
+  + " · generated \($now) · spec issue " + (if $spec.state == "CLOSED" then "closed" else "open" end) + "</p>"
+  + "<div class=\"kpis\"><div class=\"kpi\"><div class=\"v\">\($rows | length)</div><div class=\"l\">Tickets</div></div><div class=\"kpi\"><div class=\"v\">\($merged)</div><div class=\"l\">Merged</div></div>"
+  + "<div class=\"kpi\"><div class=\"v\">\($total | dur)</div><div class=\"l\">Total loop wall-clock (recorded tickets)</div></div>"
+  + @html "<div class=\"kpi\"><div class=\"v\">\(if $models == "" then "not recorded" else $models end)</div><div class=\"l\">Models used</div></div></div>"
+  + "<div class=\"wrap\"><table><thead><tr><th>Issue</th><th>Ticket</th><th>Status</th><th>Result brief</th><th>Elapsed</th><th>Model</th><th>Finished</th></tr></thead><tbody>"
   + ($rows | map(
       @html "<tr><td class=\"nw\"><a href=\"\(.issue.url)\">#\(.issue.number)</a></td><td>\(.issue.title)</td>"
       + "<td><span class=\"badge \(.status | badge | .[1])\">\(.status | badge | .[0])</span></td><td>"
       + (if .pr then @html "<div><a href=\"\(.pr.url)\">PR #\(.pr.number)</a> \(.pr.title)</div>"
-                      + ((.pr.body // "" | checks) | if .total > 0 then "<div>인수 조건 \(.checked)/\(.total)</div>" else "" end)
-         elif .rec == null then "<span class=\"muted\">기록 없음</span>" else "" end)
-      + (if .rec.result == "stopped" and .status != "merged" then @html "<div class=\"reason\">중단 사유: \(.rec.reason // "—")</div>" else "" end)
+                      + ((.pr.body // "" | checks) | if .total > 0 then "<div>Acceptance criteria \(.checked)/\(.total)</div>" else "" end)
+         elif .rec == null then "<span class=\"muted\">no record</span>" else "" end)
+      + (if .rec.result == "stopped" and .status != "merged" then @html "<div class=\"reason\">Stop reason: \(.rec.reason // "—")</div>" else "" end)
       + (if .rec then "<div class=\"bits\">" + ([
-            (if .rec.ci_sec == null then empty elif .rec.ci_sec < 0 then "CI 없음(CI 제외 경로)" else "CI \(.rec.ci_sec | dur)" end),
-            "수리 \(.rec.repairs // 0)회",
-            (if .rec.post_merge then @html "병합 뒤 검증 \(.rec.post_merge)" else empty end),
-            (if .attempts > 1 then "시도 \(.attempts)회" else empty end)] | join(" · ")) + "</div>" else "" end)
-      + "</td><td class=\"nw\">" + (if .wall == null then "—" else (.wall.sec | dur) + (if .wall.src == "pr" then "<div class=\"muted small\">PR 생성→병합 기준</div>" else "" end) end) + "</td>"
+            (if .rec.ci_sec == null then empty elif .rec.ci_sec < 0 then "no CI (path excluded from CI)" else "CI \(.rec.ci_sec | dur)" end),
+            "\(.rec.repairs // 0) repair\(if (.rec.repairs // 0) == 1 then "" else "s" end)",
+            (if .rec.post_merge then @html "post-merge check \(.rec.post_merge | post)" else empty end),
+            (if .attempts > 1 then "\(.attempts) attempts" else empty end)] | join(" · ")) + "</div>" else "" end)
+      + "</td><td class=\"nw\">" + (if .wall == null then "—" else (.wall.sec | dur) + (if .wall.src == "pr" then "<div class=\"muted small\">PR created→merged</div>" else "" end) end) + "</td>"
       + @html "<td class=\"nw\">\(.model)</td>"
       + "<td class=\"nw\">" + (if .rec then (.rec.finished | when) elif .pr.mergedAt then (.pr.mergedAt | when) else "—" end) + "</td></tr>") | join("\n"))
-  + "</tbody></table></div><footer>경과 시간은 루프가 워크트리를 만든 때부터 병합·정리를 마친 때까지의 벽시계다. 루프 기록이 없는 티켓은 PR 생성→병합 시간으로 대신한다.</footer></main></body></html>"
+  + "</tbody></table></div><footer>Elapsed is wall-clock time from when the loop created the worktree to when merge and cleanup finished. Tickets with no loop record use PR created→merged time instead.</footer></main></body></html>"
 JQ
 
 # --parent 실행이 정상 종료하면 스펙 리포트 HTML을 쓴다. 생성 실패는 루프 결과를 바꾸지 않는다(로그만).

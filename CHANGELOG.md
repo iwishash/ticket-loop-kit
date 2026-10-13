@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- README를 영어로 바꿨다. 한국어 원문은 `README.ko.md`로 남긴다(같은 내용, 서로 링크)
+- 스펙 리포트 HTML의 고정 문구(제목·열 이름·상태 배지·KPI 라벨·시간 단위·바닥글)를 영어로 바꿨다(`lang="en"`). GitHub에서 가져온 이슈·PR 제목과 본문, 기록의 중단 사유는 원문 그대로다. 기록 파일 `tickets.jsonl`의 값은 바뀌지 않고, `post_merge`("통과 N초"·"실패 N초"·"건너뜀")만 표시할 때 영어로 바꾼다. `tests/smoke.sh`의 기대 문구, 템플릿 `docs/loop-reports/README.md`, 가이드북 7장 9단계 표·부록 B, 부록 D 재생성
+
 ## 0.5.0 — 2026-10-13
 
 실제 작업 프로젝트에서 루프를 돌리고 `/retro`를 한 결과 두 가지를 들여왔다.

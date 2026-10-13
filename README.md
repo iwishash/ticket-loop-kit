@@ -1,127 +1,127 @@
 # ticket-loop-kit
 
-GitHub 이슈 티켓을 워크트리에서 한 건씩 무인으로 구현·검증·병합하는 **티켓 루프**를 다른 저장소에 설치하고 업데이트하는 키트. 워크트리와 에이전트 터미널은 백엔드(Orca 또는 cmux)가 맡는다.
-원리와 운영은 [「티켓 무인 루프 가이드북」](docs/ticket-loop-guide.pdf)에 있다.
+A kit that installs and updates the **ticket loop** in other repositories: an unattended loop that implements, verifies, and merges GitHub issue tickets one at a time, each in its own worktree. The worktrees and agent terminals are handled by a backend (Orca or cmux).
+The principles and operating guide are in the [Unattended Ticket Loop Guidebook](docs/ticket-loop-guide.pdf) (Korean). The original Korean version of this README is [README.ko.md](README.ko.md).
 
-## 설치
+## Install
 
-대상 저장소 루트에서:
+From the root of the target repository:
 
 ```bash
 npx github:iwishash/ticket-loop-kit init
 ```
 
-백엔드와 설치 단계를 키보드로 고르고(↑↓·숫자·Space·Enter, q로 중단) `install.sh`를 부른 뒤 `.ticket-loop/loop.env`에 `BACKEND=` 줄을 쓴다. 묻지 않으려면 `--yes`(터미널이 아니면 자동). 색은 `NO_COLOR`로 끈다. SSH 별칭 원격이나 키체인 자격 증명을 쓰면 `gh auth setup-git`은 필요 없다. 키트 버전을 고정하려면 `npx github:iwishash/ticket-loop-kit#v0.5.0 init`. 저장소가 비공개인 동안은 이 저장소에 초대받고 `gh auth login` 뒤 `gh auth setup-git`을 한 번 해 두면 npx가 받아 간다(macOS 키체인에 GitHub 자격 증명이 있어도 된다).
+Pick the backend and install steps with the keyboard (↑↓, numbers, Space, Enter; q to abort). The wrapper then calls `install.sh` and writes a `BACKEND=` line to `.ticket-loop/loop.env`. Pass `--yes` to skip the questions (automatic when not on a terminal). Disable colors with `NO_COLOR`. If you use an SSH-alias remote or keychain credentials, `gh auth setup-git` is not needed. To pin the kit version: `npx github:iwishash/ticket-loop-kit#v0.5.0 init`. While the repository is private, get invited to it, then run `gh auth login` followed by `gh auth setup-git` once so npx can fetch it (GitHub credentials in the macOS keychain also work).
 
-npx 없이 bash로만 설치하려면:
+To install with bash only, without npx:
 
 ```bash
 bash <(gh api repos/iwishash/ticket-loop-kit/contents/install.sh -H "Accept: application/vnd.github.raw")
 ```
 
-그다음 Claude Code에서:
+Then, in Claude Code:
 
-1. `/setup-matt-pocock-skills` — `docs/agents/issue-tracker.md`가 아직 없을 때
-2. `/setup-ticket-loop` — 검증 명령·`orca.yaml`·CI·워커 규칙·`implement`를 이 저장소에 맞춰 채우고 PR을 연다
+1. `/setup-matt-pocock-skills` — when `docs/agents/issue-tracker.md` does not exist yet
+2. `/setup-ticket-loop` — fills in the verification commands, `orca.yaml`, CI, worker rules, and `implement` for this repository, then opens a PR
 
-마지막으로 Orca 앱에서 Settings → Projects → <저장소> → Worktree Hooks → Advanced: Command Source **"orca.yaml only"**, **"Wait for setup to complete before starting agent"** 켜기. PR을 병합한 뒤 `bash scripts/ticket-loop.sh --dry-run` → `--max 1`.
+Finally, in the Orca app: Settings → Projects → <repository> → Worktree Hooks → Advanced: set Command Source to **"orca.yaml only"** and turn on **"Wait for setup to complete before starting agent"**. After merging the PR, run `bash scripts/ticket-loop.sh --dry-run`, then `--max 1`.
 
-필요한 도구: `git`, `gh`(로그인), `jq`, `rsync`, Orca 앱과 CLI, Claude Code.
+Required tools: `git`, `gh` (logged in), `jq`, `rsync`, the Orca app and CLI, Claude Code.
 
-## 누가 무엇을 하나
+## Who does what
 
-| 주체 | 하는 일 |
+| Actor | Responsibility |
 |---|---|
-| `npx … init` (`bin/ticket-loop-kit.js`) — 질문과 껍질 | 백엔드 선택, `.ticket-loop/loop.env`의 `BACKEND=` 줄(없을 때만), 설치 단계 켜고 끄기, 도구 점검, 설치한 키트 커밋을 `install.sh`에 넘김 |
-| `install.sh` — 어느 저장소에서나 같은 부분 | 루프·진단·스킬 동기화 스크립트와 `setup-ticket-loop` 스킬 설치, mattpocock 스킬 벤더링(`code-review` → `ticket-review`), `.gitignore`·`deny` 병합, 라벨 6개, git 자격 증명(gh), Orca 등록, `.ticket-loop/kit.json` |
-| `/setup-ticket-loop` — 저장소를 읽어야 정하는 부분 | `implement`·`pr`·`worker-rules.md`의 `__PLACEHOLDER__` 채우기(검증 명령, 무거운 스위트와 그 파일 하나를 돌리는 명령 — 워커는 자기가 손댄 파일만 PR 직전 1회, 전체는 루프가 병합 뒤), `verify` 명령, `orca.yaml`, CI, `.ticket-loop/loop.env`, `docs/agents/ticket-loop.md`, `CLAUDE.md` 포인터 → PR |
-| 사람 | Orca 앱 설정(Command Source "orca.yaml only"), PR 병합, `--max 1` 시험 지켜보기 |
+| `npx … init` (`bin/ticket-loop-kit.js`) — questions and wrapper | Backend selection, the `BACKEND=` line in `.ticket-loop/loop.env` (only when absent), toggling install steps, tool checks, passing the installed kit commit to `install.sh` |
+| `install.sh` — the part that is the same in every repository | Installs the loop, diagnostics, and skill-sync scripts plus the `setup-ticket-loop` skill, vendors the mattpocock skills (`code-review` → `ticket-review`), merges `.gitignore` and `deny` entries, creates 6 labels, sets up git credentials (gh), registers with Orca, writes `.ticket-loop/kit.json` |
+| `/setup-ticket-loop` — the part that requires reading the repository | Fills the `__PLACEHOLDER__`s in `implement`, `pr`, and `worker-rules.md` (verification commands, the heavy suite and the command that runs one file of it — the worker runs only the files it touched, once, right before the PR; the loop runs the full suite after merge), the `verify` command, `orca.yaml`, CI, `.ticket-loop/loop.env`, `docs/agents/ticket-loop.md`, a `CLAUDE.md` pointer → PR |
+| Human | Orca app settings (Command Source "orca.yaml only"), merging the PR, watching the `--max 1` trial |
 
-키트의 `ticket-loop.sh`는 가이드북 3판 부록 D의 스크립트에 저장소별 기본값 파일 `.ticket-loop/loop.env` 읽기와 시작 전 포트 점검을 더한 것이다. `POST_MERGE_CMD`, `POST_MERGE_PORT` 같은 저장소 고정값은 거기에 `VAR="${VAR:-값}"` 꼴로 적어 커밋하고, 실행할 때 준 환경변수가 이긴다.
+The kit's `ticket-loop.sh` is the script from Appendix D of the guidebook (3rd edition) plus two additions: reading the per-repository defaults file `.ticket-loop/loop.env`, and a port check before starting. Repository constants such as `POST_MERGE_CMD` and `POST_MERGE_PORT` go there as `VAR="${VAR:-value}"` and are committed; environment variables given at run time win.
 
-저장소 CI가 경로 필터(`paths`/`paths-ignore`)로 일부 PR에서 돌지 않는다면 `CI_SKIP_REGEX`(단순 제외 목록) 또는 `CI_SKIP_CMD`(파일 목록을 stdin으로 받아 `run`/`skip`을 찍는 저장소 스크립트)로 같은 판정을 루프에 알려 준다. GitHub는 필터에 걸린 PR에 체크를 아예 만들지 않아 루프가 "아직 안 떴다"와 "안 뜬다"를 구별할 수 없기 때문이다. 이것은 루프가 정하는 규칙이 아니라 저장소 필터를 따라 하는 것이고, 필터가 없으면 비워 둔다(기본: 모든 PR에서 체크를 기다린다).
+If the repository's CI uses path filters (`paths`/`paths-ignore`) and therefore does not run on some PRs, tell the loop the same verdict with `CI_SKIP_REGEX` (a simple exclusion list) or `CI_SKIP_CMD` (a repository script that reads the file list on stdin and prints `run` or `skip`). GitHub creates no checks at all on a filtered PR, so the loop cannot tell "not up yet" from "never coming". This is not a rule the loop invents; it mirrors the repository's filter. Leave it empty when there is no filter (default: wait for checks on every PR).
 
-티켓을 병합해 닫은 뒤와 `--parent` 실행이 끝날 때, 루프는 그 스펙 이슈의 하위 이슈 목록을 세어 모두 닫혔으면 스펙 이슈도 코멘트와 함께 닫는다(요약 값이 아니라 목록을 센다). 하위 이슈가 하나라도 열려 있으면 그대로 둔다.
+After a ticket is merged and closed, and when a `--parent` run finishes, the loop counts the spec issue's sub-issues and, if all of them are closed, closes the spec issue with a comment (it counts the list, not the summary value). If any sub-issue is still open, it leaves the spec alone.
 
-루프가 남기는 것은 세 가지다. 진행 로그 `.ticket-loop/loop-MMDD.log`(사람이 읽는다), 티켓별 기록 `.ticket-loop/tickets.jsonl`(기계별, 커밋하지 않는다), 그리고 `--parent <스펙>` 실행이 정상 종료할 때 쓰는 스펙 리포트 `docs/loop-reports/spec-<N>.html`(티켓별 상태·결과 브리프·경과 시간·모델 한 표, 사람이 보고 PR로 커밋한다). `POST_MERGE_PORT`를 정한 저장소에서는 포트가 차 있을 때 점유 프로세스를 적고 30초마다 다시 보며 기다린다. 시작할 때 이미 차 있으면 "주의" 한 줄을 적는다.
+The loop leaves three things behind. The progress log `.ticket-loop/loop-MMDD.log` (for humans), the per-ticket records `.ticket-loop/tickets.jsonl` (per machine, not committed), and, when a `--parent <spec>` run exits normally, the spec report `docs/loop-reports/spec-<N>.html` (one table of status, result brief, elapsed time, and model per ticket; a human reviews it and commits it via PR). The report's fixed text is English; issue and PR titles from GitHub and stop reasons from the records are kept verbatim. In repositories that set `POST_MERGE_PORT`, when the port is busy the loop logs the occupying process and re-checks every 30 seconds. If the port is already busy at startup, it logs one "warning" line.
 
-## 백엔드
+## Backends
 
-루프 스크립트에서 워크트리·에이전트 터미널에 하는 일은 아홉 가지뿐이다(만들기·지우기·프롬프트 보내기·셸 입력·Ctrl-C·idle 대기·화면 읽기·상태 표시·시작 점검). 백엔드마다 같은 이름의 함수(`orca_*`, `cmux_*`)로 구현하고 `.ticket-loop/loop.env`의 `BACKEND=orca|cmux`로 고른다. 티켓 선택·PR·CI·수리·병합·병합 뒤 검증·기록·스펙 리포트는 한 벌이다.
+The loop script does only nine things with worktrees and agent terminals (create, remove, send a prompt, shell input, Ctrl-C, wait for idle, read the screen, set status, startup check). Each backend implements them as functions of the same names (`orca_*`, `cmux_*`), selected with `BACKEND=orca|cmux` in `.ticket-loop/loop.env`. Ticket selection, PR, CI, repair, merge, post-merge verification, records, and the spec report are shared.
 
 | | Orca | cmux |
 |---|---|---|
-| 워크트리 | `orca worktree create`가 만들고 `orca.yaml` setup을 돌린다 | 루프가 `git worktree add`(`WORKTREE_DIR`, 기본 `~/.cache/ticket-loop/<owner-repo>/worktrees`) 뒤 `WORKTREE_SETUP_CMD`를 돌린다 |
-| 에이전트 | Orca가 `--agent claude --prompt`로 띄운다 | `cmux workspace create --cwd … --command "claude … \"$(cat 프롬프트파일)\""` — 워크스페이스 셸의 claude shim이 Claude Code 훅을 붙인다 |
-| idle 판정 | `orca terminal wait --for tui-idle`(블로킹) | `cmux rpc surface.input_state`의 `lifecycle`을 5초마다 읽는다(Claude Code 훅이 보고) |
-| 입력·화면 | `orca terminal send / read` | `cmux paste --submit`, `send --force` + `send-key enter`, `read-screen --lines 25`. 보내기 전에 하이버네이션에서 깨운다 |
-| 상태 표시 | `orca worktree set --workspace-status` | `cmux workspace status set`, `cmux pr`, `cmux log` |
-| 실행 조건 | Orca 앱 실행 중, 저장소 등록 | cmux 터미널 안에서 실행(소켓 모드 기본값 `cmuxOnly`) |
+| Worktree | `orca worktree create` creates it and runs the `orca.yaml` setup | The loop runs `git worktree add` (`WORKTREE_DIR`, default `~/.cache/ticket-loop/<owner-repo>/worktrees`) and then `WORKTREE_SETUP_CMD` |
+| Agent | Orca launches it with `--agent claude --prompt` | `cmux workspace create --cwd … --command "claude … \"$(cat promptfile)\""` — the claude shim in the workspace shell attaches the Claude Code hooks |
+| Idle detection | `orca terminal wait --for tui-idle` (blocking) | Reads `lifecycle` from `cmux rpc surface.input_state` every 5 seconds (reported by Claude Code hooks) |
+| Input and screen | `orca terminal send / read` | `cmux paste --submit`, `send --force` + `send-key enter`, `read-screen --lines 25`. Wakes the workspace from hibernation before sending |
+| Status display | `orca worktree set --workspace-status` | `cmux workspace status set`, `cmux pr`, `cmux log` |
+| Prerequisites | Orca app running, repository registered | Run inside a cmux terminal (socket mode defaults to `cmuxOnly`) |
 
-두 백엔드 모두 실제 티켓 1건씩(boiler-webapp #34 Orca, #39 cmux)으로 확인했다. cmux 0.65 실측: `--json`은 명령 뒤에 둬야 JSON이 나오고(`workspace create --json --id-format uuids` → `workspace_id`·`surface_id`), lane은 `todo|working|needs-attention|review|done`, 프로세스가 살아 있는 워크스페이스는 `workspace close --force`로만 닫힌다. 루프는 cmux 터미널 안에서 띄워야 한다 — 소켓 모드 기본값이 `cmuxOnly`라 밖에서는 `cmux identify`가 거부된다.
+Both backends have been verified with one real ticket each (boiler-webapp #34 on Orca, #39 on cmux). Observed with cmux 0.65: `--json` must come after the command to get JSON output (`workspace create --json --id-format uuids` → `workspace_id`, `surface_id`), lanes are `todo|working|needs-attention|review|done`, and a workspace whose process is still alive can only be closed with `workspace close --force`. The loop must be launched inside a cmux terminal: the socket mode default is `cmuxOnly`, so `cmux identify` is refused from outside.
 
-## 무엇을 어디에 두나
+## What goes where
 
-| 키트 경로 | 대상 저장소 | 설치 때 |
+| Kit path | Target repository | On install |
 |---|---|---|
-| `files/scripts/ticket-loop.sh` | `scripts/ticket-loop.sh` | 매번 덮어씀(키트 소유) |
-| `files/scripts/ticket-state.sh` | `scripts/ticket-state.sh` | 매번 덮어씀 |
-| `files/scripts/sync-mattpocock-skills.sh` | `scripts/sync-mattpocock-skills.sh` | 매번 덮어씀 |
-| `files/.claude/skills/setup-ticket-loop/` | 같은 경로 | 매번 덮어씀 |
-| `templates/.claude/skills/implement/`, `pr/` | 같은 경로 | 없을 때만(이후 프로젝트 소유) |
-| `templates/.ticket-loop/worker-rules.md` | 같은 경로 | 없을 때만 |
-| `templates/docs/loop-reports/README.md` | 같은 경로 | 없을 때만 |
-| — | `.claude/skills/<mattpocock 스킬>` | `sync-mattpocock-skills.sh`가 벤더링 |
-| — | `.gitignore`(`/.ticket-loop/*.log`, `/.ticket-loop/*.jsonl`), `.claude/settings.json` `deny` | 줄·항목 병합 |
-| — | GitHub 라벨 6개, 저장소 git 자격 증명(gh), Orca 등록 | 없으면 만듦 |
-| — | `.ticket-loop/kit.json` | 설치한 키트 커밋 기록 |
+| `files/scripts/ticket-loop.sh` | `scripts/ticket-loop.sh` | Overwritten every time (kit-owned) |
+| `files/scripts/ticket-state.sh` | `scripts/ticket-state.sh` | Overwritten every time |
+| `files/scripts/sync-mattpocock-skills.sh` | `scripts/sync-mattpocock-skills.sh` | Overwritten every time |
+| `files/.claude/skills/setup-ticket-loop/` | Same path | Overwritten every time |
+| `templates/.claude/skills/implement/`, `pr/` | Same path | Only when absent (project-owned afterwards) |
+| `templates/.ticket-loop/worker-rules.md` | Same path | Only when absent |
+| `templates/docs/loop-reports/README.md` | Same path | Only when absent |
+| — | `.claude/skills/<mattpocock skill>` | Vendored by `sync-mattpocock-skills.sh` |
+| — | `.gitignore` (`/.ticket-loop/*.log`, `/.ticket-loop/*.jsonl`), `deny` in `.claude/settings.json` | Lines and entries merged |
+| — | 6 GitHub labels, repository git credentials (gh), Orca registration | Created when missing |
+| — | `.ticket-loop/kit.json` | Records the installed kit commit |
 
-프로젝트별 값은 대상 저장소의 `.ticket-loop/loop.env`(루프 기본값, `BACKEND` 포함), `orca.yaml`(Orca), `.ticket-loop/worker-rules.md`, `implement`·`pr` 스킬에 있다. 키트 소유 파일은 대상 저장소에서 고치지 말고 키트에서 고친다.
+Project-specific values live in the target repository's `.ticket-loop/loop.env` (loop defaults, including `BACKEND`), `orca.yaml` (Orca), `.ticket-loop/worker-rules.md`, and the `implement` and `pr` skills. Do not edit kit-owned files in the target repository; fix them in the kit.
 
-## 업데이트
+## Update
 
-같은 설치 명령을 다시 실행한다. 키트 소유 파일과 mattpocock 스킬만 바뀌고, 프로젝트 소유 파일(`loop.env` 포함)은 그대로다. 0.3 이하가 설치한 저장소는 설치기가 `.agent-loop/`(0.2 이하는 `.orca-loop/`)를 `.ticket-loop/`로 `git mv`하고(로그·기록 포함), 옛 스킬 `setup-agent-loop`·`setup-orca-loop`와 `.gitignore`의 옛 줄을 지운다. 그 뒤 옛 경로를 아직 가리키는 파일(`docs/agents/ticket-loop.md`, `CLAUDE.md`, `loop.env`의 `REPORT_DIR` 등)이 있으면 목록을 보여 주니 손으로 고쳐 같은 PR에 넣는다. 특정 버전으로 고정하려면 `npx github:iwishash/ticket-loop-kit#v0.5.0 init`(bash 경로는 `--ref v0.3.0`). 바뀐 것은 `git diff`로 보고 PR로 올린다. npx는 한 번 받은 저장소를 캐시하므로, 같은 ref로 다시 받으려면 `npx --yes --prefer-online` 또는 `npm cache clean --force`.
+Run the same install command again. Only kit-owned files and the mattpocock skills change; project-owned files (including `loop.env`) stay as they are. In repositories installed by 0.3 or earlier, the installer `git mv`s `.agent-loop/` (or `.orca-loop/` for 0.2 and earlier) to `.ticket-loop/` (logs and records included), and removes the old skills `setup-agent-loop` and `setup-orca-loop` and the old `.gitignore` lines. It then lists any files that still point at the old paths (`docs/agents/ticket-loop.md`, `CLAUDE.md`, `REPORT_DIR` in `loop.env`, etc.) so you can fix them by hand in the same PR. To pin a version: `npx github:iwishash/ticket-loop-kit#v0.5.0 init` (the bash path takes `--ref v0.3.0`). Review the changes with `git diff` and open a PR. npx caches a repository once fetched, so to re-fetch the same ref use `npx --yes --prefer-online` or `npm cache clean --force`.
 
-옵션: `--yes`, `--backend <orca|cmux>`, `--no-skills`, `--no-github`, `--no-git-credential`, `--no-orca` (`npx github:iwishash/ticket-loop-kit --help`). bash 경로는 `--ref <ref>`도 받는다(`bash install.sh --help`).
+Options: `--yes`, `--backend <orca|cmux>`, `--no-skills`, `--no-github`, `--no-git-credential`, `--no-orca` (`npx github:iwishash/ticket-loop-kit --help`). The bash path also takes `--ref <ref>` (`bash install.sh --help`).
 
-## 여러 컴퓨터에서 같은 저장소를 돌릴 때
+## Running the same repository on several computers
 
-한 번 설치한 저장소는 클론만 하면 다른 컴퓨터에서도 바로 돈다. 재설치는 키트 버전을 올릴 때만 한 컴퓨터에서 하고, 나머지는 `git pull`로 받는다.
+Once a repository is set up, a plain clone runs on another computer. Reinstall only when upgrading the kit, on one computer; the others get it with `git pull`.
 
-- 루프에 필요한 것은 전부 커밋돼 있다 — `scripts/ticket-loop.sh`, `.ticket-loop/loop.env`(`BACKEND`, `WORKTREE_SETUP_CMD` 포함), `worker-rules.md`, `kit.json`, `implement`·`pr` 스킬. 기계별인 것은 `.ticket-loop/*.log`와 `tickets.jsonl`뿐이고 둘 다 `.gitignore`다. 새 컴퓨터에서는 빈 상태로 새로 쌓인다.
-- 백엔드는 컴퓨터마다 달라도 된다. `loop.env`의 값은 `${BACKEND:-orca}` 꼴이라 실행할 때 준 환경변수가 이긴다 — A는 Orca로 `bash scripts/ticket-loop.sh N`, B는 cmux 터미널 안에서 `BACKEND=cmux bash scripts/ticket-loop.sh N`. cmux를 쓸 저장소는 `loop.env`에 `WORKTREE_SETUP_CMD`가 있어야 한다.
-- 워크트리는 백엔드가 각자 자기 자리에 둔다(Orca는 Orca 설정 위치, cmux는 `~/.cache/ticket-loop/<owner-repo>/worktrees`). 저장소 안에는 흔적이 없어 컴퓨터끼리 충돌하지 않는다.
-- 새 컴퓨터의 전제는 평소와 같다: `gh auth login`, `claude`, `jq`, 저장소의 패키지 매니저. cmux면 cmux 터미널 안에서 실행하고(소켓 모드 기본값 `cmuxOnly`) Settings의 Claude Code 통합이 켜져 있어야 한다 — 꺼져 있으면 `lifecycle`이 `unknown`만 돌아와 기동 유예 뒤 타임아웃으로 멈춘다.
-- 동시에 돌릴 때는 티켓을 나눈다. 번호를 지정하면 브랜치(`issue-N-…`)가 갈라져 겹칠 일이 없다. 자동 선택은 담당자가 있거나 PR이 열린 티켓을 건너뛰고 워커가 시작하자마자 자기를 담당자로 넣지만, 두 루프가 몇 초 간격으로 같은 티켓을 집는 경합까지 막지는 못한다 — 자동 선택으로 함께 돌릴 거면 `--parent`나 `--label`로 범위를 가른다. 한쪽이 병합해 다른 쪽 PR에 충돌이 나면 루프의 수리 단계가 처리한다.
-- 스펙 리포트(`--parent`)는 그 컴퓨터의 `tickets.jsonl`로 그리므로, 한 스펙은 한 컴퓨터에서 돌리는 편이 표가 온전하다. 기록이 없는 티켓은 PR 시각으로 대신 채운다.
+- Everything the loop needs is committed: `scripts/ticket-loop.sh`, `.ticket-loop/loop.env` (including `BACKEND` and `WORKTREE_SETUP_CMD`), `worker-rules.md`, `kit.json`, and the `implement` and `pr` skills. The only per-machine files are `.ticket-loop/*.log` and `tickets.jsonl`, both in `.gitignore`. On a new computer they start empty.
+- The backend may differ per computer. Values in `loop.env` are of the form `${BACKEND:-orca}`, so an environment variable given at run time wins: computer A runs `bash scripts/ticket-loop.sh N` on Orca, computer B runs `BACKEND=cmux bash scripts/ticket-loop.sh N` inside a cmux terminal. A repository that will use cmux needs `WORKTREE_SETUP_CMD` in `loop.env`.
+- Each backend keeps worktrees in its own place (Orca in its configured location, cmux in `~/.cache/ticket-loop/<owner-repo>/worktrees`). Nothing is left in the repository, so computers do not collide.
+- The prerequisites on a new computer are the usual ones: `gh auth login`, `claude`, `jq`, the repository's package manager. With cmux, run inside a cmux terminal (socket mode defaults to `cmuxOnly`) and make sure the Claude Code integration in Settings is on. If it is off, `lifecycle` only ever returns `unknown` and the loop times out after the startup grace period.
+- When running concurrently, split the tickets. Specifying numbers gives separate branches (`issue-N-…`) that never overlap. Automatic selection skips tickets that have an assignee or an open PR, and the worker assigns itself as soon as it starts, but that does not prevent a race where two loops pick the same ticket seconds apart. If you run several loops with automatic selection, partition the scope with `--parent` or `--label`. If one side merges and the other side's PR conflicts, the loop's repair step handles it.
+- The spec report (`--parent`) is drawn from that computer's `tickets.jsonl`, so the table is most complete when one spec runs on one computer. Tickets without records fall back to PR timestamps.
 
-## 키트를 고칠 때
+## Working on the kit
 
-- 루프 스크립트를 고치면 `python3 docs/sync-guide.py && bash docs/build-pdf.sh`로 부록 D와 PDF를 다시 만든다(`tests/smoke.sh`가 부록 D 일치를 검사한다).
-- `bash tests/smoke.sh` — 임시 저장소에 설치해 보고(네트워크·GitHub 없이), 두 번 설치해도 결과가 같은지, 스펙 리포트 jq가 고정 자료로 그려지는지 확인한다.
-- 바뀐 점은 `CHANGELOG.md`에, 버전은 `VERSION`·`package.json`과 태그로(`tests/smoke.sh`가 둘이 같은지 검사한다).
-- `package.json`에 `prepare` 같은 빌드 단계를 두지 않는다. git에서 바로 받을 때 그 스크립트가 사용자 PC에서 돈다. npx 패키지에 들어가는 것은 `files` 목록(`bin`, `install.sh`, `files/`, `templates/`, `VERSION`)뿐이고 `docs/`·`tests/`는 빠진다.
+- After changing the loop script, regenerate Appendix D and the PDF with `python3 docs/sync-guide.py && bash docs/build-pdf.sh` (`tests/smoke.sh` checks that Appendix D matches).
+- `bash tests/smoke.sh` — installs into a temporary repository (no network or GitHub), checks that installing twice gives the same result, and renders the spec report jq against fixture data.
+- Record changes in `CHANGELOG.md`; the version goes in `VERSION`, `package.json`, and a tag (`tests/smoke.sh` checks that the two files agree).
+- Do not add a build step such as `prepare` to `package.json`. When fetched straight from git, that script would run on the user's machine. The npx package contains only the `files` list (`bin`, `install.sh`, `files/`, `templates/`, `VERSION`); `docs/` and `tests/` are excluded.
 
-## 검증 상태 (0.3.0, 2026-10-12)
+## Verification status (0.3.0, 2026-10-12)
 
-확인한 것:
+Verified:
 
-- `tests/smoke.sh` 통과: 문법, 부록 D 일치, 임시 저장소 설치, 재설치해도 프로젝트 소유 파일·`settings.json`·`.gitignore`가 바뀌지 않음, 스펙 리포트 jq 렌더(병합·중단·기록 없음 세 경우)
-- 0.2.0의 스펙 리포트·포트 대기·터미널 재시도 코드는 rsrehab/rental-portal에서 실제 티켓 2건(#67·#68, 스펙 #65)으로 돈 범용 스크립트(가이드북 3판)를 그대로 가져온 것이다. 키트에서 더한 것은 `loop.env` 읽기와 시작 전 포트 점검뿐이다
-- 스킬 동기화를 포함한 설치: mattpocock 1.3.1 + 미출시 changeset 16건(`49dd158`) 26개 스킬, `implement`·`pr`은 건너뜀
-- 원격 한 줄 설치(`--ref v0.1.0`)로 받아 설치되고 `.ticket-loop/kit.json`에 `534653a`가 기록됨
-- npx 껍질: 키트 복사본을 `git+file://`로 받아 `--yes` 설치되고 `kit.json`에 커밋·`ref`(`#태그`를 주면 `npx#<태그>`)가 남음. 대화형 경로(백엔드 선택, 항목별 질문, cmux 거절, Ctrl+D)는 pty로 확인. `npx github:iwishash/ticket-loop-kit init --yes`와 `#main` 고정형을 빈 npm 캐시에서 실제로 받아(비공개 저장소, SSH 키 없이 HTTPS + 키체인 자격 증명) 임시 저장소에 스킬 동기화까지 설치되고 `kit.json`에 `e707bfe`·`ref: npx`/`npx#main`이 남음
+- `tests/smoke.sh` passes: syntax, Appendix D match, install into a temporary repository, reinstall leaves project-owned files, `settings.json`, and `.gitignore` unchanged, spec report jq rendering (merged, stopped, and no-record cases)
+- The spec report, port wait, and terminal retry code in 0.2.0 was taken verbatim from the general-purpose script (guidebook 3rd edition) that ran two real tickets (#67, #68, spec #65) in rsrehab/rental-portal. The kit adds only `loop.env` reading and the startup port check
+- Install including skill sync: mattpocock 1.3.1 plus 16 unreleased changesets (`49dd158`), 26 skills; `implement` and `pr` are skipped
+- The remote one-line install (`--ref v0.1.0`) fetched and installed, recording `534653a` in `.ticket-loop/kit.json`
+- The npx wrapper: a copy of the kit fetched via `git+file://` installs with `--yes` and leaves the commit and `ref` (`npx#<tag>` when a `#tag` is given) in `kit.json`. The interactive paths (backend selection, per-item questions, declining cmux, Ctrl+D) were verified with a pty. `npx github:iwishash/ticket-loop-kit init --yes` and the pinned `#main` form were fetched for real from an empty npm cache (private repository, HTTPS plus keychain credentials, no SSH key), installed into a temporary repository including skill sync, and left `e707bfe` and `ref: npx` / `npx#main` in `kit.json`
 
-- 0.2 설치본 마이그레이션: 스모크 테스트가 `.orca-loop/`(규칙·`loop.env`·로그)와 옛 스킬·`.gitignore` 줄이 있는 임시 저장소에 설치해 `git mv`로 옮겨지고 아무것도 잃지 않음을 확인한다. rental-portal 실제 적용은 아직이다
+- Migration of a 0.2 install: the smoke test installs into a temporary repository that has `.orca-loop/` (rules, `loop.env`, logs), the old skill, and the old `.gitignore` lines, and confirms they are moved with `git mv` and nothing is lost. Applying it to rental-portal for real is still pending
 
-- Orca 백엔드로 실제 티켓 1건(iwishash/boiler-webapp #34 → PR #38, 2026-10-12): 첫 설치(`npx … init` + 사용자가 `/setup-ticket-loop` 실행) 뒤 `bash scripts/ticket-loop.sh 34 --max 1`이 워크트리 생성 → 워커 기동 → PR → CI 8개 작업 대기 → 병합 → 이슈 닫힘 → 워크트리·브랜치 정리 → 기록(`tickets.jsonl`, 모델 포함)까지 벽시계 10분에 끝났다. 첫 시도에서 `orca_set_status`의 `set -u` 버그로 워크트리 생성 직후 죽었고(워커는 혼자 계속 돌았다) 고친 뒤 재실행한 결과다. 병합 뒤 검증은 그 저장소에 없어 건너뛰었다
+- One real ticket on the Orca backend (iwishash/boiler-webapp #34 → PR #38, 2026-10-12): after a first install (`npx … init` plus the user running `/setup-ticket-loop`), `bash scripts/ticket-loop.sh 34 --max 1` went from worktree creation → worker startup → PR → waiting on 8 CI jobs → merge → issue closed → worktree and branch cleanup → records (`tickets.jsonl`, including the model) in 10 minutes of wall-clock time. On the first attempt the loop died right after creating the worktree because of a `set -u` bug in `orca_set_status` (the worker kept going on its own); this result is from the rerun after the fix. Post-merge verification was skipped because that repository has none
 
-- cmux 백엔드로 실제 티켓 1건(iwishash/boiler-webapp #39 → PR #40, 2026-10-12, cmux 0.65): cmux 터미널 안에서 `BACKEND=cmux WORKTREE_SETUP_CMD='pnpm install --frozen-lockfile --prefer-offline' bash scripts/ticket-loop.sh 39 --max 1`이 `git worktree add` → pnpm 설치 → `cmux workspace create --command "claude …"` → 훅이 보고하는 `lifecycle`로 idle 판정 → PR → CI 8개 작업 → 병합 → `workspace close --force`·워크트리·브랜치 정리 → 기록까지 벽시계 7분에 끝났다(수리 0회, idle 오판 0회). lane은 working → review → done으로 따라갔다. 초안의 가정 중 `--json` 위치와 `close --force` 두 가지가 틀려 고쳤고 나머지(JSON 필드명, lane 이름, uuid, 훅 주입)는 맞았다
+- One real ticket on the cmux backend (iwishash/boiler-webapp #39 → PR #40, 2026-10-12, cmux 0.65): inside a cmux terminal, `BACKEND=cmux WORKTREE_SETUP_CMD='pnpm install --frozen-lockfile --prefer-offline' bash scripts/ticket-loop.sh 39 --max 1` went from `git worktree add` → pnpm install → `cmux workspace create --command "claude …"` → idle detection via the hook-reported `lifecycle` → PR → 8 CI jobs → merge → `workspace close --force`, worktree, and branch cleanup → records in 7 minutes of wall-clock time (0 repairs, 0 idle false positives). The lane followed working → review → done. Two of the draft's assumptions were wrong and were fixed (`--json` placement and `close --force`); the rest (JSON field names, lane names, uuid, hook injection) were right
 
-아직 확인하지 않은 것 — 첫 적용 저장소에서 확인하고 여기를 갱신한다:
+Not yet verified — check in the first repository that adopts the kit and update this section:
 
-- `/setup-ticket-loop`는 boiler-webapp에서 사용자가 한 번 돌렸다(결과 PR은 병합됨). 질문 순서나 빠진 항목에 대한 피드백은 아직 없다
-- `install.sh`의 라벨 생성·Orca 등록 단계는 시험에서 껐다. 명령 자체는 rsrehab/rental-portal에서 쓰던 것이다
-- 키트판 `ticket-loop.sh`의 `POST_MERGE_CMD`·`POST_MERGE_PORT`·`CI_SKIP_CMD`·`CI_SKIP_REGEX` 경로와 수리 프롬프트 경로. boiler-webapp 1건은 병합 뒤 검증 없음·CI 경로 필터 없음·수리 0회였다. rental-portal(PR #82로 전환, `CI_SKIP_CMD`·`POST_MERGE_CMD` 설정)에서 실제 티켓을 돌리면 확인된다
-- cmux 백엔드 전체. `--dry-run`이 cmux 터미널 밖에서 소켓 오류로 멈추는 것까지만 확인했다
-- 출처 저장소 rsrehab/rental-portal은 아직 저장소 전용판 `scripts/orca-ticket-loop.sh`를 쓴다(키트로 전환하지 않음)
+- `/setup-ticket-loop` was run once by the user on boiler-webapp (the resulting PR was merged). No feedback yet on question order or missing items
+- The label creation and Orca registration steps of `install.sh` were turned off in testing. The commands themselves are the ones used in rsrehab/rental-portal
+- The kit's `ticket-loop.sh` paths for `POST_MERGE_CMD`, `POST_MERGE_PORT`, `CI_SKIP_CMD`, `CI_SKIP_REGEX`, and the repair prompt. The one boiler-webapp ticket had no post-merge verification, no CI path filter, and 0 repairs. Running a real ticket in rental-portal (switched in PR #82, with `CI_SKIP_CMD` and `POST_MERGE_CMD` configured) will confirm them
+- The cmux backend as a whole beyond that one ticket. Only `--dry-run` failing with a socket error outside a cmux terminal has been confirmed
+- The source repository rsrehab/rental-portal still uses its repository-specific `scripts/orca-ticket-loop.sh` (not switched to the kit)

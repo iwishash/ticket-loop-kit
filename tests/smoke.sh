@@ -172,7 +172,8 @@ grep -rq '__HEAVY_TESTS_RULE__' "$KIT/templates" "$KIT/files" && fail "옛 자�
 grep -q '`__HEAVY_TESTS__`' "$KIT/files/.claude/skills/setup-ticket-loop/SKILL.md" && grep -q '`__HEAVY_TEST_FILE__`' "$KIT/files/.claude/skills/setup-ticket-loop/SKILL.md" || fail "setup-ticket-loop 결정 표에 무거운 테스트 자리표가 없음"
 echo "ok  무거운 테스트 자리표"
 
-# 스펙 리포트 jq 프로그램을 고정 자료로 그려 본다(GitHub 없이). 병합·중단·기록 없음 세 경우가 표에 나와야 한다
+# 스펙 리포트 jq 프로그램을 고정 자료로 그려 본다(GitHub 없이). 병합·중단·기록 없음 세 경우가 표에 나와야 한다.
+# 고정 문구는 영어, GitHub에서 온 제목과 기록의 중단 사유는 원문(한국어) 그대로여야 한다
 REPORT_JQ="$(sed -n "/^read -r -d '' REPORT_JQ <<'JQ'/,/^JQ\$/p" "$KIT/files/scripts/ticket-loop.sh" | sed '1d;$d')"
 [[ -n "$REPORT_JQ" ]] || fail "REPORT_JQ 블록을 찾지 못함"
 jq -rn --arg prefix issue- --arg now "2026-10-12 09:00" \
@@ -185,7 +186,7 @@ jq -rn --arg prefix issue- --arg now "2026-10-12 09:00" \
   --argjson recs '[{"spec":40,"issue":41,"title":"T01: 하나","result":"merged","started":"2026-10-12T00:00:00Z","finished":"2026-10-12T00:31:00Z","wall_sec":1860,"repairs":1,"idle_false_positives":0,"agent":"claude","pr":50,"ci_sec":200,"post_merge":"통과 90초","model":"Opus 5.5"},
                    {"spec":40,"issue":42,"title":"T02: 둘","result":"stopped","reason":"워커가 PR 없이 멈췄습니다","started":"2026-10-12T01:00:00Z","finished":"2026-10-12T01:10:00Z","wall_sec":600,"repairs":0,"idle_false_positives":2,"agent":"claude"}]' \
   "$REPORT_JQ" > "$T/report.html" || fail "스펙 리포트 jq 실패"
-for want in '<!doctype html>' 'PR #50' '인수 조건 1/2' '>병합<' '>중단<' '워커가 PR 없이 멈췄습니다' 'Opus 5.5' 'PR 생성→병합 기준' '미기록' '수리 1회'; do
+for want in '<!doctype html>' '<html lang="en">' 'PR #50' 'Acceptance criteria 1/2' '>Merged<' '>Stopped<' 'Stop reason: 워커가 PR 없이 멈췄습니다' 'Opus 5.5' 'PR created→merged' 'not recorded' '1 repair ·' 'post-merge check passed in 90s' 'T01: 하나'; do
   grep -qF "$want" "$T/report.html" || fail "스펙 리포트에 '$want' 없음"
 done
 echo "ok  스펙 리포트 렌더"
