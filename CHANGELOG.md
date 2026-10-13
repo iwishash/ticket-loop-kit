@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased — 0.7 Codex 지원 1단계
+
+질문은 "이 kit을 claude만이 아닌 codex에서도 사용할 수 있게 변경할 수 있어?"였다. 루프 본체(티켓 선택·PR·CI·수리·병합·기록·리포트)는 에이전트와 무관하고, Claude에 묶인 곳은 기동 명령·배너·모델 정규식·`/implement` 접두사·프롬프트의 도구 이름·저장소 배치(`.claude/skills/`)였다. 세 단계로 나눠 1단계는 스크립트 프리셋만 한다. 저장소 배치는 그대로다.
+
+- `ticket-loop.sh`: `AGENT`가 `claude` | `codex` 프리셋이 되어 `AGENT_RESTART_CMD`(`claude --dangerously-skip-permissions` / `codex --dangerously-bypass-approvals-and-sandbox` — 더 좁은 `--sandbox workspace-write`는 네트워크를 막아 push·`gh pr create`가 안 된다), `AGENT_BANNER_REGEX`(`OpenAI Codex|gpt-[0-9]`), `MODEL_REGEX`(`gpt-5.1-codex` 꼴), 새 변수 `SKILL_PREFIX`(`/` / `$` → `/implement N` / `$implement N`)의 기본값을 정한다. `loop.env`나 환경변수로 준 값이 이긴다. 다른 `AGENT` 값은 프리셋이 없어 두 값이 비어 있으면 시작 때 멈춘다. 워커 프롬프트에서 Claude Code 도구 이름(`AskUserQuestion`)을 빼고 "사람에게 묻거나 확인을 구하지 말고(질문 도구도 쓰지 말고)"로 바꿨다. Orca 워크트리 코멘트와 회고 안내(`/retro`)도 접두사를 따른다. `MODEL_REGEX`가 비면 모델을 뽑지 않는다
+- `bin/ticket-loop-kit.js`: 새로 만드는 `loop.env`에 `# AGENT="${AGENT:-claude}"` 안내 주석을 넣는다(값은 바꾸지 않는다)
+- 가이드북 3장 표(`AGENT`·`AGENT_RESTART_CMD`·`AGENT_BANNER_REGEX`·`SKILL_PREFIX`·`MODEL_REGEX`), 12장 FAQ "Codex 같은 다른 에이전트", 부록 D·E. README(영·한) "아직 확인하지 않은 것"에 Codex 항목
+- `tests/smoke.sh`: 프리셋 블록을 떼어 세 경우(claude·codex·모르는 값)와 `loop.env` 값 우선, 배너 정규식이 기동 화면에는 맞고 셸에 찍힌 기동 명령에는 안 맞는지, 모델 정규식, 워커 프롬프트가 접두사로 시작하고 규칙 파일 유무를 따르는지, 워커·수리 프롬프트에 특정 에이전트의 이름·도구가 없는지를 본다
+- 아직 아닌 것: Codex는 `.claude/skills/`를 읽지 않으므로(`.agents/skills/`·`AGENTS.md`) 이 단계만으로는 `$implement`가 스킬을 찾지 못한다 — 2단계(저장소 배치: `.agents/skills/` 정본 + `.claude/skills/` 링크, `AGENTS.md` 정본 + `CLAUDE.md` `@AGENTS.md`, `.codex/rules`, 플러그인 검사는 `AGENT=claude`일 때만)와 3단계(Codex 설치 컴퓨터에서 Orca·cmux 각 1건 실측: idle 판정, `$implement`, 수리 재전송, 금지 규칙)가 끝나기 전에는 "지원"이라고 쓰지 않는다. `.claude/settings.json`의 `gh pr merge` 금지는 Codex에 걸리지 않는다
+
 ## 0.6.0 — 2026-10-13
 
 mattpocock 스킬을 "26개 전부 기본 설치"에서 "루프가 부르는 것만"으로 줄이고, 설치 전에 같은 스킬의 다른 설치를 검사한다. 질문은 "GitHub 이슈 구현 자동화 키트가 설치자에게 다른 사람의 방법론 스킬 26개를 강요하는 게 맞나"였다. 조사 결과 루프 스크립트는 스킬에 기대지 않고, `implement` 템플릿이 `tdd`와 `ticket-review` 둘만 Skill 도구로 부른다.

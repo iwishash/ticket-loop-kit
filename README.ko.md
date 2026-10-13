@@ -149,3 +149,4 @@ bash <(gh api repos/iwishash/ticket-loop-kit/contents/install.sh -H "Accept: app
 - 키트판 `ticket-loop.sh`의 `POST_MERGE_CMD`·`POST_MERGE_PORT`·`CI_SKIP_CMD`·`CI_SKIP_REGEX` 경로와 수리 프롬프트 경로. boiler-webapp 1건은 병합 뒤 검증 없음·CI 경로 필터 없음·수리 0회였다. rental-portal(PR #82로 전환, `CI_SKIP_CMD`·`POST_MERGE_CMD` 설정)에서 실제 티켓을 돌리면 확인된다
 - cmux 백엔드 전체. `--dry-run`이 cmux 터미널 밖에서 소켓 오류로 멈추는 것까지만 확인했다
 - 출처 저장소 rsrehab/rental-portal은 아직 저장소 전용판 `scripts/orca-ticket-loop.sh`를 쓴다(키트로 전환하지 않음)
+- Codex를 워커로 쓰는 것. `loop.env`의 `AGENT=codex`는 프리셋일 뿐이다 — 기동 명령(`codex --dangerously-bypass-approvals-and-sandbox`), 배너·모델 정규식, 스킬 접두사(`$implement N`)를 바꾸고, 워커·수리 프롬프트에서 Claude Code 도구 이름을 뺐다. 하지만 스킬은 아직 `.claude/skills/`에만 있어 Codex가 읽지 못하고(`.agents/skills/`·`AGENTS.md` 배치는 다음 단계), idle 판정·`$implement` 호출·수리 프롬프트는 Codex가 설치된 컴퓨터에서 돌려 보지 않았다. 그때까지는 "지원"이 아니다

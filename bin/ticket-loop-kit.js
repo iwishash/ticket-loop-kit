@@ -45,7 +45,7 @@ Options
   --ref <ref>            Kit ref to record in .ticket-loop/kit.json (default: the #ref of the npx spec, else "npx")
 
 Pin a kit version with a tag on the npx spec:  npx github:iwishash/ticket-loop-kit#v0.4.0 init
-Requires git, gh (logged in), jq and bash. The backend app (Orca or cmux) and Claude Code are needed to run the loop.
+Requires git, gh (logged in), jq and bash. The backend app (Orca or cmux) and the worker agent (Claude Code; Codex via AGENT=codex is a preset, not yet verified) are needed to run the loop.
 `;
 
 // ---------- 색 ----------
@@ -232,6 +232,9 @@ function writeLoopEnv(root, backend) {
       '# POST_MERGE_PORT …)은 /setup-ticket-loop 가 저장소를 읽고 채운다.',
       `# 백엔드: ${Object.keys(BACKENDS).join(' | ')}`,
       line,
+      '# 에이전트: claude | codex (기본 claude). 기동 명령·배너·모델 정규식·스킬 접두사(/implement ↔ $implement)를 프리셋이 정한다 — scripts/ticket-loop.sh 머리의 "에이전트 프리셋" 절.',
+      '# Codex 는 .agents/skills/ 를 읽으므로 스킬 배치가 따라와야 한다(키트 다음 단계). 아직 실측 전이다',
+      '# AGENT="${AGENT:-claude}"',
       ...(backend === 'cmux' ? [
         '# cmux는 orca.yaml setup 대신 이 명령으로 새 워크트리를 준비한다(의존성 설치·env 복사). LOOP_ROOT_PATH, LOOP_WORKTREE_PATH 사용 가능',
         '# WORKTREE_SETUP_CMD="${WORKTREE_SETUP_CMD:-pnpm install}"',

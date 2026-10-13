@@ -212,7 +212,7 @@ chmod +x "$F/orca"
 sed -n '/^# ---------- 백엔드 ----------/,/^# ----- 공통 -----/p' "$KIT/files/scripts/ticket-loop.sh" > "$F/backend.sh"
 cat > "$F/run.sh" <<'SH'
 set -euo pipefail
-BACKEND=orca; ORCA_CLI=orca; CMUX_CLI=cmux; OWNER_REPO=o/r; ROOT=/tmp; MAIN_WT=/tmp; BASE_BRANCH=main; BRANCH_PREFIX=issue-; AGENT=claude
+BACKEND=orca; ORCA_CLI=orca; CMUX_CLI=cmux; OWNER_REPO=o/r; ROOT=/tmp; MAIN_WT=/tmp; BASE_BRANCH=main; BRANCH_PREFIX=issue-; AGENT=claude; SKILL_PREFIX=/
 AGENT_RESTART_CMD=claude; TERMINAL_RETRY=1; TERMINAL_RETRY_SEC=0; IDLE_POLL_SEC=0; WORKTREE_DIR=""; WORKTREE_SETUP_CMD=""
 log() { :; }; die() { echo "die: $*" >&2; exit 1; }
 source "$1"
@@ -225,6 +225,30 @@ echo ok
 SH
 (cd "$F" && PATH="$F:$PATH" bash run.sh "$F/backend.sh" >/dev/null) || fail "Orca 백엔드 함수 호출 실패(set -u)"
 echo "ok  Orca 백엔드 함수 가짜 호출"
+
+# 에이전트 프리셋: AGENT 가 기동 명령·배너·모델 정규식·스킬 접두사의 기본값을 정하고, 준 값이 이긴다. 프롬프트에는 특정 에이전트의 이름·도구가 없다
+A="$T/agent"; mkdir -p "$A"
+sed -n '/^# ----- 에이전트 프리셋 -----/,/^# ----- 에이전트 프리셋 끝 -----/p' "$KIT/files/scripts/ticket-loop.sh" > "$A/preset.sh"
+grep -q 'case "\$AGENT" in' "$A/preset.sh" || fail "에이전트 프리셋 블록을 찾지 못함"
+preset() { AGENT="$1" bash -c 'set -euo pipefail; source "$0"; printf "%s\n%s\n%s\n%s\n" "$AGENT_RESTART_CMD" "$AGENT_BANNER_REGEX" "$MODEL_REGEX" "$SKILL_PREFIX"' "$A/preset.sh"; }
+out="$(preset claude)"; [[ "$(sed -n 1p <<<"$out")" == "claude --dangerously-skip-permissions" && "$(sed -n 4p <<<"$out")" == "/" ]] || fail "claude 프리셋이 다름: $out"
+printf '[Opus 5.5 | Max]\n' | grep -oE "$(sed -n 3p <<<"$out")" | grep -qx 'Opus 5.5' || fail "claude MODEL_REGEX 가 Opus 5.5 를 못 뽑음"
+out="$(preset codex)"; [[ "$(sed -n 1p <<<"$out")" == "codex --dangerously-bypass-approvals-and-sandbox" && "$(sed -n 4p <<<"$out")" == '$' ]] || fail "codex 프리셋이 다름: $out"
+printf '>_ OpenAI Codex (v0.58.0)\nmodel: gpt-5.1-codex-max   /model to change\n' | grep -Eq "$(sed -n 2p <<<"$out")" || fail "codex 배너 정규식이 기동 화면에 안 맞음"
+printf 'codex --dangerously-bypass-approvals-and-sandbox "$(cat /tmp/p)"\n' | grep -Eq "$(sed -n 2p <<<"$out")" && fail "codex 배너 정규식이 셸에 찍힌 기동 명령에도 맞음(배너 오판)"
+printf 'model: gpt-5.1-codex-max.\n' | grep -oE "$(sed -n 3p <<<"$out")" | grep -qx 'gpt-5.1-codex-max' || fail "codex MODEL_REGEX 가 모델명을 못 뽑음"
+out="$(AGENT_RESTART_CMD='codex --yolo' SKILL_PREFIX=/ preset codex)"; [[ "$(sed -n 1p <<<"$out")" == "codex --yolo" && "$(sed -n 4p <<<"$out")" == "/" ]] || fail "loop.env 값이 프리셋을 이기지 않음: $out"
+out="$(preset bogus)"; [[ -z "$(sed -n 1p <<<"$out")" && -z "$(sed -n 2p <<<"$out")" && "$(sed -n 4p <<<"$out")" == "/" ]] || fail "모르는 AGENT 에 프리셋이 생김: $out"
+grep -q 'AGENT=\${AGENT} 에는 프리셋이 없습니다' "$KIT/files/scripts/ticket-loop.sh" || fail "모르는 AGENT 를 시작 때 멈추는 검사가 없음"
+sed -n '/^worker_prompt() {/,/^}/p' "$KIT/files/scripts/ticket-loop.sh" > "$A/prompt.sh"
+wp() { ROOT="$A" WORKER_RULES_FILE="rules.md" SKILL_PREFIX="$1" bash -c 'set -euo pipefail; source "$0"; worker_prompt 12' "$A/prompt.sh"; }
+out="$(wp '$')"; [[ "$out" == '$implement 12 — '* ]] || fail "codex 워커 프롬프트가 \$implement 로 시작하지 않음: $out"
+out="$(wp /)"; [[ "$out" == '/implement 12 — '* ]] || fail "claude 워커 프롬프트가 /implement 로 시작하지 않음: $out"
+grep -q 'rules.md 규칙도 따라라' <<<"$out" && fail "규칙 파일이 없는데 프롬프트에 규칙 문장이 있음"
+: > "$A/rules.md"; out="$(wp /)"; grep -q 'rules.md 규칙도 따라라' <<<"$out" || fail "규칙 파일이 있는데 프롬프트에 규칙 문장이 없음"
+grep -qiE 'claude|codex|AskUserQuestion' "$A/prompt.sh" && fail "워커 프롬프트에 특정 에이전트의 이름·도구가 있음"
+grep -E 'repair "\$\{handle\}"' "$KIT/files/scripts/ticket-loop.sh" | grep -qiE 'claude|codex|AskUserQuestion' && fail "수리 프롬프트에 특정 에이전트의 이름·도구가 있음"
+echo "ok  에이전트 프리셋(claude·codex)·중립 프롬프트"
 
 # 스펙 이슈 자동 닫기: 가짜 gh 로 세 경우 — 하위 이슈가 모두 닫힘(닫는다), 하나 열림(안 닫는다), 하위 이슈 없음(안 닫는다)
 S="$T/spec"; mkdir -p "$S"

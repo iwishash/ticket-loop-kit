@@ -5,7 +5,7 @@ set -euo pipefail
 # 가이드: 「티켓 무인 루프 가이드북」 3판 (ticket-loop-kit docs/). 이 파일은 ticket-loop-kit이 관리한다 — 고치면 키트에서 고친다.
 #
 # 티켓 하나당:
-#   1. 기본 브랜치에서 워크트리를 새로 만들고 에이전트(Claude Code)에 `/implement N`을 보낸다
+#   1. 기본 브랜치에서 워크트리를 새로 만들고 에이전트(Claude Code 또는 Codex)에 `/implement N`(Codex는 `$implement N`)을 보낸다
 #      (티켓마다 새 프로세스라 컨텍스트가 비어 있다)
 #   2. 워커가 `<BRANCH_PREFIX>N-<slug>` 브랜치로 PR을 열 때까지 기다린다
 #   3. CI를 기다리고, 충돌·CI 실패는 같은 워커에 REPAIR_ROUNDS회까지 고치게 한다
@@ -50,10 +50,12 @@ set -euo pipefail
 #   BASE_BRANCH         기준 브랜치 (기본: 저장소 기본 브랜치)
 #   ORDER_REGEX         제목에서 순번을 뽑는 정규식, 이름 있는 그룹 n (기본 ^T(?<n>[0-9]+))
 #   WORKER_RULES_FILE   워커가 추가로 따를 규칙 파일 (기본 .ticket-loop/worker-rules.md)
-#   AGENT               에이전트 ID — Orca가 띄울 에이전트 / 기록의 agent 필드 (기본 claude)
-#   AGENT_BANNER_REGEX  에이전트가 떴는지 확인할 화면 문구 (기본: Claude Code 배너·모델명)
-#   AGENT_RESTART_CMD   에이전트를 셸에서 띄우는 명령. 프롬프트는 인자로 붙는다 (기본 claude --dangerously-skip-permissions —
-#                       Orca가 워커를 띄우는 방식과 같게). Orca는 뜨지 않았을 때만, cmux는 처음부터 이 명령으로 띄운다
+#   AGENT               claude | codex (기본 claude). Orca가 띄울 에이전트 ID이자 기록의 agent 필드. 아래 네 값의 기본을 정하는
+#                       프리셋이다(아래 "에이전트 프리셋" 절). 다른 값이면 네 값을 직접 적어야 한다
+#   AGENT_RESTART_CMD   에이전트를 셸에서 띄우는 명령. 프롬프트는 인자로 붙는다 (claude: claude --dangerously-skip-permissions,
+#                       codex: codex --dangerously-bypass-approvals-and-sandbox). Orca는 뜨지 않았을 때만, cmux는 처음부터 이 명령으로 띄운다
+#   AGENT_BANNER_REGEX  에이전트가 떴는지 확인할 화면 문구(ERE) (claude: Claude Code 배너·모델명, codex: "OpenAI Codex"·gpt- 모델명)
+#   SKILL_PREFIX        워커 프롬프트에서 스킬을 부르는 접두사 (claude: / → /implement N, codex: $ → $implement N)
 #   TICKET_TIMEOUT_SEC  티켓 한 건 제한 시간 (기본 14400 = 4시간)
 #   MERGE_METHOD        merge | squash | rebase (기본 merge)
 #   REPAIR_ROUNDS       충돌·CI 수리 횟수 합계 (기본 1)
@@ -70,7 +72,8 @@ set -euo pipefail
 #   LOG_FILE            진행 로그 파일 (기본 .ticket-loop/loop-MMDD.log, /dev/null이면 끔)
 #   RECORDS_FILE        티켓별 기록 JSONL (기본 .ticket-loop/tickets.jsonl, 기계별 — 커밋하지 않는다)
 #   REPORT_DIR          스펙 리포트 HTML 디렉터리 (기본 docs/loop-reports — 리포트는 사람이 PR로 커밋)
-#   MODEL_REGEX         워커 터미널에서 모델 이름을 뽑는 정규식(ERE). 기본은 Claude Code 상태줄·배너의 "Opus 5.5" 꼴
+#   MODEL_REGEX         워커 터미널에서 모델 이름을 뽑는 정규식(ERE) (claude: 상태줄·배너의 "Opus 5.5" 꼴, codex: "gpt-5.1-codex" 꼴).
+#                       못 찾으면 리포트에 not recorded
 #
 # 멈추는 조건(루프 종료, 워크트리는 조사용으로 남긴다):
 #   - 워커가 PR 없이 멈춤(질문·실패) / 티켓 타임아웃 / 백엔드 터미널 끊김 / 에이전트 기동 실패
@@ -103,8 +106,6 @@ BASE_BRANCH="${BASE_BRANCH:-}"
 ORDER_REGEX="${ORDER_REGEX:-^T(?<n>[0-9]+)}"
 WORKER_RULES_FILE="${WORKER_RULES_FILE:-.ticket-loop/worker-rules.md}"
 AGENT="${AGENT:-claude}"
-AGENT_BANNER_REGEX="${AGENT_BANNER_REGEX:-Claude Code|Opus|Sonnet|Fable|Haiku}"
-AGENT_RESTART_CMD="${AGENT_RESTART_CMD:-claude --dangerously-skip-permissions}"
 TICKET_TIMEOUT_SEC="${TICKET_TIMEOUT_SEC:-14400}"
 MERGE_METHOD="${MERGE_METHOD:-merge}"
 REPAIR_ROUNDS="${REPAIR_ROUNDS:-1}"
@@ -117,7 +118,32 @@ POST_MERGE_WORKTREE="${POST_MERGE_WORKTREE:-}"
 LOG_FILE="${LOG_FILE:-.ticket-loop/loop-$(date +%m%d).log}"
 RECORDS_FILE="${RECORDS_FILE:-.ticket-loop/tickets.jsonl}"
 REPORT_DIR="${REPORT_DIR:-docs/loop-reports}"
-MODEL_REGEX="${MODEL_REGEX:-(Opus|Sonnet|Haiku|Fable|Mythos)[[:space:]]+[0-9]+(\.[0-9]+)?}"
+# ----- 에이전트 프리셋 -----
+# AGENT가 기동 명령·배너·모델 정규식·스킬 접두사의 기본값을 정한다. loop.env나 환경변수로 준 값이 이긴다.
+#   claude  Claude Code. 스킬은 /이름. 모델명은 상태줄·배너의 "Opus 5.5" 꼴
+#   codex   Codex CLI. 스킬은 $이름 — Codex는 .claude/skills/ 를 읽지 않고 .agents/skills/ 를 읽는다(배치는 키트 다음 단계). 배너 "OpenAI Codex",
+#           모델명 "gpt-5.1-codex" 꼴(상태줄 설정에 따라 안 보일 수 있다 → not recorded). --dangerously-bypass-approvals-and-sandbox(=--yolo)는
+#           Claude의 --dangerously-skip-permissions에 해당한다 — 더 좁은 --sandbox workspace-write는 네트워크를 막아 push·gh pr create가 안 된다.
+#           .claude/settings.json의 deny(gh pr merge)는 Codex에 안 걸린다 — 병합 금지는 프롬프트와 GitHub 브랜치 보호에 기댄다
+#   그 외   프리셋 없음. AGENT_RESTART_CMD·AGENT_BANNER_REGEX(·MODEL_REGEX·SKILL_PREFIX)를 loop.env에 적는다. 비어 있으면 시작 때 멈춘다
+case "$AGENT" in
+  claude)
+    AGENT_RESTART_CMD="${AGENT_RESTART_CMD:-claude --dangerously-skip-permissions}"
+    AGENT_BANNER_REGEX="${AGENT_BANNER_REGEX:-Claude Code|Opus|Sonnet|Fable|Haiku}"
+    MODEL_REGEX="${MODEL_REGEX:-(Opus|Sonnet|Haiku|Fable|Mythos)[[:space:]]+[0-9]+(\.[0-9]+)?}"
+    SKILL_PREFIX="${SKILL_PREFIX:-/}" ;;
+  codex)
+    AGENT_RESTART_CMD="${AGENT_RESTART_CMD:-codex --dangerously-bypass-approvals-and-sandbox}"
+    AGENT_BANNER_REGEX="${AGENT_BANNER_REGEX:-OpenAI Codex|gpt-[0-9]}"
+    MODEL_REGEX="${MODEL_REGEX:-gpt-[0-9]+(\.[0-9]+)?(-[[:alnum:]]+)*}"
+    SKILL_PREFIX="${SKILL_PREFIX:-\$}" ;;
+  *)
+    AGENT_RESTART_CMD="${AGENT_RESTART_CMD:-}"
+    AGENT_BANNER_REGEX="${AGENT_BANNER_REGEX:-}"
+    MODEL_REGEX="${MODEL_REGEX:-}"
+    SKILL_PREFIX="${SKILL_PREFIX:-/}" ;;
+esac
+# ----- 에이전트 프리셋 끝 -----
 IDLE_WAIT_MS=600000       # idle 1회 대기 상한(Orca: terminal wait 한 번, cmux: 폴링 한 바퀴)
 IDLE_POLL_SEC=5           # cmux 백엔드가 lifecycle을 다시 읽는 간격
 TERMINAL_RETRY=5          # wait가 이상하게 끝났을 때 터미널 읽기를 다시 해 보는 횟수
@@ -172,6 +198,8 @@ fmt_epoch() { date -r "$1" '+%H:%M:%S' 2>/dev/null || date -d "@$1" '+%H:%M:%S';
 for tool in gh jq git; do
   command -v "$tool" >/dev/null 2>&1 || die "${tool} 이(가) 없습니다."
 done
+[[ -n "$AGENT_RESTART_CMD" && -n "$AGENT_BANNER_REGEX" ]] \
+  || die "AGENT=${AGENT} 에는 프리셋이 없습니다 (claude | codex). AGENT_RESTART_CMD·AGENT_BANNER_REGEX 를 .ticket-loop/loop.env 에 적으세요."
 
 ROOT="$(git rev-parse --show-toplevel)"
 MAIN_WT="$(git worktree list --porcelain | sed -n '1s/^worktree //p')"
@@ -264,7 +292,7 @@ BACKEND_NAME="$([[ "$BACKEND" == orca ]] && echo Orca || echo cmux)"
 
 # 프롬프트를 셸 명령 인자로 넘길 때는 파일을 거친다(따옴표·백틱이 섞여도 안전). 파일은 티켓이 끝나도 지우지 않는다(디버그용, tmp)
 prompt_file() { local f; f="$(mktemp "${TMPDIR:-/tmp}/ticket-loop-prompt-$1.XXXXXX")"; printf '%s' "$2" > "$f"; printf '%s' "$f"; }
-agent_launch_cmd() { printf '%s "$(cat %q)"' "$AGENT_RESTART_CMD" "$1"; }   # 셸이 해석할 한 줄: claude … "$(cat /tmp/…)"
+agent_launch_cmd() { printf '%s "$(cat %q)"' "$AGENT_RESTART_CMD" "$1"; }   # 셸이 해석할 한 줄: claude|codex … "$(cat /tmp/…)"
 
 # ----- Orca: 워크트리·터미널·idle 대기를 모두 Orca CLI가 한다 -----
 
@@ -284,7 +312,7 @@ orca_worktree_create() {
   local n="$1" prompt="$2" created
   created="$(orca_json worktree create --repo "id:$REPO_ID" --name "${BRANCH_PREFIX}${n}" --no-parent \
     --base-branch "origin/${BASE_BRANCH}" --issue "${n}" --agent "$AGENT" \
-    --prompt "$prompt" --comment "티켓 루프: /implement ${n} 진행 중")"
+    --prompt "$prompt" --comment "티켓 루프: ${SKILL_PREFIX}implement ${n} 진행 중")"
   jq -e '.ok == true' <<<"$created" >/dev/null || die "워크트리 생성 실패: $(jq -c '.error' <<<"$created")"
   WT="$(jq -r '.result.worktree.id' <<<"$created")"
   WT_PATH="${WT#*::}"
@@ -339,9 +367,10 @@ orca_set_status() {
 
 # ----- cmux: 워크트리는 루프가 git으로 만들고, 터미널은 cmux 워크스페이스다 (cmux 0.65 실측) -----
 # cmux에는 워크트리 생성 명령도, idle까지 블로킹하는 명령도 없다. 그래서
-#   - `git worktree add` 뒤 WORKTREE_SETUP_CMD(orca.yaml setup에 해당)를 돌리고 `cmux workspace create --cwd … --command "claude …"`
-#     --command는 워크스페이스의 로그인 셸(zsh)이 실행하고, 그 셸의 PATH 앞에 cmux의 claude shim이 있어 Claude Code 훅이 자동으로 붙는다
-#   - idle은 `cmux rpc surface.input_state`가 돌려주는 lifecycle(running | idle | needsInput | unknown — Claude Code 훅이 보고)을
+#   - `git worktree add` 뒤 WORKTREE_SETUP_CMD(orca.yaml setup에 해당)를 돌리고 `cmux workspace create --cwd … --command "<AGENT_RESTART_CMD> …"`
+#     --command는 워크스페이스의 로그인 셸(zsh)이 실행하고, 그 셸의 PATH 앞에 cmux의 에이전트 shim(claude·codex)이 있어 lifecycle 훅이 자동으로 붙는다
+#   - idle은 `cmux rpc surface.input_state`가 돌려주는 lifecycle(running | idle | needsInput | unknown — 에이전트 훅이 보고. Claude Code 실측,
+#     Codex는 shim이 같은 훅을 주입하지만 아직 실측 전)을
 #     IDLE_POLL_SEC마다 읽어 판정한다. 이벤트 스트림(`cmux events`)의 이름에 기대지 않는다
 #   - 소켓 모드가 cmuxOnly(기본)면 cmux 터미널 밖에서는 "액세스 거부"다. 루프를 cmux 터미널 안에서 돌린다
 #   - 백그라운드 idle 에이전트를 하이버네이션할 수 있어, 프롬프트를 보내기 전에 깨운다
@@ -431,10 +460,10 @@ send_prompt() { backend_send "$1" "$2" || die "프롬프트 전송이 수락되�
 worker_prompt() {
   # 한 줄로 보낸다 — TUI에서는 줄바꿈이 곧 제출이다.
   # 절차(선행 확인·브랜치·seam·리뷰·PR 본문·라벨·병합 금지)는 저장소의 implement 스킬이 단일 진실이다.
-  # 여기에는 무인 실행에서만 참인 것만 둔다 — 질문 금지, 막히면 코멘트 후 멈춤, 규칙 파일.
+  # 여기에는 무인 실행에서만 참인 것만 둔다 — 질문 금지, 막히면 코멘트 후 멈춤, 규칙 파일. 특정 에이전트의 도구·명령 이름은 쓰지 않는다(SKILL_PREFIX만 다르다).
   local n="$1" rules=""
   [[ ! -f "$ROOT/$WORKER_RULES_FILE" ]] || rules=" 저장소의 ${WORKER_RULES_FILE} 규칙도 따라라."
-  printf '%s' "/implement ${n} — 무인 루프(ticket-loop.sh)에서 실행 중이다. 사람이 답할 수 없으니 질문(AskUserQuestion)하지 말고 스스로 결정해 끝까지 진행해라. PR은 병합하지 마라 — 루프가 CI 뒤에 병합한다. 진행이 불가능하면(열린 선행 이슈 포함) 이슈 #${n}에 이유를 코멘트로 남기고 PR 없이 멈춰라.${rules}"
+  printf '%s' "${SKILL_PREFIX}implement ${n} — 무인 루프(ticket-loop.sh)에서 실행 중이다. 사람이 답할 수 없으니 사람에게 묻거나 확인을 구하지 말고(질문 도구도 쓰지 말고) 스스로 결정해 끝까지 진행해라. PR은 병합하지 마라 — 루프가 CI 뒤에 병합한다. 진행이 불가능하면(열린 선행 이슈 포함) 이슈 #${n}에 이유를 코멘트로 남기고 PR 없이 멈춰라.${rules}"
 }
 
 # 에이전트가 실제로 떴는지 확인한다. Orca가 셸에 기동 명령을 넣을 때 앞 글자가 빠져
@@ -605,8 +634,8 @@ run_post_merge() {
 
 CUR_N=""; CUR_TITLE=""; CUR_STARTED=0; CUR_STARTED_ISO=""; CUR_PR=""; CUR_MODEL=""; CUR_CI_SEC=""; CUR_ROUND=0
 
-# 워커 터미널의 에이전트 상태줄·배너에서 모델 이름을 뽑는다(Claude Code: "[Opus 5.5 | Max]"). 못 찾으면 빈 값.
-detect_model() { terminal_tail "$1" 2>/dev/null | grep -oE "$MODEL_REGEX" | tail -n1 || true; }
+# 워커 터미널의 에이전트 상태줄·배너에서 모델 이름을 뽑는다(Claude Code: "[Opus 5.5 | Max]", Codex: 기동 블록의 "model: gpt-5.1-codex"). 못 찾으면 빈 값.
+detect_model() { [[ -n "$MODEL_REGEX" ]] || return 0; terminal_tail "$1" 2>/dev/null | grep -oE "$MODEL_REGEX" | tail -n1 || true; }
 
 # 티켓이 속한 스펙 이슈 번호 — --parent가 없으면(이슈 번호 직접 지정) GitHub의 부모 이슈를 묻는다. 없으면 0.
 spec_of_ticket() {
@@ -635,9 +664,9 @@ close_spec_if_done() {
 
 # 끝난 스펙이 있으면 회고를 권한다 — 안내일 뿐, 아무것도 실행하지 않는다. /retro 는 사람이 후보를 보고 고르는 스킬이라 무인 단계로 두지 않는다
 suggest_retro() {
-  local spec report skill="/retro" log_src
+  local spec report skill="${SKILL_PREFIX:-/}retro" log_src
   [[ -n "${CLOSED_SPECS// /}" ]] || return 0
-  [[ -d "${ROOT:-.}/.claude/skills/retro" ]] || skill="/retro(이 저장소에는 아직 없다 — 키트 설치 때 --workflow-skills 로 들일 수 있다)"
+  [[ -d "${ROOT:-.}/.claude/skills/retro" ]] || skill="${skill}(이 저장소에는 아직 없다 — 키트 설치 때 --workflow-skills 로 들일 수 있다)"
   log_src="$LOG_FILE"; [[ "$LOG_FILE" != "/dev/null" ]] || log_src="(로그를 꺼 둬서 없음)"
   for spec in $CLOSED_SPECS; do
     report="$REPORT_DIR/spec-${spec}.html"
