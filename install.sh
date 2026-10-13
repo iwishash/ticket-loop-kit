@@ -142,13 +142,17 @@ for old in .agent-loop .orca-loop; do
 done
 for old in setup-agent-loop setup-orca-loop; do
   if [[ -d ".claude/skills/$old" ]]; then
-    rm -rf ".claude/skills/$old"
+    if git ls-files --error-unmatch ".claude/skills/$old" >/dev/null 2>&1; then git rm -rq ".claude/skills/$old"; else rm -rf ".claude/skills/$old"; fi
     say "Removed the old $old skill (replaced by setup-ticket-loop)"
   fi
 done
+# 옛 경로 줄과 함께 그 위에 키트가 썼던 주석 두 줄도 지운다(4단계가 새 경로와 같이 다시 쓴다). 사용자가 쓴 다른 줄은 그대로
 if [[ -f .gitignore ]] && grep -qE '^/\.(agent|orca)-loop/' .gitignore; then
-  tmp="$(mktemp)"; grep -vE '^/\.(agent|orca)-loop/' .gitignore > "$tmp" || true; mv "$tmp" .gitignore
-  say "Removed the /.agent-loop/ and /.orca-loop/ lines from .gitignore"
+  tmp="$(mktemp)"
+  grep -vE '^/\.(agent|orca)-loop/' .gitignore \
+    | grep -vxF -e '# 티켓 루프 로그 — 규칙·설정 파일만 커밋한다' -e '# 티켓 루프의 티켓별 기록(RECORDS_FILE) — 기계별 원자료. 스펙 리포트(docs/loop-reports/)만 커밋한다' > "$tmp" || true
+  mv "$tmp" .gitignore
+  say "Removed the /.agent-loop/ and /.orca-loop/ lines (and the kit's comments above them) from .gitignore"
 fi
 
 # ---------- 0'. 스킬 배치 (0.6 이하: .claude/skills/<name> 실제 디렉터리 → .agents/skills/<name> + 링크) ----------
@@ -219,7 +223,12 @@ fi
 
 # ---------- 4. .gitignore · settings.json ----------
 touch .gitignore
-grep -qxF '/.ticket-loop/*.log' .gitignore || printf '\n# 티켓 루프 로그 — 규칙·설정 파일만 커밋한다\n/.ticket-loop/*.log\n' >> .gitignore
+if ! grep -qxF '/.ticket-loop/*.log' .gitignore; then
+  sep=$'\n'                                                                    # 앞 내용과 빈 줄 하나로 띄운다
+  if [[ ! -s .gitignore || -z "$(tail -n1 .gitignore)" ]]; then sep=""          # 비었거나 이미 빈 줄로 끝난다
+  elif [[ -n "$(tail -c1 .gitignore)" ]]; then sep=$'\n\n'; fi                  # 마지막 줄에 개행이 없다
+  printf '%s# 티켓 루프 로그 — 규칙·설정 파일만 커밋한다\n/.ticket-loop/*.log\n' "$sep" >> .gitignore
+fi
 grep -qxF '/.ticket-loop/*.jsonl' .gitignore || printf '# 티켓 루프의 티켓별 기록(RECORDS_FILE) — 기계별 원자료. 스펙 리포트(docs/loop-reports/)만 커밋한다\n/.ticket-loop/*.jsonl\n' >> .gitignore
 
 mkdir -p .claude

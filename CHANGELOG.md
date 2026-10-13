@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.7.1 — 2026-10-13
+
+0.7.0을 실제 0.3.0 설치본(boiler-webapp, mattpocock 스킬 26개를 `.claude/skills/`에 직접 들인 상태)에 `npx github:iwishash/ticket-loop-kit#v0.7.0 init --yes`로 올려 본 결과. 마이그레이션 본체는 그대로 통과했다 — `.agent-loop/` → `.ticket-loop/`(로그·기록 포함, `git mv`), 키트 스킬 3개 + 벤더링 25개가 `.claude/skills/`에서 `.agents/skills/`로 `git mv`되고 링크 28개가 남았으며, kept 16개(upstream에서 사라진 `git-guardrails-claude-code` 포함)는 유지·동기화, `setup-matt-pocock-skills`와 `setup-agent-loop`는 제거, 매니페스트는 새 자리로, `.codex/rules`·`openai.yaml` 추가, `loop.env`에 `AGENT` 줄, `--dry-run` 정상. 눈에 띈 것 셋을 고쳤다.
+
+- `install.sh`: `.gitignore`의 옛 `/.agent-loop/` 줄을 지울 때 그 위에 0.3 설치기가 썼던 주석 두 줄이 고아로 남고, 4단계가 같은 주석을 새 줄과 함께 또 써서 주석이 두 벌이 됐다. 옛 줄과 함께 키트 주석(정확히 같은 문자열만)도 지운다. 사용자가 쓴 다른 줄은 그대로
+- `install.sh`: 4단계가 새 줄을 붙일 때 늘 빈 줄을 하나 앞세워, 이미 빈 줄로 끝나는 `.gitignore`에는 빈 줄이 둘 생겼다. 끝이 빈 줄이면 띄우지 않고, 개행 없이 끝나면 둘을 넣는다
+- `install.sh`: 옛 `setup-agent-loop`·`setup-orca-loop` 스킬을 `rm -rf`로 지워 삭제가 스테이징되지 않은 채 남았다(다른 이동은 `git mv`로 스테이징된다). 추적 중이면 `git rm`
+- README(영·한)와 `sync-mattpocock-skills.sh` 머리 주석: 매니페스트 자리가 아직 `.claude/skills/.mattpocock.json`으로, `## Agent skills` 블록 자리가 `CLAUDE.md`로 적혀 있었다 → `.agents/skills/.mattpocock.json`, `AGENTS.md`
+- `tests/smoke.sh`: 0.3 마이그레이션 픽스처에 키트 주석과 사용자 줄을 넣고, 마이그레이션 뒤 주석이 한 번만 남는지·사용자 줄이 남는지·옛 스킬 삭제가 스테이징되는지 본다
+- 설계대로 두고 손으로 고친 것: 설치기가 경고한 "옛 경로를 아직 가리키는 파일" 4개(`docs/agents/ticket-loop.md`, `docs/loop-reports/README.md`, `loop.env` 머리 주석, `implement/SKILL.md` 머리 주석)와 `## Agent skills` 블록의 `AGENTS.md` 이동은 설치 PR에서 직접 했다(`/setup-ticket-loop` 재실행은 이번에 돌리지 않았다)
+
 ## 0.7.0 — 2026-10-13
 
 Codex CLI를 워커로 쓸 수 있는 조각을 갖췄다. 질문은 "이 kit을 claude만이 아닌 codex에서도 사용할 수 있게 변경할 수 있어?"였다. 루프 본체(티켓 선택·PR·CI·수리·병합·기록·리포트)는 에이전트와 무관하고, Claude에 묶인 곳은 기동 명령·배너·모델 정규식·`/implement` 접두사·프롬프트의 도구 이름·저장소 배치(`.claude/skills/`)였다. 세 단계 중 1단계(스크립트 프리셋)와 2단계(저장소 배치)를 이 릴리스에 담았다. 3단계(codex 설치 컴퓨터에서 실측)는 코드 변경이 없는 검증이라 뒤에 한다 — 저장소가 아직 비공개여서 내부에서 검증할 여유가 있다(사용자 결정). 그때까지 README·가이드는 Codex를 "지원"이 아니라 "아직 확인하지 않은 것"으로 둔다.

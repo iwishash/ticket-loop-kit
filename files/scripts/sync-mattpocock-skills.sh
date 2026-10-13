@@ -43,7 +43,7 @@ set -euo pipefail
 #   3. PROJECT_OWNED 스킬(implement·pr)은 건드리지 않는다(이 저장소가 직접 관리)
 #   4. code-review → ticket-review 로 이름을 바꾼다. Claude Code 내장 /code-review 와 이름이 겹치기 때문이다.
 #      다른 스킬 본문의 code-review 참조와, 들이지 않는 /setup-matt-pocock-skills 안내(→ /setup-ticket-loop)도 같이 바꾼다
-#   5. 지운다(.claude/skills/.mattpocock.json 기준): --no-workflow 로 뺀 workflow 묶음, setup-matt-pocock-skills, --prune 일 때 kept 전부.
+#   5. 지운다(.agents/skills/.mattpocock.json 기준 — 0.6 이하는 .claude/skills/.mattpocock.json): --no-workflow 로 뺀 workflow 묶음, setup-matt-pocock-skills, --prune 일 때 kept 전부.
 #      매니페스트에 없는 디렉터리와 프로젝트 소유 스킬은 절대 건드리지 않는다
 #   6. 버전·커밋·묶음·kept·설치 목록을 .agents/skills/.mattpocock.json 에 남긴다(0.6 이하: .claude/skills/.mattpocock.json — 옮긴다)
 # 끝나면 `git diff --stat .agents/skills .claude/skills`로 바뀐 것을 보고 커밋한다.

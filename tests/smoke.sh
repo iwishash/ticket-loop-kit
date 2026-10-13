@@ -102,7 +102,7 @@ echo "ok  0.2 → .ticket-loop 마이그레이션"
 M3="$T/migrate3"; mkdir -p "$M3/.agent-loop" "$M3/.claude/skills/setup-agent-loop"; git -C "$M3" init -q -b main
 printf 'old rules\n' > "$M3/.agent-loop/worker-rules.md"; printf 'BACKEND="${BACKEND:-cmux}"\n' > "$M3/.agent-loop/loop.env"
 printf '{"issue":1}\n' > "$M3/.agent-loop/tickets.jsonl"; echo old > "$M3/.claude/skills/setup-agent-loop/SKILL.md"
-printf '/.agent-loop/*.log\n/.agent-loop/*.jsonl\n' > "$M3/.gitignore"
+printf '# 티켓 루프 로그 — 규칙·설정 파일만 커밋한다\n/.agent-loop/*.log\n# 티켓 루프의 티켓별 기록(RECORDS_FILE) — 기계별 원자료. 스펙 리포트(docs/loop-reports/)만 커밋한다\n/.agent-loop/*.jsonl\nkeep-me\n' > "$M3/.gitignore"   # 0.3 설치기가 쓴 주석 + 사용자 줄
 mkdir -p "$M3/docs/agents"; printf '설정은 .agent-loop/loop.env 에 있다\n' > "$M3/docs/agents/ticket-loop.md"   # 옛 경로를 가리키는 프로젝트 문서
 git -C "$M3" add -A >/dev/null; git -C "$M3" -c user.name=t -c user.email=t@t commit -q -m old
 out="$(cd "$M3" && KIT_DIR="$KIT" bash "$KIT/install.sh" --no-skills --no-github --no-git-credential --no-orca 2>&1)" || fail "0.3 마이그레이션 설치 실패"
@@ -114,6 +114,10 @@ grep -qxF 'BACKEND="${BACKEND:-cmux}"' "$M3/.ticket-loop/loop.env" || fail "0.3 
 [[ ! -e "$M3/.claude/skills/setup-agent-loop" && -f "$M3/.claude/skills/setup-ticket-loop/SKILL.md" ]] || fail "옛 setup-agent-loop 가 남았거나 새 스킬이 없음"
 grep -q '^/\.agent-loop/' "$M3/.gitignore" && fail ".gitignore 에 /.agent-loop/ 줄이 남음"
 grep -qxF '/.ticket-loop/*.jsonl' "$M3/.gitignore" || fail ".gitignore 에 새 jsonl 줄이 없음"
+[[ "$(grep -cxF '# 티켓 루프 로그 — 규칙·설정 파일만 커밋한다' "$M3/.gitignore")" == 1 ]] || fail ".gitignore 에 키트 주석이 고아로 남았거나 없음(0.7.0 회귀)"
+grep -qxF 'keep-me' "$M3/.gitignore" || fail ".gitignore 의 사용자 줄을 지움"
+awk 'prev == "" && $0 == "" { bad = 1 } { prev = $0 } END { exit bad }' "$M3/.gitignore" || fail ".gitignore 에 빈 줄이 연달아 남음"
+git -C "$M3" status --porcelain | grep -q '^D  .claude/skills/setup-agent-loop/SKILL.md' || fail "옛 setup-agent-loop 삭제가 git rm 으로 스테이징되지 않음"
 git -C "$M3" status --porcelain | grep -q '^R  .agent-loop/worker-rules.md -> .ticket-loop/worker-rules.md' || fail "0.3: git mv 로 옮기지 않음(이력 끊김)"
 # 둘 다 있고 새 경로는 없으면 첫 번째(.agent-loop)만 옮기고 .orca-loop 는 경고와 함께 남긴다
 M4="$T/migrate4"; mkdir -p "$M4/.agent-loop" "$M4/.orca-loop"; git -C "$M4" init -q -b main; git -C "$M4" commit -q --allow-empty -m init
