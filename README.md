@@ -1,34 +1,33 @@
 # ticket-loop-kit
 
-A kit that installs and updates the **ticket loop** in other repositories: an unattended loop that implements, verifies, and merges GitHub issue tickets one at a time, each in its own worktree. The worktrees and agent terminals are handled by a backend (Orca or cmux).
-The principles and operating guide are in the [Unattended Ticket Loop Guidebook](docs/ticket-loop-guide.pdf) (Korean). The original Korean version of this README is [README.ko.md](README.ko.md).
+Installs and updates the **ticket loop** in other repositories: an unattended loop that implements, verifies, and merges GitHub issue tickets one at a time, each in its own worktree. Worktrees and agent terminals are driven by a backend (Orca, cmux, or tmux). The principles and operating guide are in the [Unattended Ticket Loop Guidebook](docs/ticket-loop-guide.pdf) (Korean); the Korean original of this README is [README.ko.md](README.ko.md).
 
 ## Requirements and supported environments
 
-What the kit assumes, and how far each part has been verified. Verified means one real ticket went through end to end (worktree → worker → PR → CI → merge → cleanup).
+"Verified" means one real ticket went end to end (worktree → worker → PR → CI → merge → cleanup).
 
 | | Supported | Status |
 |---|---|---|
-| Worker agent | **Claude Code** (`AGENT=claude`, default) | Verified. Started with `claude --dangerously-skip-permissions` |
-| | **Codex CLI** (`AGENT=codex`) | Preset and repository layout are in place; **not yet verified on a real ticket** (see "Not yet verified" below). Started with `codex --dangerously-bypass-approvals-and-sandbox`. Needs a ChatGPT plan that includes Codex CLI (Plus or higher) or an API key |
-| Backend (worktrees and agent terminals) | **Orca** (`BACKEND=orca`, default) | Verified (Orca 1.4.x). Orca app running, repository registered, Command Source "orca.yaml only" |
-| | **cmux** (`BACKEND=cmux`) | Verified (cmux 0.65). The loop must run inside a cmux terminal (socket mode defaults to `cmuxOnly`); the agent's cmux integration must be on so `lifecycle` is reported |
-| | **tmux** (`BACKEND=tmux`) | Verified (tmux 3.8, one ticket in a dummy repository). Runs in any terminal app (Ghostty, Warp, iTerm2…) and over SSH. Idle is reported by Claude Code hooks (injected with `--settings`). Claude Code must already trust the main checkout (checked at startup). Codex is wired through `notify` but untested |
-| Issue tracker | **GitHub Issues** only, through `gh` | Uses sub-issues (spec → tickets), issue dependencies (`blocked_by`), labels, PR checks, and merge. GitLab or other trackers would need the selection, PR, and merge functions rewritten |
+| Worker agent | **Claude Code** (`AGENT=claude`, default) | Verified. Runs `claude --dangerously-skip-permissions` |
+| | **Codex CLI** (`AGENT=codex`) | Wired up, **not verified on a real ticket**. Runs `codex --dangerously-bypass-approvals-and-sandbox`; needs a ChatGPT plan that includes Codex CLI, or an API key |
+| Backend | **Orca** (`BACKEND=orca`, default) | Verified (Orca 1.4.x). Orca app running, repository registered, Command Source "orca.yaml only" |
+| | **cmux** (`BACKEND=cmux`) | Verified (cmux 0.65). Run the loop inside a cmux terminal; the agent's cmux integration must be on |
+| | **tmux** (`BACKEND=tmux`) | Verified (tmux 3.8). Any terminal app or SSH. Idle comes from Claude Code hooks; Codex is wired through `notify` but untested |
+| Issue tracker | **GitHub Issues** via `gh` | Sub-issues (spec → tickets), `blocked_by`, labels, PR checks, merge. Other trackers would need the selection, PR, and merge functions rewritten |
 | OS | **macOS** | Verified |
-| | **Linux / WSL** | Code paths are in place (`orca-ide`, `notify-send`, `date -d`) but **not yet run**. Inside WSL the kit is on the Linux path; the tmux backend is the most likely to work as is (bash, symbolic links, tmux, `gh`, `jq`, Claude Code all run natively in WSL; only the desktop notification is skipped). Orca ships Windows and Linux builds, but driving it from a loop inside WSL through `orca-ide` has not been tried. cmux is macOS-only |
-| | Native Windows (cmd, PowerShell, Git Bash) | **Not supported**: the installer and loop are bash, `.claude/skills/<name>` are symbolic links (MSYS `ln -s` copies by default), and Git Bash has no tmux. `npx … init` refuses on win32 and points to WSL |
+| | **Linux / WSL** | Code paths exist (`orca-ide`, `notify-send`, `date -d`) but have **not been run**. tmux inside WSL is the likeliest to work as is; Orca from WSL is untried; cmux is macOS-only |
+| | Native Windows (cmd, PowerShell, Git Bash) | **Not supported**: bash installer and loop, symbolic links under `.claude/skills/`, no tmux in Git Bash. `npx … init` refuses on win32 and points to WSL |
 | Tools | `git`, `gh` (logged in), `jq`, bash; Node ≥ 18 for `npx … init` | The bash-only install needs no Node |
 
-**Built on the mattpocock skill set.** The worker does not follow instructions baked into the loop script; it follows skills committed in the repository, and those come from [mattpocock/skills](https://github.com/mattpocock/skills) (MIT). The installer vendors `tdd` and `code-review` (renamed `ticket-review`) into `.agents/skills/` and pins them to an upstream commit, so every worker runs the same version regardless of what is installed on the machine. The project-owned `implement` skill, which the loop sends as `/implement N` (`$implement N` in Codex), is seeded from upstream `implement` and calls `tdd` → `ticket-review` → `pr`. The planning skills (`grill-with-docs`, `to-spec`, `to-tickets`, `retro`) are optional (`--workflow-skills`); they produce the spec issue and tickets the loop consumes and the retrospective after it, but the loop itself runs without them. `docs/agents/issue-tracker.md` is seeded from upstream's GitHub tracker template. If you already use these skills as a plugin or through `npx skills`, see "mattpocock skills: what is vendored, what is checked" below — the installer detects the overlap. One copy of each skill lives in `.agents/skills/<name>` (read by Codex) and `.claude/skills/<name>` is a symbolic link to it (read by Claude Code).
+**Skills, not baked-in prompts.** The worker follows skills committed in the repository, taken from [mattpocock/skills](https://github.com/mattpocock/skills) (MIT). `tdd` and `code-review` (renamed `ticket-review`) are vendored into `.agents/skills/` and pinned to an upstream commit, so every worker runs the same version. The project-owned `implement` skill (sent as `/implement N`, `$implement N` in Codex) calls `tdd` → `ticket-review` → `pr`. The planning skills (`grill-with-docs`, `to-spec`, `to-tickets`, `retro`) are optional (`--workflow-skills`). Each skill lives once in `.agents/skills/<name>` (read by Codex) with a `.claude/skills/<name>` symbolic link (read by Claude Code).
 
-**Constraints to know before installing.**
+**Constraints.**
 
-- The worker runs with permission prompts bypassed, so the real guard against a bad merge or force push is GitHub branch protection on the default branch. The kit adds `deny` rules to `.claude/settings.json` and the same bans to `.codex/rules/ticket-loop.rules`, but those are a second line, not the first.
-- One loop per repository at a time (a lock directory under `.git`). The loop keeps no state of its own; GitHub (labels, assignees, PRs) is the state.
-- Tickets are worked one at a time, each in a fresh worktree with an empty context. The worker only sees what is committed on the default branch, so skills, worker rules, and `AGENTS.md`/`CLAUDE.md` changes must be merged before they take effect.
-- Heavy test suites (integration, E2E) are not run by the worker; the loop runs `POST_MERGE_CMD` on the default branch after each merge and stops on failure.
-- The kit repository is private for now: installing requires an invitation and `gh auth login` (plus `gh auth setup-git` once for npx).
+- The worker bypasses permission prompts. The real guard against a bad merge or force push is GitHub branch protection; the kit's `deny` rules (`.claude/settings.json`, `.codex/rules/ticket-loop.rules`) are a second line.
+- One loop per repository (lock directory under `.git`). GitHub (labels, assignees, PRs) is the only state.
+- Each ticket starts in a fresh worktree with an empty context, so skills, worker rules, and `AGENTS.md`/`CLAUDE.md` changes take effect only after they are merged.
+- The worker does not run heavy suites (integration, E2E). The loop runs `POST_MERGE_CMD` on the default branch after each merge and stops on failure.
+- The kit repository is private: you need an invitation, `gh auth login`, and `gh auth setup-git` once for npx (keychain or SSH-alias credentials also work).
 
 ## Install
 
@@ -38,146 +37,129 @@ From the root of the target repository:
 npx github:iwishash/ticket-loop-kit init
 ```
 
-Pick the backend and install steps with the keyboard (↑↓, numbers, Space, Enter; q to abort). The wrapper then calls `install.sh` and writes a `BACKEND=` line to `.ticket-loop/loop.env`. Pass `--yes` to skip the questions (automatic when not on a terminal). Disable colors with `NO_COLOR`. If you use an SSH-alias remote or keychain credentials, `gh auth setup-git` is not needed. To pin the kit version: `npx github:iwishash/ticket-loop-kit#v0.8.0 init`. While the repository is private, get invited to it, then run `gh auth login` followed by `gh auth setup-git` once so npx can fetch it (GitHub credentials in the macOS keychain also work).
-
-To install with bash only, without npx:
+Pick the backend and install steps with the keyboard (`--yes` skips the questions; `NO_COLOR` disables colors). Pin a version with `npx github:iwishash/ticket-loop-kit#v0.8.0 init`. Without Node:
 
 ```bash
 bash <(gh api repos/iwishash/ticket-loop-kit/contents/install.sh -H "Accept: application/vnd.github.raw")
 ```
 
-Then, in Claude Code (or Codex, as `$setup-ticket-loop`):
+Then:
 
-1. `/setup-ticket-loop` — fills in the verification commands, `orca.yaml`, CI, worker rules, and `implement` for this repository, then opens a PR
-
-Finally, in the Orca app: Settings → Projects → <repository> → Worktree Hooks → Advanced: set Command Source to **"orca.yaml only"** and turn on **"Wait for setup to complete before starting agent"**. After merging the PR, run `bash scripts/ticket-loop.sh --dry-run`, then `--max 1`.
-
-Required tools: `git`, `gh` (logged in), `jq`, the backend (Orca app and CLI, cmux, or tmux), and the worker agent (Claude Code, or Codex — see the table above).
+1. In Claude Code (or Codex, as `$setup-ticket-loop`) run `/setup-ticket-loop`. It fills in the verification commands, `orca.yaml`, CI, worker rules, and `implement` for this repository and opens a PR.
+2. Orca only: Settings → Projects → <repository> → Worktree Hooks → Advanced: set Command Source to **"orca.yaml only"** and turn on **"Wait for setup to complete before starting agent"**.
+3. Merge the PR, then run `bash scripts/ticket-loop.sh --dry-run` and `--max 1`.
 
 ## Who does what
 
 | Actor | Responsibility |
 |---|---|
-| `npx … init` (`bin/ticket-loop-kit.js`) — questions and wrapper | Backend selection, the `BACKEND=` line in `.ticket-loop/loop.env` (only when absent), toggling install steps, tool checks, passing the installed kit commit to `install.sh` |
-| `install.sh` — the part that is the same in every repository | Checks for conflicting skill installs (below), installs the loop, diagnostics, and skill-sync scripts plus the `setup-ticket-loop` skill, vendors the mattpocock skills (`tdd`, `ticket-review`, and the planning set when chosen), places the `docs/agents/issue-tracker.md` template, merges `.gitignore` and `deny` entries, creates 6 labels, sets up git credentials (gh), registers with Orca, writes `.ticket-loop/kit.json` |
-| `/setup-ticket-loop` — the part that requires reading the repository | Fills the `__PLACEHOLDER__`s in `implement`, `pr`, and `worker-rules.md` (verification commands, the heavy suite and the command that runs one file of it — the worker runs only the files it touched, once, right before the PR; the loop runs the full suite after merge), the `verify` command, `orca.yaml`, CI, `.ticket-loop/loop.env`, `docs/agents/ticket-loop.md`, a `CLAUDE.md` pointer → PR |
-| Human | Orca app settings (Command Source "orca.yaml only"), merging the PR, watching the `--max 1` trial |
+| `npx … init` (`bin/ticket-loop-kit.js`) | Backend choice (`BACKEND=` in `.ticket-loop/loop.env`, only when absent), install-step toggles, tool checks, then calls `install.sh` |
+| `install.sh` (same in every repository) | Skill-conflict check, loop and sync scripts, `setup-ticket-loop` skill, vendored mattpocock skills, templates, `.gitignore` and `deny` merge, 6 labels, git credentials (gh), Orca registration, `.ticket-loop/kit.json` |
+| `/setup-ticket-loop` (needs to read the repository) | Fills the `__PLACEHOLDER__`s in `implement`, `pr`, and `worker-rules.md` (verification commands, the heavy suite and its single-file form), `orca.yaml`, CI, `loop.env`, `docs/agents/ticket-loop.md`, a `CLAUDE.md` pointer → PR |
+| Human | Orca settings, merging the PR, watching the `--max 1` trial |
 
-The kit's `ticket-loop.sh` is the script from Appendix D of the guidebook (3rd edition) plus two additions: reading the per-repository defaults file `.ticket-loop/loop.env`, and a port check before starting. Repository constants such as `POST_MERGE_CMD` and `POST_MERGE_PORT` go there as `VAR="${VAR:-value}"` and are committed; environment variables given at run time win.
+Loop behaviour worth knowing:
 
-If the repository's CI uses path filters (`paths`/`paths-ignore`) and therefore does not run on some PRs, tell the loop the same verdict with `CI_SKIP_REGEX` (a simple exclusion list) or `CI_SKIP_CMD` (a repository script that reads the file list on stdin and prints `run` or `skip`). GitHub creates no checks at all on a filtered PR, so the loop cannot tell "not up yet" from "never coming". This is not a rule the loop invents; it mirrors the repository's filter. Leave it empty when there is no filter (default: wait for checks on every PR).
-
-After a ticket is merged and closed, and when a `--parent` run finishes, the loop counts the spec issue's sub-issues and, if all of them are closed, closes the spec issue with a comment (it counts the list, not the summary value). If any sub-issue is still open, it leaves the spec alone.
-
-The loop leaves three things behind. The progress log `.ticket-loop/loop-MMDD.log` (for humans), the per-ticket records `.ticket-loop/tickets.jsonl` (per machine, not committed), and, when a `--parent <spec>` run exits normally, the spec report `docs/loop-reports/spec-<N>.html` (one table of status, result brief, elapsed time, and model per ticket; a human reviews it and commits it via PR). When a spec was completed in this run, the loop ends with one line suggesting a `/retro` pass and listing what to read. It is a suggestion only; the loop never runs the retrospective itself. The report's fixed text is English; issue and PR titles from GitHub and stop reasons from the records are kept verbatim. In repositories that set `POST_MERGE_PORT`, when the port is busy the loop logs the occupying process and re-checks every 30 seconds. If the port is already busy at startup, it logs one "warning" line.
+- `ticket-loop.sh` is Appendix D of the guidebook plus two additions: `.ticket-loop/loop.env` (committed defaults written as `VAR="${VAR:-value}"`; run-time environment wins) and a startup port check.
+- If CI uses path filters, GitHub creates no checks on filtered PRs and the loop cannot tell "not up yet" from "never coming". Mirror the filter with `CI_SKIP_REGEX` or `CI_SKIP_CMD` (a script that reads the file list on stdin and prints `run` or `skip`). Leave both empty when there is no filter.
+- After each merge and at the end of a `--parent` run, the loop closes the spec issue once all its sub-issues are closed.
+- Outputs: `.ticket-loop/loop-MMDD.log`, `.ticket-loop/tickets.jsonl` (per machine, not committed), and after a `--parent <spec>` run the spec report `docs/loop-reports/spec-<N>.html` (review it and commit via PR). When a spec completes, the loop suggests a `/retro` pass; it never runs one itself.
+- With `POST_MERGE_PORT` set, a busy port is logged with the occupying process and re-checked every 30 seconds.
 
 ## Backends
 
-The loop script does only nine things with worktrees and agent terminals (create, remove, send a prompt, shell input, Ctrl-C, wait for idle, read the screen, set status, startup check). Each backend implements them as functions of the same names (`orca_*`, `cmux_*`, `tmux_*`), selected with `BACKEND=orca|cmux|tmux` in `.ticket-loop/loop.env`. Ticket selection, PR, CI, repair, merge, post-merge verification, records, and the spec report are shared.
+The loop touches worktrees and terminals through nine functions (create, remove, send a prompt, shell input, Ctrl-C, wait for idle, read the screen, set status, startup check), implemented per backend as `orca_*`, `cmux_*`, `tmux_*` and selected with `BACKEND=orca|cmux|tmux` in `loop.env`. Ticket selection, PR, CI, repair, merge, post-merge verification, records, and the spec report are shared.
 
 | | Orca | cmux | tmux |
 |---|---|---|---|
-| Worktree | `orca worktree create` creates it and runs the `orca.yaml` setup | The loop runs `git worktree add` (`WORKTREE_DIR`, default `~/.cache/ticket-loop/<owner-repo>/worktrees`) and then `WORKTREE_SETUP_CMD` | Same as cmux |
-| Agent | Orca launches it with `--agent claude --prompt` | `cmux workspace create --cwd … --command "claude … \"$(cat promptfile)\""` — the claude shim in the workspace shell attaches the Claude Code hooks | Opens a window in `TMUX_SESSION` (default `ticket-loop`, or the current session when the loop runs inside tmux) and types `claude … --settings <hook settings> "$(cat promptfile)"` into its shell |
-| Idle detection | `orca terminal wait --for tui-idle` (blocking) | Reads `lifecycle` from `cmux rpc surface.input_state` every 5 seconds (reported by Claude Code hooks) | Hooks the loop writes to `~/.cache/ticket-loop/<owner-repo>/tmux/` (`UserPromptSubmit`→running, `Stop`→idle, `Notification` permission_prompt→needsInput, `SessionEnd`→exited) write `state/<worktree name>`; the loop reads it every 5 seconds |
-| Input and screen | `orca terminal send / read` | `cmux paste --submit`, `send --force` + `send-key enter`, `read-screen --lines 25`. Wakes the workspace from hibernation before sending | `send-keys -l` + `Enter` (0.3 s later), last 25 non-blank lines of `capture-pane -p`. A prompt counts as accepted when the state file turns running within 15 s |
-| Status display | `orca worktree set --workspace-status` | `cmux workspace status set`, `cmux pr`, `cmux log` | Appends `[working]`, `[review]`, `[done]` or `[needs-attention]` to the window name |
-| Prerequisites | Orca app running, repository registered | Run inside a cmux terminal (socket mode defaults to `cmuxOnly`). Claude Code must already trust the main checkout (checked at startup) | `tmux` installed. Claude Code must already trust the main checkout (checked at startup). `AGENT=claude\|codex` only (idle comes from agent hooks). Watch with `tmux attach -t ticket-loop` |
+| Worktree | `orca worktree create` runs the `orca.yaml` setup | `git worktree add` under `WORKTREE_DIR` (default `~/.cache/ticket-loop/<owner-repo>/worktrees`), then `WORKTREE_SETUP_CMD` | Same as cmux |
+| Agent | Orca launches it with `--agent claude --prompt` | `cmux workspace create --cwd … --command "claude …"`; the workspace's claude shim attaches the Claude Code hooks | A window in `TMUX_SESSION` (default `ticket-loop`, or the current session) running `claude … --settings <hook settings>` |
+| Idle detection | `orca terminal wait --for tui-idle` | `lifecycle` from `cmux rpc surface.input_state` every 5 s | Hooks write `state/<worktree>` under `~/.cache/ticket-loop/<owner-repo>/tmux/`; read every 5 s |
+| Input and screen | `orca terminal send / read` | `cmux paste --submit`, `send --force` + `send-key enter`, `read-screen --lines 25` | `send-keys -l` + `Enter`, last 25 lines of `capture-pane -p` |
+| Status display | `orca worktree set --workspace-status` | `cmux workspace status set`, `cmux pr`, `cmux log` | `[working]`, `[review]`, `[done]`, `[needs-attention]` in the window name |
+| Prerequisites | Orca app running, repository registered | Inside a cmux terminal (socket mode `cmuxOnly`); main checkout trusted by Claude Code | `tmux` installed; main checkout trusted; `AGENT=claude\|codex` only. Watch with `tmux attach -t ticket-loop` |
 
-All three backends have been verified with one real ticket each (boiler-webapp #34 on Orca, #39 on cmux, ticket-loop-dummy #1 on tmux — a shell-script repository: worktree → worker start → TDD and ticket-review → PR #2 → CI → merge → window, worktree and branch cleanup → record, 4 minutes wall clock, 0 repairs). Two things the tmux run showed: (1) Claude Code decides a new worktree's folder trust by the main checkout's path — in a repository whose main checkout was not trusted the worker stopped at the trust dialog, so the cmux and tmux startup checks now read `~/.claude.json` and refuse to start. (2) The `Stop` hook fires whenever the main agent's turn ends, so the worker looked idle once while waiting for ticket-review's background subagents. When they returned, Claude Code started a turn on its own (running again), and the shared code resets the strike count whenever the screen changes, so the loop did not stop (cmux's lifecycle relies on the same hooks). Terminal emulators such as Warp and Ghostty are not backends: they have no CLI to drive a window from outside, so you run the tmux backend inside them. Observed with cmux 0.65: `--json` must come after the command to get JSON output (`workspace create --json --id-format uuids` → `workspace_id`, `surface_id`), lanes are `todo|working|needs-attention|review|done`, and a workspace whose process is still alive can only be closed with `workspace close --force`. The loop must be launched inside a cmux terminal: the socket mode default is `cmuxOnly`, so `cmux identify` is refused from outside.
+Claude Code decides a new worktree's trust by the main checkout's path, so the cmux and tmux startup checks read `~/.claude.json` and refuse to start until the main checkout is trusted. Warp, Ghostty, and the like are terminal apps, not backends: run the tmux backend inside them. cmux CLI notes (0.65): `--json` goes after the command, lanes are `todo|working|needs-attention|review|done`, and a workspace whose process is still alive closes only with `workspace close --force`.
 
 ## What goes where
 
 | Kit path | Target repository | On install |
 |---|---|---|
-| `files/scripts/ticket-loop.sh` | `scripts/ticket-loop.sh` | Overwritten every time (kit-owned) |
-| `files/scripts/ticket-state.sh` | `scripts/ticket-state.sh` | Overwritten every time |
-| `files/scripts/sync-mattpocock-skills.sh` | `scripts/sync-mattpocock-skills.sh` | Overwritten every time |
-| `files/.agents/skills/setup-ticket-loop/` | Same path, plus a `.claude/skills/setup-ticket-loop` link to it | Overwritten every time |
-| `templates/.agents/skills/implement/`, `pr/` | Same path, plus `.claude/skills/<name>` links | Only when absent (project-owned afterwards). `agents/openai.yaml` is Codex metadata |
-| `templates/.codex/rules/ticket-loop.rules` | Same path | Only when absent — the Codex counterpart of the `deny` rules (no merge, no force push, no push to the default branch); the installer fills in the default branch |
-| `templates/.ticket-loop/worker-rules.md` | Same path | Only when absent |
-| `templates/docs/loop-reports/README.md` | Same path | Only when absent |
-| `templates/docs/agents/issue-tracker.md` | Same path | Only when absent — GitHub tracker conventions read by the vendored skills and `implement` |
-| — | `.agents/skills/tdd`, `ticket-review` (+ 7 planning skills), with `.claude/skills/<name>` links | Vendored by `sync-mattpocock-skills.sh` |
-| — | `.gitignore` (`/.ticket-loop/*.log`, `/.ticket-loop/*.jsonl`), `deny` in `.claude/settings.json` | Lines and entries merged |
-| — | 6 GitHub labels, repository git credentials (gh), Orca registration | Created when missing |
+| `files/scripts/ticket-loop.sh`, `ticket-state.sh`, `sync-mattpocock-skills.sh` | `scripts/` | Overwritten every time (kit-owned) |
+| `files/.agents/skills/setup-ticket-loop/` | Same path, plus a `.claude/skills/` link | Overwritten every time |
+| `templates/.agents/skills/implement/`, `pr/` | Same path, plus `.claude/skills/` links | Only when absent (project-owned afterwards) |
+| `templates/.codex/rules/ticket-loop.rules` | Same path | Only when absent. Codex counterpart of the `deny` rules; the installer fills in the default branch |
+| `templates/.ticket-loop/worker-rules.md`, `docs/loop-reports/README.md`, `docs/agents/issue-tracker.md` | Same paths | Only when absent |
+| — | `.agents/skills/tdd`, `ticket-review` (+ planning skills), with `.claude/skills/` links | Vendored by `sync-mattpocock-skills.sh` |
+| — | `.gitignore` (`/.ticket-loop/*.log`, `*.jsonl`), `deny` in `.claude/settings.json` | Merged |
+| — | 6 GitHub labels, git credentials (gh), Orca registration | Created when missing |
 | — | `.ticket-loop/kit.json` | Records the installed kit commit |
 
-Skills live once, in `.agents/skills/<name>` (the directory Codex reads), and `.claude/skills/<name>` is a symbolic link to it for Claude Code — the layout `npx skills add` uses. Repositories installed with 0.6 or earlier have real directories under `.claude/skills/`; the installer and the sync script move them with `git mv` and leave links. The `## Agent skills` block that the vendored skills read belongs in `AGENTS.md` (Codex reads only that file), and `CLAUDE.md` imports it with `@AGENTS.md`; `/setup-ticket-loop` writes both.
-
-Project-specific values live in the target repository's `.ticket-loop/loop.env` (loop defaults, including `BACKEND` and `AGENT`), `orca.yaml` (Orca), `.ticket-loop/worker-rules.md`, and the `implement` and `pr` skills. Do not edit kit-owned files in the target repository; fix them in the kit.
+Skills live once in `.agents/skills/<name>` with `.claude/skills/<name>` links (the `npx skills add` layout); installs from 0.6 or earlier are migrated with `git mv`. The `## Agent skills` block goes in `AGENTS.md` (Codex reads only that file) and `CLAUDE.md` imports it with `@AGENTS.md`; `/setup-ticket-loop` writes both. Project-specific values live in `loop.env`, `orca.yaml`, `worker-rules.md`, and the `implement` and `pr` skills. Do not edit kit-owned files in the target repository; fix them in the kit.
 
 ## Update
 
-Run the same install command again. Only kit-owned files and the mattpocock skills change; project-owned files (including `loop.env`) stay as they are. In repositories installed by 0.3 or earlier, the installer `git mv`s `.agent-loop/` (or `.orca-loop/` for 0.2 and earlier) to `.ticket-loop/` (logs and records included), and removes the old skills `setup-agent-loop` and `setup-orca-loop` and the old `.gitignore` lines. It then lists any files that still point at the old paths (`docs/agents/ticket-loop.md`, `CLAUDE.md`, `REPORT_DIR` in `loop.env`, etc.) so you can fix them by hand in the same PR. To pin a version: `npx github:iwishash/ticket-loop-kit#v0.8.0 init` (the bash path takes `--ref v0.3.0`). Review the changes with `git diff` and open a PR. npx caches a repository once fetched, so to re-fetch the same ref use `npx --yes --prefer-online` or `npm cache clean --force`.
+Run the install command again. Kit-owned files and vendored skills are refreshed; project-owned files, including `loop.env`, stay as they are. Installs from 0.3 or earlier are migrated (`.agent-loop/` or `.orca-loop/` → `.ticket-loop/`, old skills and `.gitignore` lines removed) and the installer lists files that still point at old paths for you to fix in the same PR. Review with `git diff` and open a PR. npx caches a fetched repository; use `npx --yes --prefer-online` to re-fetch the same ref.
 
-Options: `--yes`, `--backend <orca|cmux|tmux>`, `--no-skills`, `--workflow-skills`/`--no-workflow-skills`, `--force-skills`, `--prune-skills`, `--no-github`, `--no-git-credential`, `--no-orca` (`npx github:iwishash/ticket-loop-kit --help`). The bash path also takes `--ref <ref>` (`bash install.sh --help`).
+Options: `--yes`, `--backend <orca|cmux|tmux>`, `--no-skills`, `--workflow-skills`/`--no-workflow-skills`, `--force-skills`, `--prune-skills`, `--no-github`, `--no-git-credential`, `--no-orca` (`npx github:iwishash/ticket-loop-kit --help`). The bash path also takes `--ref <ref>`.
 
 ## mattpocock skills: what is vendored, what is checked
 
-The loop script itself does not depend on any skill. It sends `/implement N` to the worker, and that `implement` (a project-owned template) calls `tdd` and `ticket-review` through the Skill tool. So the kit vendors only two sets from upstream [mattpocock/skills](https://github.com/mattpocock/skills) (MIT) into `.claude/skills/` as files. Files rather than a plugin, because worker worktrees and cloud sessions then get the same version from a plain clone, and an automatic update cannot change behaviour in the middle of an unattended run.
+Skills are vendored as files rather than installed as a plugin so that every worktree and cloud session gets the same version from a plain clone, and no automatic update can change behaviour mid-run.
 
 | Set | Skills | Default |
 |---|---|---|
 | core | `tdd`, `code-review` → `ticket-review` (the name clashes with the built-in `/code-review`) | Always |
-| workflow | `grill-with-docs`, `to-spec`, `to-tickets`, `retro`, plus the `grilling`, `domain-modeling`, `writing-for-agents` they call | Off. `--workflow-skills` or the interactive checklist; kept if a previous install had them |
-| kept | Whatever an earlier install (0.5 and before vendored all 26) placed outside the two sets, e.g. `implement-spec`, `grill-me`, `triage` | Kept and synced with the rest; never added to a fresh install. `--prune-skills` (or the checklist item) removes them |
+| workflow | `grill-with-docs`, `to-spec`, `to-tickets`, `retro`, plus `grilling`, `domain-modeling`, `writing-for-agents` | Off. `--workflow-skills` or the checklist; kept if a previous install had them |
+| kept | Skills an earlier install (0.5 and before vendored all 26) placed outside the two sets | Kept and synced, never added to a fresh install. `--prune-skills` removes them |
 
-The other upstream skills (`ask-matt`, `wizard`, `teach`, …) are not vendored into a fresh install. Install the plugin (`claude plugin install mattpocock-skills@claude-plugins-official`) if you want them. A repo that already has them keeps them: the kit put them there, so you may be using them, and the kit keeps updating them from the same upstream commit. The manifest `.agents/skills/.mattpocock.json` lists them under `kept`. A skill you deleted by hand is not brought back, and one upstream has dropped is left as is. The only exception is `setup-matt-pocock-skills`, which is removed because `/setup-matt-pocock-skills` is no longer needed: the `docs/agents/issue-tracker.md` it used to write comes from a kit template, and `/setup-ticket-loop` writes the `## Agent skills` block in `AGENTS.md` (imported by `CLAUDE.md`).
+The manifest `.agents/skills/.mattpocock.json` records all three. A skill you deleted by hand is not restored; one upstream dropped is left alone. Other upstream skills come from the plugin (`claude plugin install mattpocock-skills@claude-plugins-official`).
 
-Before changing anything, the installer looks for the same skills installed another way (Claude Code does not warn about duplicates; run `bash scripts/sync-mattpocock-skills.sh --check` to see the result on its own). The plugin and `~/.claude/skills` checks are Claude Code matters and run only for `--agent claude`; with `--agent codex` a same-named `~/.agents/skills/<name>` is reported instead (Codex shows both in its skill selector).
+Before changing anything, the installer looks for the same skills installed another way (`bash scripts/sync-mattpocock-skills.sh --check` runs it alone):
 
-| Found | What happens | Handling |
-|---|---|---|
-| The `mattpocock-skills` plugin enabled for this repo (`enabledPlugins`, user < project < local) | Both load: `/tdd` and `/mattpocock-skills:tdd` appear side by side | Warning. The interactive checklist offers "disable the plugin for this repo", which runs `claude plugin disable … --scope project` |
-| The same skill in `~/.claude/skills/<name>` | A personal skill shadows the project skill, so the machine's copy runs instead of the committed one | Warning with the names. Remove them or accept it |
-| `skills-lock.json` from `npx skills add`, or a `.claude/skills/*` symbolic link that points anywhere but this repo's `.agents/skills/<name>` (the kit's own links are fine) | Two tools overwrite the same directories in turn | **Install stops**. Remove with `npx skills remove` and rerun (`--force-skills` to override, `--no-skills` to skip vendoring) |
-| A `code-review` skill directory (`.agents/skills/` or `.claude/skills/`) | A project skill replaces the built-in `/code-review`; the kit uses `ticket-review` | Warning with an `rm -rf` hint |
-| A same-named directory not in the manifest, or `.claude/commands/<name>.md` | Overwritten / the skill wins but both remain | Notice |
-| Skills an earlier install vendored outside the selected sets | Kept and synced | Notice with the names. `--prune-skills` removes them |
+| Found | Handling |
+|---|---|
+| The `mattpocock-skills` plugin enabled for this repo (`/tdd` and `/mattpocock-skills:tdd` would both load) | Warning; the checklist offers `claude plugin disable … --scope project` |
+| The same skill in `~/.claude/skills/<name>` (shadows the committed copy) | Warning with the names |
+| `skills-lock.json` from `npx skills add`, or a `.claude/skills/*` link pointing outside this repo's `.agents/skills/` | **Install stops.** Remove with `npx skills remove` and rerun (`--force-skills` overrides, `--no-skills` skips vendoring) |
+| A `code-review` skill directory (replaces the built-in `/code-review`) | Warning with an `rm -rf` hint |
+| A same-named directory not in the manifest, or `.claude/commands/<name>.md` | Notice |
+
+The plugin and `~/.claude/skills` checks run only for `--agent claude`; with `--agent codex` a same-named `~/.agents/skills/<name>` is reported instead.
 
 ## Running the same repository on several computers
 
-Once a repository is set up, a plain clone runs on another computer. Reinstall only when upgrading the kit, on one computer; the others get it with `git pull`.
+A plain clone runs on another computer; reinstall only to upgrade the kit, on one computer, and `git pull` elsewhere.
 
-- Everything the loop needs is committed: `scripts/ticket-loop.sh`, `.ticket-loop/loop.env` (including `BACKEND` and `WORKTREE_SETUP_CMD`), `worker-rules.md`, `kit.json`, and the `implement` and `pr` skills. The only per-machine files are `.ticket-loop/*.log` and `tickets.jsonl`, both in `.gitignore`. On a new computer they start empty.
-- The backend may differ per computer. Values in `loop.env` are of the form `${BACKEND:-orca}`, so an environment variable given at run time wins: computer A runs `bash scripts/ticket-loop.sh N` on Orca, computer B runs `BACKEND=cmux bash scripts/ticket-loop.sh N` inside a cmux terminal, computer C runs `BACKEND=tmux bash scripts/ticket-loop.sh N` in any terminal. A repository that will use cmux or tmux needs `WORKTREE_SETUP_CMD` in `loop.env`.
-- Each backend keeps worktrees in its own place (Orca in its configured location, cmux and tmux in `~/.cache/ticket-loop/<owner-repo>/worktrees`). Nothing is left in the repository, so computers do not collide.
-- The prerequisites on a new computer are the usual ones: `gh auth login`, `claude`, `jq`, the repository's package manager. With cmux or tmux, open `claude` once in the main checkout and trust the folder: Claude Code decides a worktree's trust by the main checkout's path, so otherwise the worker stops at the trust dialog in every new worktree (the loop checks `~/.claude.json` at startup and refuses to start). With cmux, run inside a cmux terminal (socket mode defaults to `cmuxOnly`) and make sure the Claude Code integration in Settings is on. If it is off, `lifecycle` only ever returns `unknown` and the loop times out after the startup grace period.
-- When running concurrently, split the tickets. Specifying numbers gives separate branches (`issue-N-…`) that never overlap. Automatic selection skips tickets that have an assignee or an open PR, and the worker assigns itself as soon as it starts, but that does not prevent a race where two loops pick the same ticket seconds apart. If you run several loops with automatic selection, partition the scope with `--parent` or `--label`. If one side merges and the other side's PR conflicts, the loop's repair step handles it.
-- The spec report (`--parent`) is drawn from that computer's `tickets.jsonl`, so the table is most complete when one spec runs on one computer. Tickets without records fall back to PR timestamps.
+- Everything the loop needs is committed. The only per-machine files are `.ticket-loop/*.log` and `tickets.jsonl` (ignored).
+- The backend may differ per computer: `BACKEND=cmux bash scripts/ticket-loop.sh N` overrides the `loop.env` default. cmux and tmux need `WORKTREE_SETUP_CMD` in `loop.env`, worktrees under `~/.cache/ticket-loop/<owner-repo>/worktrees`, and the main checkout trusted by Claude Code (open `claude` there once).
+- Concurrent loops: give explicit ticket numbers, or partition automatic selection with `--parent` or `--label`. Assignee and open-PR checks do not prevent a race seconds apart; a conflicting PR is handled by the repair step.
+- The spec report is drawn from that computer's `tickets.jsonl`, so run one spec on one computer; tickets without records fall back to PR timestamps.
 
 ## Working on the kit
 
-- After changing the loop script, regenerate Appendix D and the PDF with `python3 docs/sync-guide.py && bash docs/build-pdf.sh` (`tests/smoke.sh` checks that Appendix D matches).
-- `bash tests/smoke.sh` — installs into a temporary repository (no network or GitHub), checks that installing twice gives the same result, and renders the spec report jq against fixture data.
-- Record changes in `CHANGELOG.md`; the version goes in `VERSION`, `package.json`, and a tag (`tests/smoke.sh` checks that the two files agree).
-- Do not add a build step such as `prepare` to `package.json`. When fetched straight from git, that script would run on the user's machine. The npx package contains only the `files` list (`bin`, `install.sh`, `files/`, `templates/`, `VERSION`); `docs/` and `tests/` are excluded.
+- After changing the loop script, regenerate Appendix D and the PDF: `python3 docs/sync-guide.py && bash docs/build-pdf.sh` (`tests/smoke.sh` checks that Appendix D matches).
+- `bash tests/smoke.sh` installs into a temporary repository without network, checks that installing twice is idempotent, and renders the spec report against fixtures.
+- Record changes in `CHANGELOG.md`; the version goes in `VERSION`, `package.json`, and a tag.
+- Do not add a build step such as `prepare` to `package.json`; fetched straight from git, it would run on the user's machine. The npx package contains only the `files` list; `docs/` and `tests/` are excluded.
 
-## Verification status (0.3.0, 2026-10-12)
+## Verification status
 
-Verified:
+Verified with one real ticket per backend (details in `CHANGELOG.md`):
 
-- `tests/smoke.sh` passes: syntax, Appendix D match, install into a temporary repository, reinstall leaves project-owned files, `settings.json`, and `.gitignore` unchanged, spec report jq rendering (merged, stopped, and no-record cases)
-- The spec report, port wait, and terminal retry code in 0.2.0 was taken verbatim from the general-purpose script (guidebook 3rd edition) that ran two real tickets (#67, #68, spec #65) in rsrehab/rental-portal. The kit adds only `loop.env` reading and the startup port check
-- Install including skill sync: mattpocock 1.3.1 plus 16 unreleased changesets (`49dd158`), 26 skills; `implement` and `pr` are skipped
-- The remote one-line install (`--ref v0.1.0`) fetched and installed, recording `534653a` in `.ticket-loop/kit.json`
-- The npx wrapper: a copy of the kit fetched via `git+file://` installs with `--yes` and leaves the commit and `ref` (`npx#<tag>` when a `#tag` is given) in `kit.json`. The interactive paths (backend selection, per-item questions, declining cmux, Ctrl+D) were verified with a pty. `npx github:iwishash/ticket-loop-kit init --yes` and the pinned `#main` form were fetched for real from an empty npm cache (private repository, HTTPS plus keychain credentials, no SSH key), installed into a temporary repository including skill sync, and left `e707bfe` and `ref: npx` / `npx#main` in `kit.json`
+| Backend | Ticket | Wall clock | Repairs |
+|---|---|---|---|
+| Orca 1.4.x | iwishash/boiler-webapp #34 → PR #38 (2026-10-12) | 10 min | 0 |
+| cmux 0.65 | iwishash/boiler-webapp #39 → PR #40 (2026-10-12) | 7 min | 0 |
+| tmux 3.8 | iwishash/ticket-loop-dummy #1 → PR #2 (2026-10-13) | 4 min | 0 |
 
-- Migration of a 0.2 install: the smoke test installs into a temporary repository that has `.orca-loop/` (rules, `loop.env`, logs), the old skill, and the old `.gitignore` lines, and confirms they are moved with `git mv` and nothing is lost. Applying it to rental-portal for real is still pending
+Also verified: `tests/smoke.sh`, the npx wrapper against a real fetch of the private repository, and migration of a 0.2 install (smoke test only).
 
-- One real ticket on the Orca backend (iwishash/boiler-webapp #34 → PR #38, 2026-10-12): after a first install (`npx … init` plus the user running `/setup-ticket-loop`), `bash scripts/ticket-loop.sh 34 --max 1` went from worktree creation → worker startup → PR → waiting on 8 CI jobs → merge → issue closed → worktree and branch cleanup → records (`tickets.jsonl`, including the model) in 10 minutes of wall-clock time. On the first attempt the loop died right after creating the worktree because of a `set -u` bug in `orca_set_status` (the worker kept going on its own); this result is from the rerun after the fix. Post-merge verification was skipped because that repository has none
+Not yet verified:
 
-- One real ticket on the cmux backend (iwishash/boiler-webapp #39 → PR #40, 2026-10-12, cmux 0.65): inside a cmux terminal, `BACKEND=cmux WORKTREE_SETUP_CMD='pnpm install --frozen-lockfile --prefer-offline' bash scripts/ticket-loop.sh 39 --max 1` went from `git worktree add` → pnpm install → `cmux workspace create --command "claude …"` → idle detection via the hook-reported `lifecycle` → PR → 8 CI jobs → merge → `workspace close --force`, worktree, and branch cleanup → records in 7 minutes of wall-clock time (0 repairs, 0 idle false positives). The lane followed working → review → done. Two of the draft's assumptions were wrong and were fixed (`--json` placement and `close --force`); the rest (JSON field names, lane names, uuid, hook injection) were right
-
-Not yet verified — check in the first repository that adopts the kit and update this section:
-
-- `/setup-ticket-loop` was run once by the user on boiler-webapp (the resulting PR was merged). No feedback yet on question order or missing items
-- The label creation and Orca registration steps of `install.sh` were turned off in testing. The commands themselves are the ones used in rsrehab/rental-portal
-- The kit's `ticket-loop.sh` paths for `POST_MERGE_CMD`, `POST_MERGE_PORT`, `CI_SKIP_CMD`, `CI_SKIP_REGEX`, and the repair prompt. The one boiler-webapp ticket had no post-merge verification, no CI path filter, and 0 repairs. Running a real ticket in rental-portal (switched in PR #82, with `CI_SKIP_CMD` and `POST_MERGE_CMD` configured) will confirm them
-- The cmux backend as a whole beyond that one ticket. Only `--dry-run` failing with a socket error outside a cmux terminal has been confirmed
-- The repair path on the tmux backend (the prompt `repair` sends after a conflict or CI failure). The one dummy-repository ticket had 0 repairs. The function level (`tmux_send` confirms acceptance through the state file) and a second prompt sent to real Claude Code with `send-keys` are verified
-- The source repository rsrehab/rental-portal still uses its repository-specific `scripts/orca-ticket-loop.sh` (not switched to the kit)
-- Linux and WSL. The Linux branches (`orca-ide`, `notify-send`, `date -d`) have never been executed. The tmux backend inside WSL is the first thing to try (everything it needs runs natively there); Orca driven from WSL through `orca-ide` is an open question (Windows app vs. Linux AppImage under WSLg, path mapping between `/mnt/c` and `\\wsl$`)
-- Codex as the worker. The pieces are in place — `AGENT=codex` preset in `loop.env` (launch command `codex --dangerously-bypass-approvals-and-sandbox`, banner and model regexes, `$implement N`), agent-neutral worker and repair prompts, skills in `.agents/skills/` with `.claude/skills/` links, `AGENTS.md` as the home of `## Agent skills`, `.codex/rules/ticket-loop.rules`, `--agent codex` on the installers — but none of it has run on a machine with Codex installed: idle detection (Orca `tui-idle`, the cmux shim's lifecycle hook), `$implement` picking up the skill, repair prompts, whether `.codex/rules/ticket-loop.rules` loads (`codex execpolicy check --rules .codex/rules/ticket-loop.rules -- gh pr merge 12`), and whether it still applies under `--dangerously-bypass-approvals-and-sandbox`. Not "supported" until one ticket has gone through on each backend
+- `POST_MERGE_CMD`, `POST_MERGE_PORT`, `CI_SKIP_CMD`, `CI_SKIP_REGEX`, and the repair prompt on a real ticket (all three runs had no post-merge verification, no CI filter, 0 repairs). rental-portal (PR #82) has them configured.
+- The label creation and Orca registration steps of `install.sh` (turned off in testing).
+- `/setup-ticket-loop` beyond one run on boiler-webapp.
+- Linux and WSL. The Linux branches have never executed; try the tmux backend inside WSL first. Orca driven from WSL through `orca-ide` is an open question (Windows app vs. Linux AppImage under WSLg, path mapping).
+- Codex as the worker. The preset, prompts, skill layout, `AGENTS.md`, `.codex/rules/ticket-loop.rules`, and `--agent codex` are in place, but nothing has run on a machine with Codex installed: idle detection, `$implement` picking up the skill, repair prompts, and whether the rules file loads under `--dangerously-bypass-approvals-and-sandbox`.
+- The source repository rsrehab/rental-portal still uses its own `scripts/orca-ticket-loop.sh`.
