@@ -39,7 +39,7 @@ npx github:iwishash/ticket-loop-kit init
 백엔드와 설치 단계를 키보드로 고른다(`--yes`면 묻지 않고, `NO_COLOR`로 색을 끈다). 버전 고정은 `npx github:iwishash/ticket-loop-kit#v0.8.0 init`. Node 없이:
 
 ```bash
-bash <(gh api repos/iwishash/ticket-loop-kit/contents/install.sh -H "Accept: application/vnd.github.raw")
+bash <(curl -fsSL https://raw.githubusercontent.com/iwishash/ticket-loop-kit/main/install.sh)
 ```
 
 그다음:

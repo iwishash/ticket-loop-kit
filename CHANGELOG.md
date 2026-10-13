@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+저장소를 공개로 전환했다(2026-10-14). LICENSE(MIT) 추가, `package.json`의 license를 `UNLICENSED`에서 `MIT`로.
+
+- 설치 명령: bash 한 줄 설치를 `gh api …contents/install.sh`에서 `curl -fsSL https://raw.githubusercontent.com/…/main/install.sh`로. `install.sh`가 키트를 받을 때 `gh repo clone` 대신 HTTPS `git clone`을 먼저 쓰고(자격 증명 불필요), 실패하면 `gh repo clone`으로 넘어간다. `npx github:… init`은 그대로(공개 저장소라 `gh auth setup-git`이 더는 필요 없다)
+- README(영·한): 비공개·초대·`gh auth setup-git` 안내 제거, 두 벌을 절반 분량으로(실측 서사는 이 CHANGELOG에), OS 행을 macOS 확인 / Linux·WSL 미검증 / 네이티브 Windows 미지원으로 분리
+
 ## 0.8.0 — 2026-10-13
 
 tmux 백엔드(`BACKEND=tmux`). "지원 터미널이 Orca·cmux 둘뿐인데 tmux·Warp·Ghostty도 되지 않나"라는 질문에서 나왔다. 루프가 백엔드에 요구하는 것은 함수 아홉 개뿐이라 자리는 있었고, 난점은 하나 — tmux에는 Orca의 `tui-idle`·cmux의 `lifecycle` 같은 "에이전트가 일을 마쳤다"는 신호가 없다. 화면 안정성 휴리스틱 대신 에이전트 훅으로 풀었다. Warp·Ghostty 같은 에뮬레이터는 밖에서 창을 조종할 CLI가 없어 백엔드가 아니고, 그 안에서 tmux 백엔드를 돌린다.

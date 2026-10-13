@@ -4,7 +4,7 @@ set -euo pipefail
 # ticket-loop-kit install / update — run in the target repository root. Running it again gives the same result.
 #
 #   npx github:iwishash/ticket-loop-kit init           # recommended — asks for the backend, then runs this script (bin/ticket-loop-kit.js)
-#   bash <(gh api repos/iwishash/ticket-loop-kit/contents/install.sh -H "Accept: application/vnd.github.raw")
+#   bash <(curl -fsSL https://raw.githubusercontent.com/iwishash/ticket-loop-kit/main/install.sh)
 #   bash /path/to/ticket-loop-kit/install.sh          # from a local clone of the kit
 #
 # What it does (the part that is the same for every project):
@@ -98,10 +98,12 @@ if [[ -z "$KIT_DIR" ]]; then
   if [[ -n "$self_dir" && -f "$self_dir/files/scripts/ticket-loop.sh" ]]; then
     KIT_DIR="$self_dir"
   else
-    command -v gh >/dev/null 2>&1 || die "gh is not installed. Clone the kit and run with KIT_DIR=<path>."
     KIT_DIR="$(mktemp -d "${TMPDIR:-/tmp}/ticket-loop-kit.XXXXXX")"
     trap 'rm -rf "$KIT_DIR"' EXIT
-    gh repo clone "$KIT_REPO" "$KIT_DIR" -- -q || die "Could not clone $KIT_REPO (check gh auth status)."
+    # Public repository: plain HTTPS clone, no credentials needed. gh is a fallback for forks that are private.
+    git clone -q "https://github.com/$KIT_REPO.git" "$KIT_DIR" 2>/dev/null \
+      || { command -v gh >/dev/null 2>&1 && gh repo clone "$KIT_REPO" "$KIT_DIR" -- -q; } \
+      || die "Could not clone $KIT_REPO. Clone it yourself and run with KIT_DIR=<path>."
     git -C "$KIT_DIR" checkout -q "$REF" || die "Kit ref $REF does not exist."
   fi
 fi
