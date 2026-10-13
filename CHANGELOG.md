@@ -1,8 +1,10 @@
 # Changelog
 
-## Unreleased — 0.7 Codex 지원 1단계
+## 0.7.0 — 2026-10-13
 
-질문은 "이 kit을 claude만이 아닌 codex에서도 사용할 수 있게 변경할 수 있어?"였다. 루프 본체(티켓 선택·PR·CI·수리·병합·기록·리포트)는 에이전트와 무관하고, Claude에 묶인 곳은 기동 명령·배너·모델 정규식·`/implement` 접두사·프롬프트의 도구 이름·저장소 배치(`.claude/skills/`)였다. 세 단계로 나눠 1단계는 스크립트 프리셋만 한다. 저장소 배치는 그대로다.
+Codex CLI를 워커로 쓸 수 있는 조각을 갖췄다. 질문은 "이 kit을 claude만이 아닌 codex에서도 사용할 수 있게 변경할 수 있어?"였다. 루프 본체(티켓 선택·PR·CI·수리·병합·기록·리포트)는 에이전트와 무관하고, Claude에 묶인 곳은 기동 명령·배너·모델 정규식·`/implement` 접두사·프롬프트의 도구 이름·저장소 배치(`.claude/skills/`)였다. 세 단계 중 1단계(스크립트 프리셋)와 2단계(저장소 배치)를 이 릴리스에 담았다. 3단계(codex 설치 컴퓨터에서 실측)는 코드 변경이 없는 검증이라 뒤에 한다 — 저장소가 아직 비공개여서 내부에서 검증할 여유가 있다(사용자 결정). 그때까지 README·가이드는 Codex를 "지원"이 아니라 "아직 확인하지 않은 것"으로 둔다.
+
+**1단계 — 스크립트 프리셋.**
 
 - `ticket-loop.sh`: `AGENT`가 `claude` | `codex` 프리셋이 되어 `AGENT_RESTART_CMD`(`claude --dangerously-skip-permissions` / `codex --dangerously-bypass-approvals-and-sandbox` — 더 좁은 `--sandbox workspace-write`는 네트워크를 막아 push·`gh pr create`가 안 된다), `AGENT_BANNER_REGEX`(`OpenAI Codex|gpt-[0-9]`), `MODEL_REGEX`(`gpt-5.1-codex` 꼴), 새 변수 `SKILL_PREFIX`(`/` / `$` → `/implement N` / `$implement N`)의 기본값을 정한다. `loop.env`나 환경변수로 준 값이 이긴다. 다른 `AGENT` 값은 프리셋이 없어 두 값이 비어 있으면 시작 때 멈춘다. 워커 프롬프트에서 Claude Code 도구 이름(`AskUserQuestion`)을 빼고 "사람에게 묻거나 확인을 구하지 말고(질문 도구도 쓰지 말고)"로 바꿨다. Orca 워크트리 코멘트와 회고 안내(`/retro`)도 접두사를 따른다. `MODEL_REGEX`가 비면 모델을 뽑지 않는다
 - `bin/ticket-loop-kit.js`: 새로 만드는 `loop.env`에 `# AGENT="${AGENT:-claude}"` 안내 주석을 넣는다(값은 바꾸지 않는다)
@@ -19,6 +21,7 @@
 - `implement` 템플릿: "Call the Skill tool with X" → "Use the `X` skill"로 바꾸고 머리에 두 에이전트에서의 뜻을 한 줄로 적었다. `worker-rules.md`·`issue-tracker.md`의 경로 문구. `ticket-loop.sh`의 회고 안내는 `.agents/skills/retro`도 본다
 - `tests/smoke.sh`: 첫 설치의 정본·링크·`openai.yaml`·`.codex/rules`(기본 브랜치 채움) 확인, 재설치가 `.codex/rules` 편집을 유지, 0.6 배치의 설치기 마이그레이션(git mv·내용 유지), 동기화의 0.6 배치 마이그레이션(옛 매니페스트로 `--check`가 kept를 읽되 바꾸지 않음, 동기화가 `git mv`·링크·새 매니페스트), kept 스킬의 옛 자리 이동, `--prune`이 정본·링크 모두 제거, `--check`가 키트 링크는 통과시키고 다른 곳 링크는 차단, `--agent codex`의 검사 범위, npx `--agent codex`의 `loop.env`·안내
 - 아직 아닌 것(3단계): Codex 설치 컴퓨터에서 Orca·cmux 각 1건 실측 — idle 판정, `$implement`가 스킬을 집는지, 수리 재전송, `.codex/rules/ticket-loop.rules`가 로드되는지(`codex execpolicy check --rules .codex/rules/ticket-loop.rules -- gh pr merge 12`)와 `--dangerously-bypass-approvals-and-sandbox` 아래에서도 유지되는지. 그전에는 "지원"이라 쓰지 않는다
+- 이미 설치된 저장소: 설치 명령을 다시 실행하면 `.claude/skills/` 아래 실제 디렉터리(키트 스킬 셋은 설치기가, 벤더링 묶음·kept는 동기화 스크립트가)가 `.agents/skills/`로 `git mv`되고 링크가 남는다. 프로젝트 소유 `implement`·`pr`은 내용이 그대로고 `agents/openai.yaml`만 더해진다. `.codex/rules/ticket-loop.rules`가 새로 놓인다. `AGENTS.md`로 `## Agent skills` 블록을 옮기고 `CLAUDE.md`에 `@AGENTS.md`를 두는 것은 `/setup-ticket-loop`를 다시 돌리거나 손으로 한다(Claude Code만 쓰면 옮기지 않아도 돈다). `loop.env`의 `AGENT` 줄은 npx 설치기가 없을 때만 덧붙인다(기본 claude). 바뀐 것은 `git status`로 보고 PR에 넣는다
 
 ## 0.6.0 — 2026-10-13
 
