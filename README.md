@@ -11,7 +11,7 @@ From the root of the target repository:
 npx github:iwishash/ticket-loop-kit init
 ```
 
-Pick the backend and install steps with the keyboard (↑↓, numbers, Space, Enter; q to abort). The wrapper then calls `install.sh` and writes a `BACKEND=` line to `.ticket-loop/loop.env`. Pass `--yes` to skip the questions (automatic when not on a terminal). Disable colors with `NO_COLOR`. If you use an SSH-alias remote or keychain credentials, `gh auth setup-git` is not needed. To pin the kit version: `npx github:iwishash/ticket-loop-kit#v0.5.0 init`. While the repository is private, get invited to it, then run `gh auth login` followed by `gh auth setup-git` once so npx can fetch it (GitHub credentials in the macOS keychain also work).
+Pick the backend and install steps with the keyboard (↑↓, numbers, Space, Enter; q to abort). The wrapper then calls `install.sh` and writes a `BACKEND=` line to `.ticket-loop/loop.env`. Pass `--yes` to skip the questions (automatic when not on a terminal). Disable colors with `NO_COLOR`. If you use an SSH-alias remote or keychain credentials, `gh auth setup-git` is not needed. To pin the kit version: `npx github:iwishash/ticket-loop-kit#v0.5.1 init`. While the repository is private, get invited to it, then run `gh auth login` followed by `gh auth setup-git` once so npx can fetch it (GitHub credentials in the macOS keychain also work).
 
 To install with bash only, without npx:
 
@@ -80,7 +80,7 @@ Project-specific values live in the target repository's `.ticket-loop/loop.env` 
 
 ## Update
 
-Run the same install command again. Only kit-owned files and the mattpocock skills change; project-owned files (including `loop.env`) stay as they are. In repositories installed by 0.3 or earlier, the installer `git mv`s `.agent-loop/` (or `.orca-loop/` for 0.2 and earlier) to `.ticket-loop/` (logs and records included), and removes the old skills `setup-agent-loop` and `setup-orca-loop` and the old `.gitignore` lines. It then lists any files that still point at the old paths (`docs/agents/ticket-loop.md`, `CLAUDE.md`, `REPORT_DIR` in `loop.env`, etc.) so you can fix them by hand in the same PR. To pin a version: `npx github:iwishash/ticket-loop-kit#v0.5.0 init` (the bash path takes `--ref v0.3.0`). Review the changes with `git diff` and open a PR. npx caches a repository once fetched, so to re-fetch the same ref use `npx --yes --prefer-online` or `npm cache clean --force`.
+Run the same install command again. Only kit-owned files and the mattpocock skills change; project-owned files (including `loop.env`) stay as they are. In repositories installed by 0.3 or earlier, the installer `git mv`s `.agent-loop/` (or `.orca-loop/` for 0.2 and earlier) to `.ticket-loop/` (logs and records included), and removes the old skills `setup-agent-loop` and `setup-orca-loop` and the old `.gitignore` lines. It then lists any files that still point at the old paths (`docs/agents/ticket-loop.md`, `CLAUDE.md`, `REPORT_DIR` in `loop.env`, etc.) so you can fix them by hand in the same PR. To pin a version: `npx github:iwishash/ticket-loop-kit#v0.5.1 init` (the bash path takes `--ref v0.3.0`). Review the changes with `git diff` and open a PR. npx caches a repository once fetched, so to re-fetch the same ref use `npx --yes --prefer-online` or `npm cache clean --force`.
 
 Options: `--yes`, `--backend <orca|cmux>`, `--no-skills`, `--no-github`, `--no-git-credential`, `--no-orca` (`npx github:iwishash/ticket-loop-kit --help`). The bash path also takes `--ref <ref>` (`bash install.sh --help`).
 
