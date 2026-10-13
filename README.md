@@ -1,6 +1,6 @@
 # ticket-loop-kit
 
-Installs and updates the **ticket loop** in other repositories: an unattended loop that implements, verifies, and merges GitHub issue tickets one at a time, each in its own worktree. Worktrees and agent terminals are driven by a backend (Orca, cmux, or tmux). The principles and operating guide are in the [Unattended Ticket Loop Guidebook](docs/ticket-loop-guide.pdf) (Korean); the Korean original of this README is [README.ko.md](README.ko.md).
+Installs and updates the **ticket loop** in other repositories: an unattended loop that implements, verifies, and merges GitHub issue tickets one at a time, each in its own worktree. Worktrees and agent terminals are driven by a backend (Orca, cmux, or tmux). 
 
 ## Requirements and supported environments
 
