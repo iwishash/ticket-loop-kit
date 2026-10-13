@@ -3,6 +3,30 @@
 A kit that installs and updates the **ticket loop** in other repositories: an unattended loop that implements, verifies, and merges GitHub issue tickets one at a time, each in its own worktree. The worktrees and agent terminals are handled by a backend (Orca or cmux).
 The principles and operating guide are in the [Unattended Ticket Loop Guidebook](docs/ticket-loop-guide.pdf) (Korean). The original Korean version of this README is [README.ko.md](README.ko.md).
 
+## Requirements and supported environments
+
+What the kit assumes, and how far each part has been verified. Verified means one real ticket went through end to end (worktree → worker → PR → CI → merge → cleanup).
+
+| | Supported | Status |
+|---|---|---|
+| Worker agent | **Claude Code** (`AGENT=claude`, default) | Verified. Started with `claude --dangerously-skip-permissions` |
+| | **Codex CLI** (`AGENT=codex`) | Preset and repository layout are in place; **not yet verified on a real ticket** (see "Not yet verified" below). Started with `codex --dangerously-bypass-approvals-and-sandbox`. Needs a ChatGPT plan that includes Codex CLI (Plus or higher) or an API key |
+| Backend (worktrees and agent terminals) | **Orca** (`BACKEND=orca`, default) | Verified (Orca 1.4.x). Orca app running, repository registered, Command Source "orca.yaml only" |
+| | **cmux** (`BACKEND=cmux`) | Verified (cmux 0.65). The loop must run inside a cmux terminal (socket mode defaults to `cmuxOnly`); the agent's cmux integration must be on so `lifecycle` is reported |
+| Issue tracker | **GitHub Issues** only, through `gh` | Uses sub-issues (spec → tickets), issue dependencies (`blocked_by`), labels, PR checks, and merge. GitLab or other trackers would need the selection, PR, and merge functions rewritten |
+| OS | **macOS** | Verified. Linux has code paths (`orca-ide`, `notify-send`, `date -d`) but has not been run. Windows is not supported (bash, symbolic links in `.claude/skills/`) |
+| Tools | `git`, `gh` (logged in), `jq`, bash; Node ≥ 18 for `npx … init` | The bash-only install needs no Node |
+
+**Built on the mattpocock skill set.** The worker does not follow instructions baked into the loop script; it follows skills committed in the repository, and those come from [mattpocock/skills](https://github.com/mattpocock/skills) (MIT). The installer vendors `tdd` and `code-review` (renamed `ticket-review`) into `.agents/skills/` and pins them to an upstream commit, so every worker runs the same version regardless of what is installed on the machine. The project-owned `implement` skill, which the loop sends as `/implement N` (`$implement N` in Codex), is seeded from upstream `implement` and calls `tdd` → `ticket-review` → `pr`. The planning skills (`grill-with-docs`, `to-spec`, `to-tickets`, `retro`) are optional (`--workflow-skills`); they produce the spec issue and tickets the loop consumes and the retrospective after it, but the loop itself runs without them. `docs/agents/issue-tracker.md` is seeded from upstream's GitHub tracker template. If you already use these skills as a plugin or through `npx skills`, see "mattpocock skills: what is vendored, what is checked" below — the installer detects the overlap. One copy of each skill lives in `.agents/skills/<name>` (read by Codex) and `.claude/skills/<name>` is a symbolic link to it (read by Claude Code).
+
+**Constraints to know before installing.**
+
+- The worker runs with permission prompts bypassed, so the real guard against a bad merge or force push is GitHub branch protection on the default branch. The kit adds `deny` rules to `.claude/settings.json` and the same bans to `.codex/rules/ticket-loop.rules`, but those are a second line, not the first.
+- One loop per repository at a time (a lock directory under `.git`). The loop keeps no state of its own; GitHub (labels, assignees, PRs) is the state.
+- Tickets are worked one at a time, each in a fresh worktree with an empty context. The worker only sees what is committed on the default branch, so skills, worker rules, and `AGENTS.md`/`CLAUDE.md` changes must be merged before they take effect.
+- Heavy test suites (integration, E2E) are not run by the worker; the loop runs `POST_MERGE_CMD` on the default branch after each merge and stops on failure.
+- The kit repository is private for now: installing requires an invitation and `gh auth login` (plus `gh auth setup-git` once for npx).
+
 ## Install
 
 From the root of the target repository:
@@ -11,7 +35,7 @@ From the root of the target repository:
 npx github:iwishash/ticket-loop-kit init
 ```
 
-Pick the backend and install steps with the keyboard (↑↓, numbers, Space, Enter; q to abort). The wrapper then calls `install.sh` and writes a `BACKEND=` line to `.ticket-loop/loop.env`. Pass `--yes` to skip the questions (automatic when not on a terminal). Disable colors with `NO_COLOR`. If you use an SSH-alias remote or keychain credentials, `gh auth setup-git` is not needed. To pin the kit version: `npx github:iwishash/ticket-loop-kit#v0.5.1 init`. While the repository is private, get invited to it, then run `gh auth login` followed by `gh auth setup-git` once so npx can fetch it (GitHub credentials in the macOS keychain also work).
+Pick the backend and install steps with the keyboard (↑↓, numbers, Space, Enter; q to abort). The wrapper then calls `install.sh` and writes a `BACKEND=` line to `.ticket-loop/loop.env`. Pass `--yes` to skip the questions (automatic when not on a terminal). Disable colors with `NO_COLOR`. If you use an SSH-alias remote or keychain credentials, `gh auth setup-git` is not needed. To pin the kit version: `npx github:iwishash/ticket-loop-kit#v0.7.0 init`. While the repository is private, get invited to it, then run `gh auth login` followed by `gh auth setup-git` once so npx can fetch it (GitHub credentials in the macOS keychain also work).
 
 To install with bash only, without npx:
 
@@ -19,13 +43,13 @@ To install with bash only, without npx:
 bash <(gh api repos/iwishash/ticket-loop-kit/contents/install.sh -H "Accept: application/vnd.github.raw")
 ```
 
-Then, in Claude Code:
+Then, in Claude Code (or Codex, as `$setup-ticket-loop`):
 
 1. `/setup-ticket-loop` — fills in the verification commands, `orca.yaml`, CI, worker rules, and `implement` for this repository, then opens a PR
 
 Finally, in the Orca app: Settings → Projects → <repository> → Worktree Hooks → Advanced: set Command Source to **"orca.yaml only"** and turn on **"Wait for setup to complete before starting agent"**. After merging the PR, run `bash scripts/ticket-loop.sh --dry-run`, then `--max 1`.
 
-Required tools: `git`, `gh` (logged in), `jq`, the Orca app and CLI, Claude Code.
+Required tools: `git`, `gh` (logged in), `jq`, the backend (Orca app and CLI, or cmux), and the worker agent (Claude Code, or Codex — see the table above).
 
 ## Who does what
 
@@ -83,7 +107,7 @@ Project-specific values live in the target repository's `.ticket-loop/loop.env` 
 
 ## Update
 
-Run the same install command again. Only kit-owned files and the mattpocock skills change; project-owned files (including `loop.env`) stay as they are. In repositories installed by 0.3 or earlier, the installer `git mv`s `.agent-loop/` (or `.orca-loop/` for 0.2 and earlier) to `.ticket-loop/` (logs and records included), and removes the old skills `setup-agent-loop` and `setup-orca-loop` and the old `.gitignore` lines. It then lists any files that still point at the old paths (`docs/agents/ticket-loop.md`, `CLAUDE.md`, `REPORT_DIR` in `loop.env`, etc.) so you can fix them by hand in the same PR. To pin a version: `npx github:iwishash/ticket-loop-kit#v0.5.1 init` (the bash path takes `--ref v0.3.0`). Review the changes with `git diff` and open a PR. npx caches a repository once fetched, so to re-fetch the same ref use `npx --yes --prefer-online` or `npm cache clean --force`.
+Run the same install command again. Only kit-owned files and the mattpocock skills change; project-owned files (including `loop.env`) stay as they are. In repositories installed by 0.3 or earlier, the installer `git mv`s `.agent-loop/` (or `.orca-loop/` for 0.2 and earlier) to `.ticket-loop/` (logs and records included), and removes the old skills `setup-agent-loop` and `setup-orca-loop` and the old `.gitignore` lines. It then lists any files that still point at the old paths (`docs/agents/ticket-loop.md`, `CLAUDE.md`, `REPORT_DIR` in `loop.env`, etc.) so you can fix them by hand in the same PR. To pin a version: `npx github:iwishash/ticket-loop-kit#v0.7.0 init` (the bash path takes `--ref v0.3.0`). Review the changes with `git diff` and open a PR. npx caches a repository once fetched, so to re-fetch the same ref use `npx --yes --prefer-online` or `npm cache clean --force`.
 
 Options: `--yes`, `--backend <orca|cmux>`, `--no-skills`, `--workflow-skills`/`--no-workflow-skills`, `--force-skills`, `--prune-skills`, `--no-github`, `--no-git-credential`, `--no-orca` (`npx github:iwishash/ticket-loop-kit --help`). The bash path also takes `--ref <ref>` (`bash install.sh --help`).
 

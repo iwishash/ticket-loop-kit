@@ -4,6 +4,30 @@ GitHub 이슈 티켓을 워크트리에서 한 건씩 무인으로 구현·검�
 원리와 운영은 [「티켓 무인 루프 가이드북」](docs/ticket-loop-guide.pdf)에 있다.
 영문 README는 [README.md](README.md)다(이 파일이 한국어 원문).
 
+## 제약과 설치 환경
+
+이 키트가 전제하는 것과, 각 부분이 어디까지 확인됐는지. "확인"은 실제 티켓 1건이 끝까지(워크트리 → 워커 → PR → CI → 병합 → 정리) 지나갔다는 뜻이다.
+
+| | 지원 | 상태 |
+|---|---|---|
+| 워커 에이전트 | **Claude Code** (`AGENT=claude`, 기본) | 확인됨. `claude --dangerously-skip-permissions`로 띄운다 |
+| | **Codex CLI** (`AGENT=codex`) | 프리셋과 저장소 배치는 갖춰졌지만 **실제 티켓으로는 아직 확인하지 않았다**(아래 "아직 확인하지 않은 것"). `codex --dangerously-bypass-approvals-and-sandbox`로 띄운다. Codex CLI가 포함된 ChatGPT 요금제(Plus 이상) 또는 API 키가 필요하다 |
+| 백엔드(워크트리·에이전트 터미널) | **Orca** (`BACKEND=orca`, 기본) | 확인됨(Orca 1.4.x). Orca 앱 실행 중, 저장소 등록, Command Source "orca.yaml only" |
+| | **cmux** (`BACKEND=cmux`) | 확인됨(cmux 0.65). 루프를 cmux 터미널 안에서 돌려야 하고(소켓 모드 기본값 `cmuxOnly`), 에이전트의 cmux 통합이 켜져 있어야 `lifecycle`이 보고된다 |
+| 이슈 트래커 | **GitHub Issues**만, `gh`로 | 하위 이슈(스펙 → 티켓), 이슈 의존성(`blocked_by`), 라벨, PR 체크, 병합을 쓴다. GitLab 등 다른 트래커는 대상 선택·PR·병합 함수를 다시 써야 한다 |
+| OS | **macOS** | 확인됨. Linux용 경로(`orca-ide`, `notify-send`, `date -d`)는 두었지만 돌려 보지 않았다. Windows는 지원하지 않는다(bash, `.claude/skills/`의 심볼릭 링크) |
+| 도구 | `git`, `gh`(로그인), `jq`, bash; `npx … init`에는 Node 18 이상 | bash만으로 설치하면 Node는 필요 없다 |
+
+**mattpocock 스킬셋 위에서 동작한다.** 워커는 루프 스크립트에 박힌 지시가 아니라 저장소에 커밋된 스킬을 따르고, 그 스킬은 [mattpocock/skills](https://github.com/mattpocock/skills)(MIT)에서 온다. 설치기는 `tdd`와 `code-review`(→ `ticket-review`)를 `.agents/skills/`에 벤더링해 upstream 커밋에 고정하므로, 그 컴퓨터에 무엇이 설치돼 있든 모든 워커가 같은 버전을 쓴다. 루프가 `/implement N`(Codex는 `$implement N`)으로 보내는 프로젝트 소유 `implement` 스킬은 upstream `implement`에서 가져와 `tdd` → `ticket-review` → `pr`을 부른다. 기획 스킬(`grill-with-docs`, `to-spec`, `to-tickets`, `retro`)은 선택(`--workflow-skills`)이다 — 루프가 소비하는 스펙 이슈와 티켓을 만들고 끝난 뒤 회고를 하지만, 루프 자체는 없어도 돈다. `docs/agents/issue-tracker.md`는 upstream의 GitHub 트래커 템플릿에서 왔다. 이 스킬들을 이미 플러그인이나 `npx skills`로 쓰고 있다면 아래 「mattpocock 스킬: 무엇을 들이고, 무엇을 검사하나」를 본다 — 설치기가 겹침을 찾아낸다. 스킬 사본은 `.agents/skills/<이름>`(Codex가 읽음) 하나이고 `.claude/skills/<이름>`은 그 심볼릭 링크다(Claude Code가 읽음).
+
+**설치 전에 알아둘 제약.**
+
+- 워커는 권한 확인을 끄고 돈다. 잘못된 병합이나 강제 push를 막는 진짜 방어선은 기본 브랜치의 GitHub 브랜치 보호다. 키트가 `.claude/settings.json`에 `deny`를, `.codex/rules/ticket-loop.rules`에 같은 금지를 넣지만 둘째 줄이지 첫째 줄이 아니다.
+- 저장소당 루프 하나(`.git` 아래 잠금 디렉터리). 루프는 자기 상태를 두지 않고 GitHub(라벨·담당자·PR)가 상태다.
+- 티켓은 한 번에 하나, 매번 새 워크트리와 빈 컨텍스트에서 처리한다. 워커는 기본 브랜치에 커밋된 것만 보므로 스킬·워커 규칙·`AGENTS.md`/`CLAUDE.md` 변경은 병합한 뒤에야 적용된다.
+- 무거운 테스트(통합·E2E)는 워커가 돌리지 않는다. 루프가 병합마다 기본 브랜치에서 `POST_MERGE_CMD`를 돌리고 실패하면 멈춘다.
+- 키트 저장소는 아직 비공개다. 설치에는 초대와 `gh auth login`(npx면 `gh auth setup-git` 한 번)이 필요하다.
+
 ## 설치
 
 대상 저장소 루트에서:
@@ -12,7 +36,7 @@ GitHub 이슈 티켓을 워크트리에서 한 건씩 무인으로 구현·검�
 npx github:iwishash/ticket-loop-kit init
 ```
 
-백엔드와 설치 단계를 키보드로 고르고(↑↓·숫자·Space·Enter, q로 중단) `install.sh`를 부른 뒤 `.ticket-loop/loop.env`에 `BACKEND=` 줄을 쓴다. 묻지 않으려면 `--yes`(터미널이 아니면 자동). 색은 `NO_COLOR`로 끈다. SSH 별칭 원격이나 키체인 자격 증명을 쓰면 `gh auth setup-git`은 필요 없다. 키트 버전을 고정하려면 `npx github:iwishash/ticket-loop-kit#v0.5.1 init`. 저장소가 비공개인 동안은 이 저장소에 초대받고 `gh auth login` 뒤 `gh auth setup-git`을 한 번 해 두면 npx가 받아 간다(macOS 키체인에 GitHub 자격 증명이 있어도 된다).
+백엔드와 설치 단계를 키보드로 고르고(↑↓·숫자·Space·Enter, q로 중단) `install.sh`를 부른 뒤 `.ticket-loop/loop.env`에 `BACKEND=` 줄을 쓴다. 묻지 않으려면 `--yes`(터미널이 아니면 자동). 색은 `NO_COLOR`로 끈다. SSH 별칭 원격이나 키체인 자격 증명을 쓰면 `gh auth setup-git`은 필요 없다. 키트 버전을 고정하려면 `npx github:iwishash/ticket-loop-kit#v0.7.0 init`. 저장소가 비공개인 동안은 이 저장소에 초대받고 `gh auth login` 뒤 `gh auth setup-git`을 한 번 해 두면 npx가 받아 간다(macOS 키체인에 GitHub 자격 증명이 있어도 된다).
 
 npx 없이 bash로만 설치하려면:
 
@@ -20,13 +44,13 @@ npx 없이 bash로만 설치하려면:
 bash <(gh api repos/iwishash/ticket-loop-kit/contents/install.sh -H "Accept: application/vnd.github.raw")
 ```
 
-그다음 Claude Code에서:
+그다음 Claude Code(또는 Codex에서 `$setup-ticket-loop`)에서:
 
 1. `/setup-ticket-loop` — 검증 명령·`orca.yaml`·CI·워커 규칙·`implement`를 이 저장소에 맞춰 채우고 PR을 연다
 
 마지막으로 Orca 앱에서 Settings → Projects → <저장소> → Worktree Hooks → Advanced: Command Source **"orca.yaml only"**, **"Wait for setup to complete before starting agent"** 켜기. PR을 병합한 뒤 `bash scripts/ticket-loop.sh --dry-run` → `--max 1`.
 
-필요한 도구: `git`, `gh`(로그인), `jq`, Orca 앱과 CLI, Claude Code.
+필요한 도구: `git`, `gh`(로그인), `jq`, 백엔드(Orca 앱과 CLI, 또는 cmux), 워커 에이전트(Claude Code 또는 Codex — 위 표).
 
 ## 누가 무엇을 하나
 
@@ -84,7 +108,7 @@ bash <(gh api repos/iwishash/ticket-loop-kit/contents/install.sh -H "Accept: app
 
 ## 업데이트
 
-같은 설치 명령을 다시 실행한다. 키트 소유 파일과 mattpocock 스킬만 바뀌고, 프로젝트 소유 파일(`loop.env` 포함)은 그대로다. 0.3 이하가 설치한 저장소는 설치기가 `.agent-loop/`(0.2 이하는 `.orca-loop/`)를 `.ticket-loop/`로 `git mv`하고(로그·기록 포함), 옛 스킬 `setup-agent-loop`·`setup-orca-loop`와 `.gitignore`의 옛 줄을 지운다. 그 뒤 옛 경로를 아직 가리키는 파일(`docs/agents/ticket-loop.md`, `CLAUDE.md`, `loop.env`의 `REPORT_DIR` 등)이 있으면 목록을 보여 주니 손으로 고쳐 같은 PR에 넣는다. 특정 버전으로 고정하려면 `npx github:iwishash/ticket-loop-kit#v0.5.1 init`(bash 경로는 `--ref v0.3.0`). 바뀐 것은 `git diff`로 보고 PR로 올린다. npx는 한 번 받은 저장소를 캐시하므로, 같은 ref로 다시 받으려면 `npx --yes --prefer-online` 또는 `npm cache clean --force`.
+같은 설치 명령을 다시 실행한다. 키트 소유 파일과 mattpocock 스킬만 바뀌고, 프로젝트 소유 파일(`loop.env` 포함)은 그대로다. 0.3 이하가 설치한 저장소는 설치기가 `.agent-loop/`(0.2 이하는 `.orca-loop/`)를 `.ticket-loop/`로 `git mv`하고(로그·기록 포함), 옛 스킬 `setup-agent-loop`·`setup-orca-loop`와 `.gitignore`의 옛 줄을 지운다. 그 뒤 옛 경로를 아직 가리키는 파일(`docs/agents/ticket-loop.md`, `CLAUDE.md`, `loop.env`의 `REPORT_DIR` 등)이 있으면 목록을 보여 주니 손으로 고쳐 같은 PR에 넣는다. 특정 버전으로 고정하려면 `npx github:iwishash/ticket-loop-kit#v0.7.0 init`(bash 경로는 `--ref v0.3.0`). 바뀐 것은 `git diff`로 보고 PR로 올린다. npx는 한 번 받은 저장소를 캐시하므로, 같은 ref로 다시 받으려면 `npx --yes --prefer-online` 또는 `npm cache clean --force`.
 
 옵션: `--yes`, `--backend <orca|cmux>`, `--no-skills`, `--workflow-skills`/`--no-workflow-skills`, `--force-skills`, `--prune-skills`, `--no-github`, `--no-git-credential`, `--no-orca` (`npx github:iwishash/ticket-loop-kit --help`). bash 경로는 `--ref <ref>`도 받는다(`bash install.sh --help`).
 
