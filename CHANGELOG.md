@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.8.1 — 2026-10-14
 
 저장소를 공개로 전환했다(2026-10-14). LICENSE(MIT) 추가, `package.json`의 license를 `UNLICENSED`에서 `MIT`로.
 

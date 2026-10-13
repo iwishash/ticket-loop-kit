@@ -36,7 +36,7 @@ From the root of the target repository:
 npx github:iwishash/ticket-loop-kit init
 ```
 
-Pick the backend and install steps with the keyboard (`--yes` skips the questions; `NO_COLOR` disables colors). Pin a version with `npx github:iwishash/ticket-loop-kit#v0.8.0 init`. Without Node:
+Pick the backend and install steps with the keyboard (`--yes` skips the questions; `NO_COLOR` disables colors). Pin a version with `npx github:iwishash/ticket-loop-kit#v0.8.1 init`. Without Node:
 
 ```bash
 bash <(curl -fsSL https://raw.githubusercontent.com/iwishash/ticket-loop-kit/main/install.sh)
