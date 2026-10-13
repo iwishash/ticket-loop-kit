@@ -27,7 +27,6 @@ Installs and updates the **ticket loop** in other repositories: an unattended lo
 - One loop per repository (lock directory under `.git`). GitHub (labels, assignees, PRs) is the only state.
 - Each ticket starts in a fresh worktree with an empty context, so skills, worker rules, and `AGENTS.md`/`CLAUDE.md` changes take effect only after they are merged.
 - The worker does not run heavy suites (integration, E2E). The loop runs `POST_MERGE_CMD` on the default branch after each merge and stops on failure.
-- The kit repository is private: you need an invitation, `gh auth login`, and `gh auth setup-git` once for npx (keychain or SSH-alias credentials also work).
 
 ## Install
 
@@ -153,7 +152,7 @@ Verified with one real ticket per backend (details in `CHANGELOG.md`):
 | cmux 0.65 | iwishash/boiler-webapp #39 → PR #40 (2026-10-12) | 7 min | 0 |
 | tmux 3.8 | iwishash/ticket-loop-dummy #1 → PR #2 (2026-10-13) | 4 min | 0 |
 
-Also verified: `tests/smoke.sh`, the npx wrapper against a real fetch of the private repository, and migration of a 0.2 install (smoke test only).
+Also verified: `tests/smoke.sh`, the npx wrapper against a real fetch of the repository (then private), and migration of a 0.2 install (smoke test only).
 
 Not yet verified:
 
