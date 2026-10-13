@@ -136,6 +136,42 @@ SH
 (cd "$F" && PATH="$F:$PATH" bash run.sh "$F/backend.sh" >/dev/null) || fail "Orca 백엔드 함수 호출 실패(set -u)"
 echo "ok  Orca 백엔드 함수 가짜 호출"
 
+# 스펙 이슈 자동 닫기: 가짜 gh 로 세 경우 — 하위 이슈가 모두 닫힘(닫는다), 하나 열림(안 닫는다), 하위 이슈 없음(안 닫는다)
+S="$T/spec"; mkdir -p "$S"
+cat > "$S/gh" <<'SH'
+#!/bin/bash
+echo "$*" >> "$GH_LOG"
+case "$*" in
+  "issue view "*"--json state"*) echo OPEN ;;
+  "api "*"/sub_issues"*) cat "$SUBS" ;;
+  "issue close "*) exit "${CLOSE_RC:-0}" ;;
+esac
+SH
+chmod +x "$S/gh"
+sed -n '/^close_spec_if_done() {/,/^}/p' "$KIT/files/scripts/ticket-loop.sh" > "$S/fn.sh"
+grep -q 'gh issue close' "$S/fn.sh" || fail "close_spec_if_done 을 찾지 못함"
+spec_case() {  # $1 하위 이슈 JSON, $2 기대(closed|kept)
+  local out
+  printf '%s' "$1" > "$S/subs.json"; : > "$S/gh.log"
+  out="$(cd "$S" && PATH="$S:$PATH" GH_LOG="$S/gh.log" SUBS="$S/subs.json" OWNER_REPO=o/r bash -c 'set -euo pipefail; log() { echo "$*"; }; source fn.sh; close_spec_if_done 40')" || fail "close_spec_if_done 실패($2)"
+  if [[ "$2" == closed ]]; then grep -q '^issue close 40 ' "$S/gh.log" && grep -q '스펙 #40: 하위 이슈 2건 모두 닫힘' <<<"$out" || fail "모두 닫힌 스펙을 닫지 않음"
+  else ! grep -q '^issue close' "$S/gh.log" || fail "닫으면 안 되는 스펙($2)을 닫음"; fi
+}
+spec_case '[{"number":41,"state":"closed"},{"number":42,"state":"closed"}]' closed
+spec_case '[{"number":41,"state":"closed"},{"number":42,"state":"open"}]' kept
+spec_case '[]' kept
+(cd "$S" && PATH="$S:$PATH" GH_LOG="$S/gh.log" SUBS="$S/subs.json" bash -c 'set -euo pipefail; source fn.sh; log() { :; }; close_spec_if_done ""; close_spec_if_done 0') || fail "빈 스펙 번호에서 실패"
+grep -c 'close_spec_if_done "' "$KIT/files/scripts/ticket-loop.sh" | grep -qx 3 || fail "close_spec_if_done 호출이 세 곳(티켓 뒤·티켓 없음·정상 종료)이 아니다"
+echo "ok  스펙 이슈 자동 닫기"
+
+# 템플릿 자리표: 무거운 테스트는 스위트와 파일 하나 실행 명령 두 자리표로, 설정 스킬의 결정 표가 둘 다 묻는다
+for f in .ticket-loop/worker-rules.md .claude/skills/implement/SKILL.md .claude/skills/pr/SKILL.md; do
+  grep -q '__HEAVY_TEST_FILE__' "$KIT/templates/$f" || fail "templates/$f 에 __HEAVY_TEST_FILE__ 없음"
+done
+grep -rq '__HEAVY_TESTS_RULE__' "$KIT/templates" "$KIT/files" && fail "옛 자리표 __HEAVY_TESTS_RULE__ 가 남음"
+grep -q '`__HEAVY_TESTS__`' "$KIT/files/.claude/skills/setup-ticket-loop/SKILL.md" && grep -q '`__HEAVY_TEST_FILE__`' "$KIT/files/.claude/skills/setup-ticket-loop/SKILL.md" || fail "setup-ticket-loop 결정 표에 무거운 테스트 자리표가 없음"
+echo "ok  무거운 테스트 자리표"
+
 # 스펙 리포트 jq 프로그램을 고정 자료로 그려 본다(GitHub 없이). 병합·중단·기록 없음 세 경우가 표에 나와야 한다
 REPORT_JQ="$(sed -n "/^read -r -d '' REPORT_JQ <<'JQ'/,/^JQ\$/p" "$KIT/files/scripts/ticket-loop.sh" | sed '1d;$d')"
 [[ -n "$REPORT_JQ" ]] || fail "REPORT_JQ 블록을 찾지 못함"

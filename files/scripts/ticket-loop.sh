@@ -9,11 +9,12 @@ set -euo pipefail
 #      (티켓마다 새 프로세스라 컨텍스트가 비어 있다)
 #   2. 워커가 `<BRANCH_PREFIX>N-<slug>` 브랜치로 PR을 열 때까지 기다린다
 #   3. CI를 기다리고, 충돌·CI 실패는 같은 워커에 REPAIR_ROUNDS회까지 고치게 한다
-#   4. PR을 병합한다 → 본문의 `Closes #N`으로 이슈가 닫힌다
+#   4. PR을 병합한다 → 본문의 `Closes #N`으로 이슈가 닫힌다. 그 티켓이 속한 스펙 이슈의 하위 이슈가 모두 닫혔으면 스펙 이슈도 닫는다
 #   5. (선택) 병합된 기본 브랜치로 POST_MERGE_CMD를 한 번 돌린다 — 워커가 못 돌리는 무거운 검증. 실패하면 멈춘다
 #   6. 워크트리·브랜치를 지우고, 티켓 요약 한 줄을 로그에, 기록 한 줄을 RECORDS_FILE에 남기고, 다음 티켓으로 간다
 #      (자동 선택이면 대상 재계산)
-#   7. `--parent` 실행이 정상 종료하면 스펙 리포트 HTML(티켓별 결과·경과 시간·모델 표)을 REPORT_DIR/spec-<N>.html에 쓴다
+#   7. `--parent` 실행이 정상 종료하면 하위 이슈가 모두 닫힌 스펙 이슈를 닫고(아직 열려 있으면), 스펙 리포트 HTML(티켓별 결과·경과 시간·
+#      모델 표)을 REPORT_DIR/spec-<N>.html에 쓴다
 #
 # 사용법:
 #   ticket-loop.sh                     # 준비된 티켓 전부
@@ -611,6 +612,23 @@ spec_of_ticket() {
     --jq '.data.repository.issue.parent.number // 0' 2>/dev/null || echo 0
 }
 
+# 스펙 이슈의 하위 이슈가 모두 닫혔으면 스펙 이슈를 닫는다. 요약 값 sub_issues_summary.completed 대신 목록을 센다
+# (blocked_by 요약처럼 늦게 바뀔 수 있다). 하위 이슈가 없거나 하나라도 열려 있거나 스펙이 이미 닫혔으면 아무것도 하지 않는다.
+close_spec_if_done() {
+  local spec="${1:-}" counts total open
+  [[ -n "$spec" && "$spec" != "0" ]] || return 0
+  [[ "$(gh issue view "$spec" --json state -q .state 2>/dev/null)" == "OPEN" ]] || return 0
+  counts="$(gh api "repos/${OWNER_REPO}/issues/${spec}/sub_issues?per_page=100" --paginate 2>/dev/null \
+    | jq -rs 'add // [] | "\(length) \(map(select(.state == "open")) | length)"')" || return 0
+  read -r total open <<<"$counts"
+  [[ "${total:-0}" -gt 0 && "${open:-1}" -eq 0 ]] || return 0
+  if gh issue close "$spec" --comment "하위 이슈 ${total}건이 모두 닫혀 완료 (ticket-loop)" >/dev/null 2>&1; then
+    log "스펙 #${spec}: 하위 이슈 ${total}건 모두 닫힘 → 스펙 이슈를 닫았다"
+  else
+    log "스펙 #${spec}: 하위 이슈 ${total}건이 모두 닫혔지만 스펙 이슈를 닫지 못했다 — gh issue close ${spec}"
+  fi
+}
+
 record_ticket() {
   local result="$1" reason="${2:-}" file="$RECORDS_FILE" spec
   [[ "$LOG_FILE" != "/dev/null" ]] || return 0
@@ -794,6 +812,7 @@ run_ticket() {
     gh issue close "${n}" --comment "PR #${pr} 병합으로 완료 (ticket-loop)" || true
   fi
   gh issue edit "${n}" --remove-label "$IN_REVIEW_LABEL" >/dev/null 2>&1 || true
+  close_spec_if_done "$(spec_of_ticket "${n}")"
 
   # 병합된 기본 브랜치로 무거운 검증 — CI가 안 붙는 문서 PR은 건너뛴다. 실패하면 기본 브랜치가 깨진 것이므로
   # 다음 티켓을 쌓지 않고 멈춘다(워커 워크트리는 이미 병합됐으니 정리하고, 검증 워크트리와 로그를 남긴다).
@@ -826,8 +845,8 @@ log "병합 뒤 검증: $([[ $POST_MERGE -eq 1 ]] && echo "실행 — ${POST_MER
 if [[ $POST_MERGE -eq 1 && -n "$POST_MERGE_PORT" ]] && port_in_use "$POST_MERGE_PORT"; then
   log "주의: 포트 ${POST_MERGE_PORT} 사용 중($(port_holder "$POST_MERGE_PORT" || true)) — 루프가 도는 동안 비워 두세요. 그대로면 병합마다 비기를 최대 $((PORT_WAIT_SEC / 60))분 기다린다(끄려면 --skip-post-merge)"
 fi
-# 티켓이 더 없어도 --parent면 리포트는 다시 만든다(끝난 스펙의 리포트를 다시 뽑는 길)
-[[ -n "$targets" ]] || { log "처리할 티켓이 없습니다."; [[ $DRY_RUN -eq 1 ]] || write_spec_report; exit 0; }
+# 티켓이 더 없어도 --parent면 스펙 닫기·리포트는 다시 한다(사람이 마지막 티켓을 닫은 스펙, 끝난 스펙의 리포트를 다시 뽑는 길)
+[[ -n "$targets" ]] || { log "처리할 티켓이 없습니다."; [[ $DRY_RUN -eq 1 ]] || { close_spec_if_done "$PARENT"; write_spec_report; }; exit 0; }
 log "대상(현재 선행 이슈가 모두 닫힌 것):"; printf '%s\n' "$targets" | sed 's/^/  #/' >&2
 [[ $DRY_RUN -eq 0 ]] || exit 0
 
@@ -857,6 +876,7 @@ while :; do
   [[ $MAX -eq 0 || $done_count -lt $MAX ]] || { log "--max $MAX 도달"; break; }
 done
 
+close_spec_if_done "$PARENT"
 write_spec_report
 log "완료: ${done_count}건"
 notify "티켓 루프 종료" "${done_count}건 완료"

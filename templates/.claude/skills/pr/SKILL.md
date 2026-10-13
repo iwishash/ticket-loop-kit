@@ -19,9 +19,10 @@ Closes #N
 
 ## Verification
 - `__VERIFY__` <result>, migration <applied / none>
+- Heavy test files touched (`__HEAVY_TEST_FILE__`): <each file and its result, or "none">
 
 ## Not verified
-- <e.g. E2E not run — the loop runs it after merge / no manual browser check>
+- <e.g. the full heavy suite (__HEAVY_TESTS__) not run — the loop runs it after merge / no manual browser check>
 
 ## Remaining judgement calls
 - <what the review left as a judgement call, interpretations the spec did not settle>

@@ -21,7 +21,7 @@ disable-model-invocation: true
 - 언어·패키지 관리자: lockfile(`pnpm-lock.yaml`, `package-lock.json`, `yarn.lock`, `uv.lock`, `poetry.lock`, `go.sum`, `Cargo.lock` …), `packageManager` 필드
 - 기존 명령: `package.json` scripts, `Makefile`, `justfile`, `pyproject.toml`의 lint·typecheck·test·build. 단일 테스트 파일을 돌리는 방법
 - CI: `.github/workflows/*`의 트리거·`paths`/`paths-ignore`, 실행 명령
-- 무거운 테스트: 실제 서버·DB·고정 포트를 쓰는 통합·E2E 스위트와 그 명령, 쓰는 포트, 필요한 env 파일
+- 무거운 테스트: 실제 서버·DB·고정 포트를 쓰는 통합·E2E 스위트와 그 명령, 쓰는 포트, 필요한 env 파일. 그 스위트의 파일 하나만 돌리는 방법(별도 config·스크립트, 예 `pnpm exec vitest run --config vitest.integration.config.ts <file>`)
 - DB 마이그레이션 도구와 번호 규칙, 개발·운영 DB를 가르는 단서(env 파일의 호스트)
 - `.env*` 파일 이름(내용은 출력하지 않는다)
 - `CLAUDE.md`/`AGENTS.md`의 `## Agent skills` 블록, 코딩 표준 문서 유무
@@ -41,7 +41,8 @@ disable-model-invocation: true
 | `__VERIFY__` | lint → 전체 테스트 → build 한 명령. 없으면 만들 스크립트 이름(예 `verify`) |
 | `__PR_LANGUAGE__` | PR 본문 언어 |
 | `__MIGRATION_RULE__` | 마이그레이션 규칙 한 문장, 또는 "없음"(줄 삭제) |
-| `__HEAVY_TESTS_RULE__` | 워커가 돌리지 않을 무거운 테스트와 PR 표기 문구 |
+| `__HEAVY_TESTS__` | 워커가 전체를 돌리지 않을 무거운 스위트의 이름·경로(예 `통합 테스트(tests/integration/)·E2E`). 없으면 "없음" — `worker-rules.md`의 그 줄과 `implement`·`pr`의 그 문단·줄을 지운다 |
+| `__HEAVY_TEST_FILE__` | 그 스위트의 파일 하나를 돌리는 명령(예 `pnpm exec vitest run --config vitest.integration.config.ts <file>`). 워커는 자기가 추가·수정한 파일만 PR 직전 1회 돌리고, 전체는 루프가 병합 뒤(`POST_MERGE_CMD`) 돌린다 |
 | `orca.yaml` setup | 의존성 설치 명령, 복사할 env 파일과 안전 조건 |
 | `POST_MERGE_CMD` 등 | 병합 뒤 검증 명령·복사 파일, 또는 끔 |
 | `POST_MERGE_PORT` | 그 명령이 띄우는 고정 포트(예 `next dev`의 3000). 루프가 병합마다 비기를 기다리고, 시작할 때 차 있으면 알린다. 없으면 비움 |

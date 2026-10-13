@@ -20,6 +20,8 @@ Call the Skill tool with "tdd" where possible. Do not ask the user to confirm th
 
 While working, run only `__TYPECHECK__` and single test files (`__TEST_FILE__`). Run the full bundle `__VERIFY__` exactly twice: once right before the first commit and once right before the review-fix commit.
 
+Heavy tests (__HEAVY_TESTS__) are not part of the bundle and you never run the whole suite: the loop runs it on the base branch after merge. If this ticket adds or changes any of those test files, run only those files once, right before opening the pull request, with `__HEAVY_TEST_FILE__`, and put the files and the result in the pull request body's Verification section. If you touched none, say so there.
+
 __MIGRATION_RULE__
 
 Commit your work to the issue branch, mentioning `#N` in the commit message. Then call the Skill tool with "ticket-review", with `origin/__BASE__` as the fixed point and issue #N as the spec. Fix every hard violation and every Spec finding in a follow-up commit; list the remaining judgement calls in the pull request body.
