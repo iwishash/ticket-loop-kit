@@ -35,9 +35,9 @@ disable-model-invocation: true
 
 | 항목 | 값 |
 |---|---|
-| `BACKEND` | `orca` 또는 `cmux` — `.ticket-loop/loop.env`에 이미 있으면(npx 설치기가 쓴다) 그 값. 워크트리·에이전트 터미널을 누가 맡나 |
+| `BACKEND` | `orca`, `cmux` 또는 `tmux` — `.ticket-loop/loop.env`에 이미 있으면(npx 설치기가 쓴다) 그 값. 워크트리·에이전트 터미널을 누가 맡나 |
 | `AGENT` | `claude` 또는 `codex` — `loop.env`에 이미 있으면 그 값. 워커를 띄울 에이전트. 프리셋이 기동 명령·배너·스킬 접두사(`/implement` ↔ `$implement`)를 정한다. `codex`는 아직 실측 전이라고 표에 적는다 |
-| `WORKTREE_SETUP_CMD` | cmux일 때만. 새 워크트리에서 에이전트를 띄우기 전에 돌릴 의존성 설치·env 복사 명령(`LOOP_ROOT_PATH`, `LOOP_WORKTREE_PATH` 사용 가능). Orca는 `orca.yaml` setup이 같은 일을 한다 |
+| `WORKTREE_SETUP_CMD` | cmux·tmux일 때만. 새 워크트리에서 에이전트를 띄우기 전에 돌릴 의존성 설치·env 복사 명령(`LOOP_ROOT_PATH`, `LOOP_WORKTREE_PATH` 사용 가능). Orca는 `orca.yaml` setup이 같은 일을 한다 |
 | `__BASE__` | 기본 브랜치 |
 | `__TYPECHECK__` | 수시 타입 검사 명령(없으면 lint 중 빠른 것) |
 | `__TEST_FILE__` | 단일 테스트 파일 실행 형태, 예 `pnpm exec vitest run <file>` |
@@ -59,7 +59,7 @@ disable-model-invocation: true
 1. **`__VERIFY__` 명령**: 없으면 패키지 스크립트·Makefile 타깃으로 만든다(lint → 전체 테스트 → build 순서, 앞이 실패하면 멈춤).
 2. **템플릿 채우기**: `.agents/skills/implement/SKILL.md`, `.agents/skills/pr/SKILL.md`, `.ticket-loop/worker-rules.md`의 `__PLACEHOLDER__`를 모두 바꾼다. "없음"인 항목은 그 문장·줄을 지운다. `.codex/rules/ticket-loop.rules`(Codex 워커의 병합·강제 push 금지 — `.claude/settings.json`의 `deny`와 같은 내용)는 설치기가 기본 브랜치를 채워 놓는다 — 자리표가 남아 있지 않은지만 본다.
 3. **`orca.yaml`**(`BACKEND=orca`일 때만): `scripts.setup`에 설치 명령, env 파일 복사(`$ORCA_ROOT_PATH` → `$ORCA_WORKTREE_PATH`, 운영 값이 섞이면 복사하지 않는 조건 포함), `setupAgentStartupPolicy: wait-for-setup`. 파일 맨 위 주석에 Orca 앱의 Command Source를 "orca.yaml only"로 바꿔야 쓰인다고 적는다.
-4. **`.ticket-loop/loop.env`**: 루프의 저장소별 기본값을 `VAR="${VAR:-값}"` 꼴로 쓴다(`BACKEND`, `AGENT`, `CI_SKIP_REGEX`, `POST_MERGE_CMD`, `POST_MERGE_COPY`, `POST_MERGE_PORT`, cmux면 `WORKTREE_SETUP_CMD`, 필요하면 `MERGE_METHOD`). 이미 있는 줄(npx 설치기가 쓴 `BACKEND`·`AGENT`)은 그대로 둔다.
+4. **`.ticket-loop/loop.env`**: 루프의 저장소별 기본값을 `VAR="${VAR:-값}"` 꼴로 쓴다(`BACKEND`, `AGENT`, `CI_SKIP_REGEX`, `POST_MERGE_CMD`, `POST_MERGE_COPY`, `POST_MERGE_PORT`, cmux·tmux면 `WORKTREE_SETUP_CMD`, 필요하면 `MERGE_METHOD`). 이미 있는 줄(npx 설치기가 쓴 `BACKEND`·`AGENT`)은 그대로 둔다.
 5. **CI**: PR에서 도는 워크플로가 없으면 `__VERIFY__`를 도는 최소 워크플로를 만든다(비밀 값 없이, 경로 필터 없이 — 필터는 저장소가 원할 때 두는 것이다). 이미 경로 필터가 있으면 `CI_SKIP_REGEX` 또는 `CI_SKIP_CMD`를 같은 판정이 나오게 맞추고, 문서만 바꾸는 PR과 코드 PR을 하나씩 떠올려 둘 다 맞는지 확인한다.
 6. **`docs/agents/ticket-loop.md`**: 이 저장소의 운영 문서. 흐름(`/grill-with-docs` → `/to-spec` → `/to-tickets` → `bash scripts/ticket-loop.sh --parent <스펙>` → 스펙 리포트 `docs/loop-reports/spec-<N>.html` 검수 → `/retro`; Codex에서는 `/`를 `$`로), 실행 명령, 위 결정 표, 사람이 할 일(Orca 앱 설정, 병합, 리포트 PR 커밋, Codex면 저장소 `.codex/` 신뢰), 복구는 가이드북 10장과 `bash scripts/ticket-state.sh N`을 가리킨다. `POST_MERGE_PORT`가 있으면 "실행 전 `lsof -nP -iTCP:<포트> -sTCP:LISTEN`으로 비어 있는지 본다"와 "로그가 '포트 … 사용 중'에서 조용하면 멈춤이 아니라 대기다(가이드북 R10)"를 적는다. 키트 버전은 `.ticket-loop/kit.json`을 가리킨다.
    `docs/loop-reports/README.md`(키트 템플릿)는 `REPORT_DIR`를 바꿨을 때만 그 경로로 옮긴다.
@@ -73,13 +73,13 @@ disable-model-invocation: true
 - `.claude/skills/implement`, `.claude/skills/pr`, `.claude/skills/tdd`, `.claude/skills/ticket-review`가 `.agents/skills/<이름>`을 가리키는 링크다(`ls -l .claude/skills`).
 - `__VERIFY__`를 한 번 돌려 통과한다(실패하면 원인을 보고하고, 기존 실패인지 이번 변경 탓인지 가른다).
 - `bash scripts/ticket-loop.sh --dry-run`이 저장소·기준 브랜치·병합 뒤 검증 설정을 찍고 정상 종료한다(`POST_MERGE_PORT`를 정했으면 그 포트가 차 있을 때 "주의: 포트 … 사용 중" 줄이 나오는지도 한 번 본다).
-- `orca.yaml`의 setup 명령(cmux면 `WORKTREE_SETUP_CMD`)을 메인 체크아웃에서 그대로 실행해 성공한다(설치 명령만, 복사는 건너뛴다).
+- `orca.yaml`의 setup 명령(cmux·tmux면 `WORKTREE_SETUP_CMD`)을 메인 체크아웃에서 그대로 실행해 성공한다(설치 명령만, 복사는 건너뛴다).
 
 ## 6. PR
 
 `install.sh`가 바꾼 파일(스크립트, `.agents/skills/`와 `.claude/skills/` 링크, `.codex/rules/`, `.gitignore`, `.claude/settings.json`, `.ticket-loop/kit.json`)까지 함께 커밋하고 PR을 연다. 본문에 결정 표, 검증 결과, 사람이 할 일을 적는다.
 
-- Orca면: Settings → Projects → <저장소> → Worktree Hooks → Advanced: Command Source "orca.yaml only", "Wait for setup to complete before starting agent" 켜기. cmux면: 루프를 cmux 터미널 안에서 돌린다(소켓 모드 기본값 cmuxOnly)
+- Orca면: Settings → Projects → <저장소> → Worktree Hooks → Advanced: Command Source "orca.yaml only", "Wait for setup to complete before starting agent" 켜기. cmux면: 루프를 cmux 터미널 안에서 돌린다(소켓 모드 기본값 cmuxOnly). tmux면: `tmux`가 설치돼 있으면 된다 — 워커 창은 `tmux attach -t ticket-loop`으로 본다
 - PR 병합(워커 규칙·스킬은 `origin/<기본 브랜치>`에 있어야 워커가 본다)
 - `AGENT=codex`면: 이 저장소의 `.codex/`를 Codex에서 신뢰해야 `.codex/rules`가 적용된다. `--dangerously-bypass-approvals-and-sandbox` 아래에서도 유지되는지는 실측 전이니 GitHub 브랜치 보호를 켠다
 - 병합 뒤 작은 티켓 하나로 `bash scripts/ticket-loop.sh --max 1`을 지켜보기

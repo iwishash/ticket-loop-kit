@@ -642,7 +642,7 @@ bash scripts/ticket-loop.sh --parent 40             # 끝난 스펙이면 "처�
   <tr><td><code>ORDER_REGEX</code></td><td><code>^T(?&lt;n&gt;[0-9]+)</code></td><td>제목에서 순번을 뽑는 정규식(그룹 이름 <code>n</code>)</td></tr>
   <tr><td><code>WORKER_RULES_FILE</code></td><td><code>.ticket-loop/worker-rules.md</code></td><td>워커에게 따르게 할 프로젝트 규칙</td></tr>
   <tr><td><code>AGENT</code></td><td><code>claude</code></td><td><code>claude</code> | <code>codex</code>. Orca 에이전트 ID이자 기록의 agent 필드. 아래 네 값의 기본을 정하는 프리셋이다 — 다른 값이면 네 값을 직접 적는다(비어 있으면 시작 때 멈춘다). <code>codex</code>는 프리셋만 있고 아직 실측 전이다(12장 FAQ)</td></tr>
-  <tr><td><code>AGENT_RESTART_CMD</code></td><td><code>claude --dangerously-skip-permissions</code> / <code>codex --dangerously-bypass-approvals-and-sandbox</code></td><td>셸에서 에이전트를 띄울 명령. 워커 프롬프트가 인자로 붙는다. Orca는 기동 실패 때만, cmux는 처음부터 이 명령으로 띄운다. Orca가 워커를 띄우는 방식과 같게 맞춘다</td></tr>
+  <tr><td><code>AGENT_RESTART_CMD</code></td><td><code>claude --dangerously-skip-permissions</code> / <code>codex --dangerously-bypass-approvals-and-sandbox</code></td><td>셸에서 에이전트를 띄울 명령. 워커 프롬프트가 인자로 붙는다. Orca는 기동 실패 때만, cmux·tmux는 처음부터 이 명령으로 띄운다(tmux는 뒤에 훅 설정 인자를 붙인다). Orca가 워커를 띄우는 방식과 같게 맞춘다</td></tr>
   <tr><td><code>AGENT_BANNER_REGEX</code></td><td><code>Claude Code|Opus|Sonnet|Fable|Haiku</code> / <code>OpenAI Codex|gpt-[0-9]</code></td><td>에이전트가 떴는지 확인할 화면 문구(ERE)</td></tr>
   <tr><td><code>SKILL_PREFIX</code></td><td><code>/</code> / <code>$</code></td><td>워커 프롬프트에서 스킬을 부르는 접두사 — <code>/implement N</code>(Claude Code) 또는 <code>$implement N</code>(Codex)</td></tr>
   <tr><td><code>TICKET_TIMEOUT_SEC</code></td><td><code>14400</code> (4시간)</td><td>티켓 한 건 전체 제한 시간</td></tr>
@@ -1254,7 +1254,7 @@ Keep each bullet to one or two sentences. No screenshots unless the ticket is vi
 <pre class="script"><code>#!/usr/bin/env bash
 set -euo pipefail
 
-# ticket-loop.sh — GitHub 이슈 티켓을 워크트리에서 한 건씩 무인 처리한다. 워크트리와 에이전트 터미널은 백엔드(Orca 또는 cmux)가 맡는다.
+# ticket-loop.sh — GitHub 이슈 티켓을 워크트리에서 한 건씩 무인 처리한다. 워크트리와 에이전트 터미널은 백엔드(Orca, cmux 또는 tmux)가 맡는다.
 # 가이드: 「티켓 무인 루프 가이드북」 3판 (ticket-loop-kit docs/). 이 파일은 ticket-loop-kit이 관리한다 — 고치면 키트에서 고친다.
 #
 # 티켓 하나당:
@@ -1281,7 +1281,8 @@ set -euo pipefail
 #   ticket-loop.sh --no-merge 12       # CI 통과까지만, 병합은 사람이
 #   ticket-loop.sh --skip-post-merge   # POST_MERGE_CMD를 이번 실행에서 끈다
 #
-# 전제: 백엔드 앱 실행 중(Orca: CLI 등록 / cmux: cmux 터미널 안에서 실행하거나 소켓 모드를 열어 둠), `gh auth status` 로그인, 저장소 안에서 실행.
+# 전제: 백엔드 준비(Orca: 앱 실행·CLI 등록 / cmux: cmux 터미널 안에서 실행하거나 소켓 모드를 열어 둠 / tmux: tmux 설치), `gh auth status` 로그인,
+# 저장소 안에서 실행.
 # 진행 로그는 기본으로 .ticket-loop/loop-MMDD.log에 덧붙인다(.gitignore에 /.ticket-loop/*.log 권장).
 # 티켓마다 "#N 요약: …" 한 줄(벽시계·PR·CI 소요·수리·idle 오판·병합 뒤 검증)을 남겨 /retro가 읽는다.
 # 같은 내용 + 모델을 RECORDS_FILE(JSONL)에도 남기고, 스펙 리포트가 GitHub의 PR과 합쳐 표로 만든다.
@@ -1289,11 +1290,13 @@ set -euo pipefail
 # 실행할 때 준 환경변수가 이기게 한다. 예: CI_SKIP_REGEX="${CI_SKIP_REGEX:-^docs/}" POST_MERGE_PORT="${POST_MERGE_PORT:-3000}"
 #
 # 환경변수(선택):
-#   BACKEND             orca | cmux (기본 orca). 워크트리 생성·에이전트 터미널·idle 판정·상태 표시를 누가 하나. 아래 "백엔드" 절
+#   BACKEND             orca | cmux | tmux (기본 orca). 워크트리 생성·에이전트 터미널·idle 판정·상태 표시를 누가 하나. 아래 "백엔드" 절
 #   ORCA_CLI            Orca CLI 실행 파일 (기본: ORCA_CLI_COMMAND → Linux면 orca-ide → orca)
 #   CMUX_CLI            cmux CLI 실행 파일 (기본: PATH의 cmux → /Applications/cmux.app/Contents/Resources/bin/cmux)
-#   WORKTREE_DIR        cmux 백엔드가 워크트리를 둘 디렉터리 (기본 ~/.cache/ticket-loop/&lt;owner-repo&gt;/worktrees). Orca는 자기 자리에 둔다
-#   WORKTREE_SETUP_CMD  cmux 백엔드가 새 워크트리에서 에이전트를 띄우기 전에 돌릴 명령(의존성 설치·env 복사 — Orca의 orca.yaml setup에
+#   TMUX_CLI            tmux 실행 파일 (기본 tmux)
+#   TMUX_SESSION        tmux 백엔드가 워커 창을 열 세션 (기본: tmux 안에서 돌리면 그 세션, 밖이면 ticket-loop — 없으면 만든다)
+#   WORKTREE_DIR        cmux·tmux 백엔드가 워크트리를 둘 디렉터리 (기본 ~/.cache/ticket-loop/&lt;owner-repo&gt;/worktrees). Orca는 자기 자리에 둔다
+#   WORKTREE_SETUP_CMD  cmux·tmux 백엔드가 새 워크트리에서 에이전트를 띄우기 전에 돌릴 명령(의존성 설치·env 복사 — Orca의 orca.yaml setup에
 #                       해당). LOOP_ROOT_PATH·LOOP_WORKTREE_PATH를 환경변수로 준다. 예 "pnpm install &amp;&amp; cp \"$LOOP_ROOT_PATH/.env.local\" ."
 #   SPEC_ISSUE          --parent 기본값
 #   SCOPE_LABEL         함께 요구할 라벨(--label 기본값)
@@ -1306,7 +1309,7 @@ set -euo pipefail
 #   AGENT               claude | codex (기본 claude). Orca가 띄울 에이전트 ID이자 기록의 agent 필드. 아래 네 값의 기본을 정하는
 #                       프리셋이다(아래 "에이전트 프리셋" 절). 다른 값이면 네 값을 직접 적어야 한다
 #   AGENT_RESTART_CMD   에이전트를 셸에서 띄우는 명령. 프롬프트는 인자로 붙는다 (claude: claude --dangerously-skip-permissions,
-#                       codex: codex --dangerously-bypass-approvals-and-sandbox). Orca는 뜨지 않았을 때만, cmux는 처음부터 이 명령으로 띄운다
+#                       codex: codex --dangerously-bypass-approvals-and-sandbox). Orca는 뜨지 않았을 때만, cmux·tmux는 처음부터 이 명령으로 띄운다(tmux는 훅 설정 인자를 뒤에 붙인다)
 #   AGENT_BANNER_REGEX  에이전트가 떴는지 확인할 화면 문구(ERE) (claude: Claude Code 배너·모델명, codex: "OpenAI Codex"·gpt- 모델명)
 #   SKILL_PREFIX        워커 프롬프트에서 스킬을 부르는 접두사 (claude: / → /implement N, codex: $ → $implement N)
 #   TICKET_TIMEOUT_SEC  티켓 한 건 제한 시간 (기본 14400 = 4시간)
@@ -1347,6 +1350,8 @@ fi
 if [[ -z "${CMUX_CLI:-}" ]]; then
   if command -v cmux &gt;/dev/null 2&gt;&amp;1; then CMUX_CLI="cmux"; else CMUX_CLI="/Applications/cmux.app/Contents/Resources/bin/cmux"; fi
 fi
+TMUX_CLI="${TMUX_CLI:-tmux}"
+TMUX_SESSION="${TMUX_SESSION:-}"
 WORKTREE_DIR="${WORKTREE_DIR:-}"
 WORKTREE_SETUP_CMD="${WORKTREE_SETUP_CMD:-}"
 PARENT="${SPEC_ISSUE:-}"
@@ -1398,7 +1403,7 @@ case "$AGENT" in
 esac
 # ----- 에이전트 프리셋 끝 -----
 IDLE_WAIT_MS=600000       # idle 1회 대기 상한(Orca: terminal wait 한 번, cmux: 폴링 한 바퀴)
-IDLE_POLL_SEC=5           # cmux 백엔드가 lifecycle을 다시 읽는 간격
+IDLE_POLL_SEC=5           # cmux·tmux 백엔드가 에이전트 상태(lifecycle / 훅 파일)를 다시 읽는 간격
 TERMINAL_RETRY=5          # wait가 이상하게 끝났을 때 터미널 읽기를 다시 해 보는 횟수
 TERMINAL_RETRY_SEC=10
 IDLE_STRIKES=3            # PR 없이 연속 idle이면 멈춤으로 본다
@@ -1540,8 +1545,7 @@ backend_interrupt()       { "${BACKEND}_interrupt" "$@"; }
 backend_wait_idle()       { "${BACKEND}_wait_idle" "$@"; }
 backend_tail()            { "${BACKEND}_tail" "$@"; }
 backend_set_status()      { "${BACKEND}_set_status" "$@"; }
-case "$BACKEND" in orca|cmux) ;; *) die "BACKEND=${BACKEND} 를 모릅니다 (orca | cmux)." ;; esac
-BACKEND_NAME="$([[ "$BACKEND" == orca ]] &amp;&amp; echo Orca || echo cmux)"
+case "$BACKEND" in orca) BACKEND_NAME=Orca ;; cmux|tmux) BACKEND_NAME="$BACKEND" ;; *) die "BACKEND=${BACKEND} 를 모릅니다 (orca | cmux | tmux)." ;; esac
 
 # 프롬프트를 셸 명령 인자로 넘길 때는 파일을 거친다(따옴표·백틱이 섞여도 안전). 파일은 티켓이 끝나도 지우지 않는다(디버그용, tmp)
 prompt_file() { local f; f="$(mktemp "${TMPDIR:-/tmp}/ticket-loop-prompt-$1.XXXXXX")"; printf '%s' "$2" &gt; "$f"; printf '%s' "$f"; }
@@ -1618,6 +1622,39 @@ orca_set_status() {
   orca_json worktree set "${args[@]}" &gt;/dev/null
 }
 
+# ----- cmux·tmux 공통 -----
+# Claude Code는 새 워크트리에서 "이 폴더를 신뢰하나" 대화상자를 띄우는데, 그 판정은 메인 체크아웃 경로로 한다(2026-10-13 실측:
+# 메인 체크아웃이 ~/.claude.json projects에 없던 더미 저장소에서 대화상자가 떴고, 수락하면 메인 체크아웃 경로가 trust=true로 기록됐다.
+# boiler-webapp cmux 실측에서 안 뜬 것은 메인 체크아웃을 이미 신뢰했기 때문). 대화상자가 떠 있으면 훅도 프롬프트도 돌지 않으니
+# 시작 때 막는다. Orca는 워크스페이스마다 신뢰를 기록해 주므로 여기서 보지 않는다
+claude_trust_check() {
+  [[ "$AGENT" == claude ]] || return 0
+  local cfg="${CLAUDE_CONFIG_DIR:+$CLAUDE_CONFIG_DIR/.claude.json}" trusted
+  cfg="${cfg:-$HOME/.claude.json}"
+  [[ -f "$cfg" ]] || return 0
+  trusted="$(jq -r --arg p "$MAIN_WT" '.projects[$p].hasTrustDialogAccepted // false' "$cfg" 2&gt;/dev/null)" || return 0
+  [[ "$trusted" == true ]] \
+    || die "Claude Code가 ${MAIN_WT} 를 아직 신뢰하지 않습니다 — 워커가 새 워크트리에서 신뢰 대화상자에 멈춥니다. 메인 체크아웃에서 claude 를 한 번 열어 'Yes, I trust this folder' 를 고르세요."
+}
+
+# 워크트리는 루프가 git으로 만든다 (Orca는 orca worktree create가 한다)
+# WT_PATH·WT_BRANCH를 채운다. 백엔드는 그 위에 에이전트 터미널을 연다
+loop_worktree_add() {
+  local n="$1" path
+  path="${WORKTREE_DIR}/${BRANCH_PREFIX}${n}"
+  [[ ! -e "$path" ]] || die "워크트리 경로가 이미 있습니다: ${path} (지난 실행의 잔재면 'git worktree remove --force' 뒤 다시)"
+  mkdir -p "$WORKTREE_DIR"
+  git -C "$ROOT" branch -D "${BRANCH_PREFIX}${n}" &gt;/dev/null 2&gt;&amp;1 || true
+  git -C "$ROOT" worktree add -q -b "${BRANCH_PREFIX}${n}" "$path" "origin/${BASE_BRANCH}" || die "git worktree add 실패 (${path})"
+  if [[ -n "$WORKTREE_SETUP_CMD" ]]; then
+    log "#${n}: 워크트리 준비 — ${WORKTREE_SETUP_CMD}"
+    (cd "$path" &amp;&amp; LOOP_ROOT_PATH="$MAIN_WT" LOOP_WORKTREE_PATH="$path" bash -c "$WORKTREE_SETUP_CMD") \
+      || die "#${n}: WORKTREE_SETUP_CMD 실패 (${path})"
+  fi
+  WT_PATH="$path"
+  WT_BRANCH="${BRANCH_PREFIX}${n}"
+}
+
 # ----- cmux: 워크트리는 루프가 git으로 만들고, 터미널은 cmux 워크스페이스다 (cmux 0.65 실측) -----
 # cmux에는 워크트리 생성 명령도, idle까지 블로킹하는 명령도 없다. 그래서
 #   - `git worktree add` 뒤 WORKTREE_SETUP_CMD(orca.yaml setup에 해당)를 돌리고 `cmux workspace create --cwd … --command "&lt;AGENT_RESTART_CMD&gt; …"`
@@ -1638,28 +1675,18 @@ cmux_check() {
   "$CMUX_CLI" identify --json &gt;/dev/null 2&gt;&amp;1 \
     || die "cmux 소켓에 닿지 못했습니다. cmux 터미널 안에서 실행하거나 소켓 모드를 바꾸세요 ('${CMUX_CLI} socket-status --json')."
   [[ -n "$WORKTREE_DIR" ]] || WORKTREE_DIR="$HOME/.cache/ticket-loop/${OWNER_REPO//\//-}/worktrees"
+  claude_trust_check
 }
 
 cmux_worktree_create() {
-  local n="$1" prompt="$2" path out pf
-  path="${WORKTREE_DIR}/${BRANCH_PREFIX}${n}"
-  [[ ! -e "$path" ]] || die "워크트리 경로가 이미 있습니다: ${path} (지난 실행의 잔재면 'git worktree remove --force' 뒤 다시)"
-  mkdir -p "$WORKTREE_DIR"
-  git -C "$ROOT" branch -D "${BRANCH_PREFIX}${n}" &gt;/dev/null 2&gt;&amp;1 || true
-  git -C "$ROOT" worktree add -q -b "${BRANCH_PREFIX}${n}" "$path" "origin/${BASE_BRANCH}" || die "git worktree add 실패 (${path})"
-  if [[ -n "$WORKTREE_SETUP_CMD" ]]; then
-    log "#${n}: 워크트리 준비 — ${WORKTREE_SETUP_CMD}"
-    (cd "$path" &amp;&amp; LOOP_ROOT_PATH="$MAIN_WT" LOOP_WORKTREE_PATH="$path" bash -c "$WORKTREE_SETUP_CMD") \
-      || die "#${n}: WORKTREE_SETUP_CMD 실패 (${path})"
-  fi
+  local n="$1" prompt="$2" out pf
+  loop_worktree_add "$n"
   pf="$(prompt_file "$n" "$prompt")"
-  out="$(cmux_j workspace create --name "${BRANCH_PREFIX}${n}" --cwd "$path" --focus false --id-format uuids \
+  out="$(cmux_j workspace create --name "${BRANCH_PREFIX}${n}" --cwd "$WT_PATH" --focus false --id-format uuids \
            --command "$(agent_launch_cmd "$pf")" 2&gt;/dev/null)" || die "cmux workspace create 실패"
   WT="$(jq -r '.workspace_id // empty' &lt;&lt;&lt;"$out" 2&gt;/dev/null || true)"
   HANDLE="$(jq -r '.surface_id // empty' &lt;&lt;&lt;"$out" 2&gt;/dev/null || true)"
   [[ -n "$WT" &amp;&amp; -n "$HANDLE" ]] || die "cmux workspace create 응답에서 workspace_id/surface_id를 찾지 못했습니다: ${out}"
-  WT_PATH="$path"
-  WT_BRANCH="${BRANCH_PREFIX}${n}"
 }
 
 cmux_worktree_remove() {
@@ -1702,6 +1729,137 @@ cmux_set_status() {
   "$CMUX_CLI" workspace status set "$lane" --workspace "$wt" &gt;/dev/null 2&gt;&amp;1 || true
   [[ -z "$pr" ]] || "$CMUX_CLI" pr "$pr" --workspace "$wt" &gt;/dev/null 2&gt;&amp;1 || true
   [[ -z "$comment" ]] || "$CMUX_CLI" log --workspace "$wt" "$comment" &gt;/dev/null 2&gt;&amp;1 || true
+}
+
+# ----- tmux: 워크트리는 루프가 git으로 만들고, 터미널은 tmux 창이다. idle은 에이전트 훅이 파일에 쓴다 -----
+# tmux는 에이전트를 모른다(Orca의 tui-idle, cmux의 lifecycle 같은 신호가 없다). 그래서
+#   - 워크트리는 cmux와 같이 `git worktree add` + WORKTREE_SETUP_CMD. 터미널은 TMUX_SESSION의 새 창 — 셸을 띄우고 거기에 기동 명령을 친다
+#     (Orca와 같은 방식이라 에이전트가 죽어도 셸이 남아 재기동 명령을 받을 수 있다)
+#   - idle은 에이전트의 훅이 보고한다. 시작 점검 때 ~/.cache/ticket-loop/&lt;owner-repo&gt;/tmux/ 에 hook.sh와 Claude Code 훅 설정
+#     claude-hooks.json을 쓰고, 기동 명령에 `--settings &lt;그 파일&gt;`(claude) 또는 `-c notify=[…]`(codex)를 붙인다. 훅은
+#     UserPromptSubmit → running, Stop → idle, Notification(permission_prompt·elicitation_dialog) → needsInput, SessionEnd → exited 를
+#     state/&lt;워크트리 디렉터리 이름&gt; 파일에 한 단어로 쓰고, 루프가 IDLE_POLL_SEC마다 읽는다(cmux의 lifecycle과 같은 뜻)
+#   - 프롬프트가 수락됐는지도 그 파일로 안다: 보내기 전에 sent를 쓰고 15초 안에 running(UserPromptSubmit)이 되는지 본다.
+#     Codex의 notify는 턴 종료(agent-turn-complete)만 알리므로 보낸 것으로 치고 루프가 직접 running을 쓴다
+#   - Stop은 메인 에이전트의 턴이 끝날 때마다 온다 — 백그라운드 서브에이전트(ticket-review)를 기다리는 동안도 idle로 보인다(실측 1회).
+#     서브에이전트가 돌아오면 Claude Code가 스스로 턴을 열어 UserPromptSubmit이 running을 다시 쓰고, 공통부는 화면이 바뀌면 연속
+#     횟수를 0부터 세므로 멈추지 않는다. cmux의 lifecycle도 같은 훅에 기대므로 같은 성질이다
+#   - 상태 표시는 창 이름 뒤에 붙인다(issue-12 [review]). 사람은 `tmux attach -t &lt;세션&gt;`으로 어느 터미널 앱에서나(또는 SSH로) 본다
+#   - 루프를 tmux 안에서 돌리면 그 세션에 창을 열고, 밖에서 돌리면 ticket-loop 세션을 만든다(TMUX_SESSION으로 바꾼다)
+
+tmux_check() {
+  command -v "$TMUX_CLI" &gt;/dev/null 2&gt;&amp;1 || die "tmux(${TMUX_CLI})가 없습니다 (brew install tmux, 또는 TMUX_CLI=경로)."
+  case "$AGENT" in claude|codex) ;; *) die "tmux 백엔드는 AGENT=claude|codex 만 지원합니다 (idle을 에이전트 훅으로 알기 때문)." ;; esac
+  [[ -n "$WORKTREE_DIR" ]] || WORKTREE_DIR="$HOME/.cache/ticket-loop/${OWNER_REPO//\//-}/worktrees"
+  claude_trust_check
+  if [[ -z "$TMUX_SESSION" ]]; then
+    if [[ -n "${TMUX:-}" ]]; then TMUX_SESSION="$("$TMUX_CLI" display -p '#S')"; else TMUX_SESSION="ticket-loop"; fi
+  fi
+  TMUX_DIR="$HOME/.cache/ticket-loop/${OWNER_REPO//\//-}/tmux"
+  TMUX_STATE_FILE=""
+  mkdir -p "$TMUX_DIR/state"
+  tmux_write_hook
+  case "$AGENT" in
+    claude) AGENT_RESTART_CMD="$AGENT_RESTART_CMD --settings $(printf %q "$TMUX_DIR/claude-hooks.json")" ;;
+    codex)  AGENT_RESTART_CMD="$AGENT_RESTART_CMD -c $(printf %q "notify=[\"bash\",\"$TMUX_DIR/hook.sh\",\"$TMUX_DIR/state\"]")" ;;
+  esac
+  log "tmux 세션 ${TMUX_SESSION} — 워커 창은 '${TMUX_CLI} attach -t ${TMUX_SESSION}' 으로 본다"
+}
+
+# 훅 스크립트와 Claude Code 훅 설정. 루프가 시작할 때마다 다시 쓴다(키트 버전을 따라간다)
+tmux_write_hook() {
+  cat &gt; "$TMUX_DIR/hook.sh" &lt;&lt;'SH'
+#!/usr/bin/env bash
+# ticket-loop.sh tmux 백엔드의 에이전트 훅 — 루프가 시작할 때마다 다시 쓴다. 손으로 고치지 않는다.
+# 에이전트가 보고한 상태를 &lt;state 디렉터리&gt;/&lt;워크트리 디렉터리 이름&gt; 에 한 단어로 쓴다: running | idle | needsInput | exited
+# Claude Code: 훅 입력 JSON을 stdin으로 준다(hook_event_name, notification_type, cwd). Codex: notify가 JSON을 둘째 인자로 준다(type, cwd)
+dir="$1"; payload="${2:-}"
+[[ -n "$payload" ]] || payload="$(cat)"
+{ read -r ev; read -r nt; read -r cwd; } &lt; &lt;(jq -r '(.hook_event_name // .type // "-"), (.notification_type // "-"), (.cwd // "-")' &lt;&lt;&lt;"$payload" 2&gt;/dev/null)
+case "${ev:-}" in
+  UserPromptSubmit) s=running ;;
+  Stop|agent-turn-complete) s=idle ;;
+  Notification) case "${nt:-}" in permission_prompt|elicitation_dialog) s=needsInput ;; idle_prompt) s=idle ;; *) exit 0 ;; esac ;;
+  SessionEnd) s=exited ;;
+  *) exit 0 ;;
+esac
+[[ -n "${cwd:-}" &amp;&amp; "$cwd" != "-" ]] || exit 0
+printf '%s\n' "$s" &gt; "$dir/$(basename "$cwd")"
+exit 0
+SH
+  chmod +x "$TMUX_DIR/hook.sh"
+  jq -n --arg cmd "bash $(printf %q "$TMUX_DIR/hook.sh") $(printf %q "$TMUX_DIR/state")" '
+    def h: [{hooks: [{type: "command", command: $cmd}]}];
+    {hooks: {UserPromptSubmit: h, Stop: h, Notification: h, SessionEnd: h}}' &gt; "$TMUX_DIR/claude-hooks.json"
+}
+
+tmux_state() { cat "$TMUX_STATE_FILE" 2&gt;/dev/null || true; }
+tmux_alive() { "$TMUX_CLI" display -p -t "$1" '#{pane_id}' &gt;/dev/null 2&gt;&amp;1; }
+
+tmux_worktree_create() {
+  local n="$1" prompt="$2" out pf
+  loop_worktree_add "$n"
+  TMUX_STATE_FILE="$TMUX_DIR/state/$(basename "$WT_PATH")"
+  printf 'running\n' &gt; "$TMUX_STATE_FILE"   # 지난 실행의 idle이 남아 있으면 기동 직후를 idle로 오판한다
+  if "$TMUX_CLI" has-session -t "=${TMUX_SESSION}" 2&gt;/dev/null; then
+    out="$("$TMUX_CLI" new-window -d -t "=${TMUX_SESSION}:" -n "${BRANCH_PREFIX}${n}" -c "$WT_PATH" -P -F '#{window_id} #{pane_id}')" \
+      || die "tmux new-window 실패"
+  else
+    out="$("$TMUX_CLI" new-session -d -s "$TMUX_SESSION" -n "${BRANCH_PREFIX}${n}" -c "$WT_PATH" -x 200 -y 50 -P -F '#{window_id} #{pane_id}')" \
+      || die "tmux new-session 실패"
+  fi
+  WT="${out%% *}"; HANDLE="${out##* }"
+  [[ "$WT" == @* &amp;&amp; "$HANDLE" == %* ]] || die "tmux 창 id를 받지 못했습니다: ${out}"
+  pf="$(prompt_file "$n" "$prompt")"
+  sleep 1   # 셸이 뜨기를 잠깐 기다린다
+  tmux_type "$HANDLE" "$(agent_launch_cmd "$pf")" || die "tmux send-keys 실패"
+}
+
+tmux_worktree_remove() {
+  "$TMUX_CLI" kill-window -t "$1" &gt;/dev/null 2&gt;&amp;1 || true
+  git -C "$ROOT" worktree remove --force "$2"
+  # 창을 닫으면 에이전트의 SessionEnd 훅이 뒤늦게 exited를 쓸 수 있어(실측) 파일이 남기도 한다. 다음 티켓은 만들 때 running으로 덮으니 무해하다
+  rm -f "$TMUX_DIR/state/$(basename "$2")"
+}
+
+tmux_type()      { "$TMUX_CLI" send-keys -t "$1" -l -- "$2" &amp;&amp; sleep 0.3 &amp;&amp; "$TMUX_CLI" send-keys -t "$1" Enter; }
+tmux_interrupt() { "$TMUX_CLI" send-keys -t "$1" C-c; }
+
+tmux_send() {
+  local handle="$1" i
+  [[ -n "$TMUX_STATE_FILE" ]] || return 1
+  printf 'sent\n' &gt; "$TMUX_STATE_FILE"
+  tmux_type "$handle" "$2" || return 1
+  if [[ "$AGENT" != claude ]]; then printf 'running\n' &gt; "$TMUX_STATE_FILE"; return 0; fi   # 제출 훅이 없는 에이전트
+  for i in $(seq 1 30); do   # 15초: UserPromptSubmit 훅이 running을 쓰면 수락된 것
+    [[ "$(tmux_state)" != running ]] || return 0
+    sleep 0.5
+  done
+  return 1
+}
+
+tmux_wait_idle() {
+  local handle="$1" deadline_ms=$(( $(date +%s) * 1000 + $2 )) fails=0
+  while :; do
+    if tmux_alive "$handle"; then
+      fails=0
+      case "$(tmux_state)" in idle|needsInput|exited) return 0 ;; esac   # 그 밖(running·sent·없음)은 작업 중
+    else
+      fails=$((fails + 1)); [[ $fails -lt $TERMINAL_RETRY ]] || return 3
+    fi
+    [[ $(( $(date +%s) * 1000 )) -lt $deadline_ms ]] || return 1
+    sleep "$IDLE_POLL_SEC"
+  done
+}
+
+# 화면의 빈 줄을 빼고 마지막 25줄 — TUI는 창 높이를 다 쓰므로 빈 줄이 많다
+tmux_tail() { "$TMUX_CLI" capture-pane -p -t "$1" | sed -e 's/[[:space:]]*$//' | awk 'NF' | tail -n 25; }
+
+tmux_set_status() {
+  local wt="$1" status="$2" name lane
+  case "$status" in in-progress) lane=working ;; in-review) lane=review ;; completed) lane=done ;; *) lane=needs-attention ;; esac
+  name="$("$TMUX_CLI" display -p -t "$wt" '#{window_name}' 2&gt;/dev/null)" || return 0
+  "$TMUX_CLI" rename-window -t "$wt" "${name%% *} [${lane}]" &gt;/dev/null 2&gt;&amp;1 || true
 }
 
 # ----- 공통 -----

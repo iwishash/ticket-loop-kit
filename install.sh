@@ -310,7 +310,12 @@ if [[ "$AGENT" == codex ]]; then
 else
   step 1 "In Claude Code: ${C_C}/setup-ticket-loop${C_0} — fills in the verify command, orca.yaml, CI and worker rules for this repo and opens a PR"
 fi
-step 2 "Orca Settings → Projects → <repo> → Worktree Hooks → Advanced:"
-printf '     Command Source %s"orca.yaml only"%s, enable %s"Wait for setup to complete before starting agent"%s\n' "$C_C" "$C_0" "$C_C" "$C_0"
+if [[ $DO_ORCA -eq 1 ]]; then
+  step 2 "Orca Settings → Projects → <repo> → Worktree Hooks → Advanced:"
+  printf '     Command Source %s"orca.yaml only"%s, enable %s"Wait for setup to complete before starting agent"%s\n' "$C_C" "$C_0" "$C_C" "$C_0"
+else
+  step 2 "Open this checkout once in Claude Code and trust the folder (worktrees inherit the trust; the loop checks it at startup)"
+  printf '     cmux: run the loop inside a cmux terminal. tmux: run it anywhere and watch with %stmux attach -t ticket-loop%s\n' "$C_C" "$C_0"
+fi
 step 3 "After the PR is merged: ${C_C}bash scripts/ticket-loop.sh --dry-run${C_0}, then ${C_C}--max 1${C_0}"
 printf '\n%sChanged files:%s git status\n' "$C_D" "$C_0"

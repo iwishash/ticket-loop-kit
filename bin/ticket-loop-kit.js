@@ -22,6 +22,7 @@ const LOOP_DIR = '.ticket-loop';
 const BACKENDS = {
   orca: { label: 'Orca', available: true, note: 'The Orca app manages worktrees and agent terminals' },
   cmux: { label: 'cmux', available: true, note: 'The loop creates git worktrees and starts the agent in a cmux workspace; run the loop inside a cmux terminal' },
+  tmux: { label: 'tmux', available: true, note: 'The loop creates git worktrees and starts the agent in a tmux window; idle comes from agent hooks. Works in any terminal app or over SSH' },
 };
 
 const AGENTS = {
@@ -51,7 +52,7 @@ Options
   --ref <ref>            Kit ref to record in .ticket-loop/kit.json (default: the #ref of the npx spec, else "npx")
 
 Pin a kit version with a tag on the npx spec:  npx github:iwishash/ticket-loop-kit#v0.4.0 init
-Requires git, gh (logged in), jq and bash. The backend app (Orca or cmux) and the worker agent (Claude Code, or Codex — a preset
+Requires git, gh (logged in), jq and bash. The backend (Orca, cmux or tmux) and the worker agent (Claude Code, or Codex — a preset
 not yet verified on a real ticket) are needed to run the loop.
 `;
 
@@ -248,8 +249,8 @@ function writeLoopEnv(root, backend, agent) {
       '# VAR="${VAR:-값}" 꼴로 적어 두면 실행할 때 준 환경변수가 이긴다. 나머지 값(CI_SKIP_REGEX, POST_MERGE_CMD,',
       '# POST_MERGE_PORT …)은 setup-ticket-loop 스킬이 저장소를 읽고 채운다.',
       ...Object.entries(wanted).flatMap(([k, v]) => [ENV_KEYS[k].comment(), envLine(k, v)]),
-      ...(backend === 'cmux' ? [
-        '# cmux는 orca.yaml setup 대신 이 명령으로 새 워크트리를 준비한다(의존성 설치·env 복사). LOOP_ROOT_PATH, LOOP_WORKTREE_PATH 사용 가능',
+      ...(backend !== 'orca' ? [
+        `# ${backend}는 orca.yaml setup 대신 이 명령으로 새 워크트리를 준비한다(의존성 설치·env 복사). LOOP_ROOT_PATH, LOOP_WORKTREE_PATH 사용 가능`,
         '# WORKTREE_SETUP_CMD="${WORKTREE_SETUP_CMD:-pnpm install}"',
       ] : []),
       '',

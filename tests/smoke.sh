@@ -255,14 +255,14 @@ echo "ok  차단 충돌에서 설치 중단"
 echo "ok  ticket-loop.sh --help"
 
 # 백엔드마다 같은 함수 집합을 구현해야 한다(공통부는 backend_* 만 부른다)
-for b in orca cmux; do
+for b in orca cmux tmux; do
   for f in check worktree_create worktree_remove send type interrupt wait_idle tail set_status; do
     grep -qE "^${b}_${f}\(\)" "$KIT/files/scripts/ticket-loop.sh" || fail "백엔드 ${b} 에 ${b}_${f} 함수가 없다"
   done
 done
 grep -qE '^backend_[a-z_]+\(\)' "$KIT/files/scripts/ticket-loop.sh" || fail "backend_* 디스패치 함수가 없다"
 # 공통부에서 백엔드 CLI를 직접 부르면 안 된다(백엔드 절 밖의 orca_json / "$CMUX_CLI")
-awk '/^# ---------- 백엔드 ----------/{on=1} /^# ----- 공통 -----/{on=0} !on && !/^\s*#/ && /orca_json|\$CMUX_CLI|\$ORCA_CLI/' \
+awk '/^# ---------- 백엔드 ----------/{on=1} /^# ----- 공통 -----/{on=0} !on && !/^\s*#/ && /orca_json|\$CMUX_CLI|\$ORCA_CLI|\$TMUX_CLI/' \
   "$KIT/files/scripts/ticket-loop.sh" | grep -v '^ORCA_CLI=\|^elif\|^if \[\[ -n "\${ORCA_CLI\|CMUX_CLI="' | grep -q . \
   && fail "백엔드 절 밖에서 백엔드 CLI를 직접 부른다: $(awk '/^# ---------- 백엔드 ----------/{on=1} /^# ----- 공통 -----/{on=0} !on && !/^\s*#/ && /orca_json|\$CMUX_CLI/' "$KIT/files/scripts/ticket-loop.sh" | head -3)"
 echo "ok  백엔드 함수 집합·분리"
@@ -277,7 +277,7 @@ chmod +x "$F/orca"
 sed -n '/^# ---------- 백엔드 ----------/,/^# ----- 공통 -----/p' "$KIT/files/scripts/ticket-loop.sh" > "$F/backend.sh"
 cat > "$F/run.sh" <<'SH'
 set -euo pipefail
-BACKEND=orca; ORCA_CLI=orca; CMUX_CLI=cmux; OWNER_REPO=o/r; ROOT=/tmp; MAIN_WT=/tmp; BASE_BRANCH=main; BRANCH_PREFIX=issue-; AGENT=claude; SKILL_PREFIX=/
+BACKEND=orca; ORCA_CLI=orca; CMUX_CLI=cmux; TMUX_CLI=tmux; TMUX_SESSION=""; OWNER_REPO=o/r; ROOT=/tmp; MAIN_WT=/tmp; BASE_BRANCH=main; BRANCH_PREFIX=issue-; AGENT=claude; SKILL_PREFIX=/
 AGENT_RESTART_CMD=claude; TERMINAL_RETRY=1; TERMINAL_RETRY_SEC=0; IDLE_POLL_SEC=0; WORKTREE_DIR=""; WORKTREE_SETUP_CMD=""
 log() { :; }; die() { echo "die: $*" >&2; exit 1; }
 source "$1"
@@ -290,6 +290,63 @@ echo ok
 SH
 (cd "$F" && PATH="$F:$PATH" bash run.sh "$F/backend.sh" >/dev/null) || fail "Orca 백엔드 함수 호출 실패(set -u)"
 echo "ok  Orca 백엔드 함수 가짜 호출"
+
+# tmux 백엔드: 가짜 tmux 로 함수를 부르고, 훅 스크립트가 Claude Code(stdin)·Codex(인자) 페이로드를 상태 파일로 옮기는지, 기동 명령에 훅이 붙는지 본다.
+# 실제 tmux 3.8 + Claude Code 로는 손으로 확인했다(초기 프롬프트 인자 → running, 응답 끝 → idle, send-keys 제출 → running→idle, /exit → exited)
+cat > "$F/tmux" <<'SH'
+#!/bin/bash
+case "$1" in
+  display) case "$*" in *window_name*) echo "issue-7" ;; *pane_id*) echo "%0" ;; *) echo "ticket-loop" ;; esac ;;
+  send-keys) [[ "${@: -1}" != Enter || -z "${FAKE_STATE:-}" ]] || printf 'running\n' > "$FAKE_STATE" ;;
+  capture-pane) printf 'Claude Code\n\n[Opus 5.5 | Max]\n\n\n' ;;
+  has-session) exit 1 ;;
+  new-session|new-window) echo "@0 %0" ;;
+  kill-window|rename-window) ;;
+  *) echo "fake tmux: $*" >&2; exit 1 ;;
+esac
+SH
+chmod +x "$F/tmux"
+cat > "$F/run-tmux.sh" <<'SH'
+set -euo pipefail
+export HOME="$2"
+BACKEND=tmux; ORCA_CLI=orca; CMUX_CLI=cmux; TMUX_CLI=tmux; TMUX_SESSION=""; OWNER_REPO=o/r; ROOT=/tmp; MAIN_WT=/tmp; BASE_BRANCH=main; BRANCH_PREFIX=issue-; AGENT=claude; SKILL_PREFIX=/
+AGENT_RESTART_CMD="claude --dangerously-skip-permissions"; TERMINAL_RETRY=1; TERMINAL_RETRY_SEC=0; IDLE_POLL_SEC=0; WORKTREE_DIR=""; WORKTREE_SETUP_CMD=""
+log() { :; }; die() { echo "die: $*" >&2; exit 1; }
+source "$1"
+tmux_check
+[[ "$AGENT_RESTART_CMD" == "claude --dangerously-skip-permissions --settings $HOME/.cache/ticket-loop/o-r/tmux/claude-hooks.json" ]] || die "claude 기동 명령에 --settings 가 안 붙음: $AGENT_RESTART_CMD"
+jq -e '[.hooks.UserPromptSubmit, .hooks.Stop, .hooks.Notification, .hooks.SessionEnd] | all(.[0].hooks[0].command | startswith("bash "))' "$TMUX_DIR/claude-hooks.json" >/dev/null || die "claude-hooks.json"
+S="$TMUX_DIR/state"
+printf '{"hook_event_name":"UserPromptSubmit","cwd":"/w/issue-7"}' | bash "$TMUX_DIR/hook.sh" "$S"; [[ "$(cat "$S/issue-7")" == running ]] || die "UserPromptSubmit"
+printf '{"hook_event_name":"Notification","notification_type":"auth_success","cwd":"/w/issue-7"}' | bash "$TMUX_DIR/hook.sh" "$S"; [[ "$(cat "$S/issue-7")" == running ]] || die "무관한 Notification 이 상태를 바꿈"
+printf '{"hook_event_name":"Notification","notification_type":"permission_prompt","cwd":"/w/issue-7"}' | bash "$TMUX_DIR/hook.sh" "$S"; [[ "$(cat "$S/issue-7")" == needsInput ]] || die "permission_prompt"
+printf '{"hook_event_name":"Stop","cwd":"/w/issue-7"}' | bash "$TMUX_DIR/hook.sh" "$S"; [[ "$(cat "$S/issue-7")" == idle ]] || die "Stop"
+printf '{"hook_event_name":"SessionEnd","cwd":"/w/issue-7"}' | bash "$TMUX_DIR/hook.sh" "$S"; [[ "$(cat "$S/issue-7")" == exited ]] || die "SessionEnd"
+bash "$TMUX_DIR/hook.sh" "$S" '{"type":"agent-turn-complete","cwd":"/w/issue-7"}'; [[ "$(cat "$S/issue-7")" == idle ]] || die "codex notify"
+echo nonsense | bash "$TMUX_DIR/hook.sh" "$S" || die "훅은 알 수 없는 입력에도 0 으로 끝나야 한다"
+TMUX_STATE_FILE="$S/issue-7"; export FAKE_STATE="$TMUX_STATE_FILE"
+tmux_set_status @0 in-progress; tmux_set_status @0 todo "" "comment"; tmux_set_status @0 in-review 7 "PR #7"; tmux_set_status @0 completed 7 "done"
+tmux_wait_idle %0 1000 || die "idle 인데 wait_idle 이 0 이 아님"
+printf 'running\n' > "$TMUX_STATE_FILE"; rc=0; tmux_wait_idle %0 0 || rc=$?; [[ $rc -eq 1 ]] || die "running 인데 wait_idle 이 1(타임아웃)이 아님: $rc"
+tmux_send %0 "hello" || die "send"; [[ "$(cat "$TMUX_STATE_FILE")" == running ]] || die "send 뒤 running 이 아님"
+tmux_type %0 "claude x"; tmux_interrupt %0
+[[ "$(tmux_tail %0 | tail -n1)" == "[Opus 5.5 | Max]" ]] || die "tail"
+AGENT=codex AGENT_RESTART_CMD="codex --yolo"; tmux_check
+# 셸이 풀면 TOML 배열 한 토큰이어야 한다(printf %q 로 인용해 셸에 치는 값)
+eval "set -- $AGENT_RESTART_CMD"; [[ $# -eq 4 && "$4" == "notify=[\"bash\",\"$HOME/.cache/ticket-loop/o-r/tmux/hook.sh\",\"$HOME/.cache/ticket-loop/o-r/tmux/state\"]" ]] || die "codex 기동 명령에 notify 가 안 붙음: $AGENT_RESTART_CMD"
+TMUX_STATE_FILE="$S/issue-7"; printf 'idle\n' > "$TMUX_STATE_FILE"; tmux_send %0 "hello" || die "codex send"; [[ "$(cat "$TMUX_STATE_FILE")" == running ]] || die "codex send 뒤 running 이 아님"
+(AGENT=other; tmux_check) 2>/dev/null && die "tmux 백엔드는 모르는 에이전트를 거절해야 한다"
+# Claude Code 폴더 신뢰: 메인 체크아웃이 ~/.claude.json 에 trust=true 가 아니면 시작 때 막는다(없는 파일·다른 에이전트는 통과)
+AGENT=claude; printf '{"projects":{"/tmp":{"hasTrustDialogAccepted":false}}}' > "$HOME/.claude.json"
+(tmux_check) 2>/dev/null && die "신뢰하지 않은 메인 체크아웃을 막아야 한다"
+printf '{"projects":{"/tmp":{"hasTrustDialogAccepted":true}}}' > "$HOME/.claude.json"; tmux_check
+(AGENT=codex; printf '{"projects":{}}' > "$HOME/.claude.json"; tmux_check) || die "codex 는 신뢰 검사를 건너뛰어야 한다"
+rm -f "$HOME/.claude.json"
+echo ok
+SH
+mkdir -p "$F/home"
+(cd "$F" && PATH="$F:$PATH" bash run-tmux.sh "$F/backend.sh" "$F/home" >/dev/null) || fail "tmux 백엔드 함수 가짜 호출 실패"
+echo "ok  tmux 백엔드 함수·훅 가짜 호출"
 
 # 에이전트 프리셋: AGENT 가 기동 명령·배너·모델 정규식·스킬 접두사의 기본값을 정하고, 준 값이 이긴다. 프롬프트에는 특정 에이전트의 이름·도구가 없다
 A="$T/agent"; mkdir -p "$A"

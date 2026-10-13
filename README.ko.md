@@ -1,6 +1,6 @@
 # ticket-loop-kit
 
-GitHub 이슈 티켓을 워크트리에서 한 건씩 무인으로 구현·검증·병합하는 **티켓 루프**를 다른 저장소에 설치하고 업데이트하는 키트. 워크트리와 에이전트 터미널은 백엔드(Orca 또는 cmux)가 맡는다.
+GitHub 이슈 티켓을 워크트리에서 한 건씩 무인으로 구현·검증·병합하는 **티켓 루프**를 다른 저장소에 설치하고 업데이트하는 키트. 워크트리와 에이전트 터미널은 백엔드(Orca, cmux 또는 tmux)가 맡는다.
 원리와 운영은 [「티켓 무인 루프 가이드북」](docs/ticket-loop-guide.pdf)에 있다.
 영문 README는 [README.md](README.md)다(이 파일이 한국어 원문).
 
@@ -14,6 +14,7 @@ GitHub 이슈 티켓을 워크트리에서 한 건씩 무인으로 구현·검�
 | | **Codex CLI** (`AGENT=codex`) | 프리셋과 저장소 배치는 갖춰졌지만 **실제 티켓으로는 아직 확인하지 않았다**(아래 "아직 확인하지 않은 것"). `codex --dangerously-bypass-approvals-and-sandbox`로 띄운다. Codex CLI가 포함된 ChatGPT 요금제(Plus 이상) 또는 API 키가 필요하다 |
 | 백엔드(워크트리·에이전트 터미널) | **Orca** (`BACKEND=orca`, 기본) | 확인됨(Orca 1.4.x). Orca 앱 실행 중, 저장소 등록, Command Source "orca.yaml only" |
 | | **cmux** (`BACKEND=cmux`) | 확인됨(cmux 0.65). 루프를 cmux 터미널 안에서 돌려야 하고(소켓 모드 기본값 `cmuxOnly`), 에이전트의 cmux 통합이 켜져 있어야 `lifecycle`이 보고된다 |
+| | **tmux** (`BACKEND=tmux`) | 확인됨(tmux 3.8, 더미 저장소 티켓 1건). 어느 터미널 앱(Ghostty·Warp·iTerm2…)에서나, SSH 너머에서도 돈다. idle은 Claude Code 훅(`--settings`로 주입)이 보고한다. Claude Code가 메인 체크아웃을 신뢰한 상태여야 한다(시작 때 검사). Codex는 `notify`로 같은 자리를 잇지만 실측 전이다 |
 | 이슈 트래커 | **GitHub Issues**만, `gh`로 | 하위 이슈(스펙 → 티켓), 이슈 의존성(`blocked_by`), 라벨, PR 체크, 병합을 쓴다. GitLab 등 다른 트래커는 대상 선택·PR·병합 함수를 다시 써야 한다 |
 | OS | **macOS** | 확인됨. Linux용 경로(`orca-ide`, `notify-send`, `date -d`)는 두었지만 돌려 보지 않았다. Windows는 지원하지 않는다(bash, `.claude/skills/`의 심볼릭 링크) |
 | 도구 | `git`, `gh`(로그인), `jq`, bash; `npx … init`에는 Node 18 이상 | bash만으로 설치하면 Node는 필요 없다 |
@@ -36,7 +37,7 @@ GitHub 이슈 티켓을 워크트리에서 한 건씩 무인으로 구현·검�
 npx github:iwishash/ticket-loop-kit init
 ```
 
-백엔드와 설치 단계를 키보드로 고르고(↑↓·숫자·Space·Enter, q로 중단) `install.sh`를 부른 뒤 `.ticket-loop/loop.env`에 `BACKEND=` 줄을 쓴다. 묻지 않으려면 `--yes`(터미널이 아니면 자동). 색은 `NO_COLOR`로 끈다. SSH 별칭 원격이나 키체인 자격 증명을 쓰면 `gh auth setup-git`은 필요 없다. 키트 버전을 고정하려면 `npx github:iwishash/ticket-loop-kit#v0.7.1 init`. 저장소가 비공개인 동안은 이 저장소에 초대받고 `gh auth login` 뒤 `gh auth setup-git`을 한 번 해 두면 npx가 받아 간다(macOS 키체인에 GitHub 자격 증명이 있어도 된다).
+백엔드와 설치 단계를 키보드로 고르고(↑↓·숫자·Space·Enter, q로 중단) `install.sh`를 부른 뒤 `.ticket-loop/loop.env`에 `BACKEND=` 줄을 쓴다. 묻지 않으려면 `--yes`(터미널이 아니면 자동). 색은 `NO_COLOR`로 끈다. SSH 별칭 원격이나 키체인 자격 증명을 쓰면 `gh auth setup-git`은 필요 없다. 키트 버전을 고정하려면 `npx github:iwishash/ticket-loop-kit#v0.8.0 init`. 저장소가 비공개인 동안은 이 저장소에 초대받고 `gh auth login` 뒤 `gh auth setup-git`을 한 번 해 두면 npx가 받아 간다(macOS 키체인에 GitHub 자격 증명이 있어도 된다).
 
 npx 없이 bash로만 설치하려면:
 
@@ -50,7 +51,7 @@ bash <(gh api repos/iwishash/ticket-loop-kit/contents/install.sh -H "Accept: app
 
 마지막으로 Orca 앱에서 Settings → Projects → <저장소> → Worktree Hooks → Advanced: Command Source **"orca.yaml only"**, **"Wait for setup to complete before starting agent"** 켜기. PR을 병합한 뒤 `bash scripts/ticket-loop.sh --dry-run` → `--max 1`.
 
-필요한 도구: `git`, `gh`(로그인), `jq`, 백엔드(Orca 앱과 CLI, 또는 cmux), 워커 에이전트(Claude Code 또는 Codex — 위 표).
+필요한 도구: `git`, `gh`(로그인), `jq`, 백엔드(Orca 앱과 CLI, cmux, 또는 tmux), 워커 에이전트(Claude Code 또는 Codex — 위 표).
 
 ## 누가 무엇을 하나
 
@@ -71,18 +72,18 @@ bash <(gh api repos/iwishash/ticket-loop-kit/contents/install.sh -H "Accept: app
 
 ## 백엔드
 
-루프 스크립트에서 워크트리·에이전트 터미널에 하는 일은 아홉 가지뿐이다(만들기·지우기·프롬프트 보내기·셸 입력·Ctrl-C·idle 대기·화면 읽기·상태 표시·시작 점검). 백엔드마다 같은 이름의 함수(`orca_*`, `cmux_*`)로 구현하고 `.ticket-loop/loop.env`의 `BACKEND=orca|cmux`로 고른다. 티켓 선택·PR·CI·수리·병합·병합 뒤 검증·기록·스펙 리포트는 한 벌이다.
+루프 스크립트에서 워크트리·에이전트 터미널에 하는 일은 아홉 가지뿐이다(만들기·지우기·프롬프트 보내기·셸 입력·Ctrl-C·idle 대기·화면 읽기·상태 표시·시작 점검). 백엔드마다 같은 이름의 함수(`orca_*`, `cmux_*`, `tmux_*`)로 구현하고 `.ticket-loop/loop.env`의 `BACKEND=orca|cmux|tmux`로 고른다. 티켓 선택·PR·CI·수리·병합·병합 뒤 검증·기록·스펙 리포트는 한 벌이다.
 
-| | Orca | cmux |
-|---|---|---|
-| 워크트리 | `orca worktree create`가 만들고 `orca.yaml` setup을 돌린다 | 루프가 `git worktree add`(`WORKTREE_DIR`, 기본 `~/.cache/ticket-loop/<owner-repo>/worktrees`) 뒤 `WORKTREE_SETUP_CMD`를 돌린다 |
-| 에이전트 | Orca가 `--agent claude --prompt`로 띄운다 | `cmux workspace create --cwd … --command "claude … \"$(cat 프롬프트파일)\""` — 워크스페이스 셸의 claude shim이 Claude Code 훅을 붙인다 |
-| idle 판정 | `orca terminal wait --for tui-idle`(블로킹) | `cmux rpc surface.input_state`의 `lifecycle`을 5초마다 읽는다(Claude Code 훅이 보고) |
-| 입력·화면 | `orca terminal send / read` | `cmux paste --submit`, `send --force` + `send-key enter`, `read-screen --lines 25`. 보내기 전에 하이버네이션에서 깨운다 |
-| 상태 표시 | `orca worktree set --workspace-status` | `cmux workspace status set`, `cmux pr`, `cmux log` |
-| 실행 조건 | Orca 앱 실행 중, 저장소 등록 | cmux 터미널 안에서 실행(소켓 모드 기본값 `cmuxOnly`) |
+| | Orca | cmux | tmux |
+|---|---|---|---|
+| 워크트리 | `orca worktree create`가 만들고 `orca.yaml` setup을 돌린다 | 루프가 `git worktree add`(`WORKTREE_DIR`, 기본 `~/.cache/ticket-loop/<owner-repo>/worktrees`) 뒤 `WORKTREE_SETUP_CMD`를 돌린다 | cmux와 같다 |
+| 에이전트 | Orca가 `--agent claude --prompt`로 띄운다 | `cmux workspace create --cwd … --command "claude … \"$(cat 프롬프트파일)\""` — 워크스페이스 셸의 claude shim이 Claude Code 훅을 붙인다 | `TMUX_SESSION`(기본 `ticket-loop`, tmux 안에서 돌리면 그 세션)에 창을 열고 셸에 `claude … --settings <훅 설정> "$(cat 프롬프트파일)"`을 친다 |
+| idle 판정 | `orca terminal wait --for tui-idle`(블로킹) | `cmux rpc surface.input_state`의 `lifecycle`을 5초마다 읽는다(Claude Code 훅이 보고) | 루프가 `~/.cache/ticket-loop/<owner-repo>/tmux/`에 쓴 훅(`UserPromptSubmit`→running, `Stop`→idle, `Notification`의 permission_prompt→needsInput, `SessionEnd`→exited)이 `state/<워크트리 이름>` 파일에 쓰고, 루프가 5초마다 읽는다 |
+| 입력·화면 | `orca terminal send / read` | `cmux paste --submit`, `send --force` + `send-key enter`, `read-screen --lines 25`. 보내기 전에 하이버네이션에서 깨운다 | `send-keys -l` + `Enter`(0.3초 뒤), `capture-pane -p`의 빈 줄을 뺀 마지막 25줄. 프롬프트 수락은 15초 안에 상태 파일이 running이 되는지로 안다 |
+| 상태 표시 | `orca worktree set --workspace-status` | `cmux workspace status set`, `cmux pr`, `cmux log` | 창 이름 뒤에 `[working]`·`[review]`·`[done]`·`[needs-attention]` |
+| 실행 조건 | Orca 앱 실행 중, 저장소 등록 | cmux 터미널 안에서 실행(소켓 모드 기본값 `cmuxOnly`). Claude Code가 메인 체크아웃을 신뢰한 상태(시작 때 검사) | `tmux` 설치. Claude Code가 메인 체크아웃을 신뢰한 상태(시작 때 검사). `AGENT=claude\|codex`만(idle을 에이전트 훅으로 알기 때문). 사람은 `tmux attach -t ticket-loop`으로 본다 |
 
-두 백엔드 모두 실제 티켓 1건씩(boiler-webapp #34 Orca, #39 cmux)으로 확인했다. cmux 0.65 실측: `--json`은 명령 뒤에 둬야 JSON이 나오고(`workspace create --json --id-format uuids` → `workspace_id`·`surface_id`), lane은 `todo|working|needs-attention|review|done`, 프로세스가 살아 있는 워크스페이스는 `workspace close --force`로만 닫힌다. 루프는 cmux 터미널 안에서 띄워야 한다 — 소켓 모드 기본값이 `cmuxOnly`라 밖에서는 `cmux identify`가 거부된다.
+세 백엔드 모두 실제 티켓 1건씩으로 확인했다(boiler-webapp #34 Orca, #39 cmux, ticket-loop-dummy #1 tmux — 셸 스크립트 저장소에서 워크트리 생성 → 워커 기동 → TDD·ticket-review → PR #2 → CI → 병합 → 창·워크트리·브랜치 정리 → 기록까지 벽시계 4분, 수리 0회). tmux 실측에서 본 것 둘: (1) Claude Code는 새 워크트리의 폴더 신뢰를 메인 체크아웃 경로로 판정한다 — 메인 체크아웃을 신뢰하지 않은 저장소에서는 워커가 신뢰 대화상자에 멈추므로 cmux·tmux의 시작 점검이 `~/.claude.json`을 보고 막는다. (2) `Stop` 훅은 메인 에이전트의 턴이 끝날 때마다 오므로 워커가 백그라운드 서브에이전트(ticket-review)를 기다리는 동안 한 번 idle로 보였다. 서브에이전트가 돌아오면 Claude Code가 스스로 턴을 열어 running이 되고, 공통부는 화면이 바뀌면 연속 횟수를 0부터 세므로 멈추지 않았다(cmux의 lifecycle도 같은 훅에 기댄다). Warp·Ghostty 같은 터미널 에뮬레이터는 밖에서 창을 조종할 CLI가 없어 백엔드가 아니다 — 그 안에서 tmux 백엔드를 돌린다. cmux 0.65 실측: `--json`은 명령 뒤에 둬야 JSON이 나오고(`workspace create --json --id-format uuids` → `workspace_id`·`surface_id`), lane은 `todo|working|needs-attention|review|done`, 프로세스가 살아 있는 워크스페이스는 `workspace close --force`로만 닫힌다. 루프는 cmux 터미널 안에서 띄워야 한다 — 소켓 모드 기본값이 `cmuxOnly`라 밖에서는 `cmux identify`가 거부된다.
 
 ## 무엇을 어디에 두나
 
@@ -108,9 +109,9 @@ bash <(gh api repos/iwishash/ticket-loop-kit/contents/install.sh -H "Accept: app
 
 ## 업데이트
 
-같은 설치 명령을 다시 실행한다. 키트 소유 파일과 mattpocock 스킬만 바뀌고, 프로젝트 소유 파일(`loop.env` 포함)은 그대로다. 0.3 이하가 설치한 저장소는 설치기가 `.agent-loop/`(0.2 이하는 `.orca-loop/`)를 `.ticket-loop/`로 `git mv`하고(로그·기록 포함), 옛 스킬 `setup-agent-loop`·`setup-orca-loop`와 `.gitignore`의 옛 줄을 지운다. 그 뒤 옛 경로를 아직 가리키는 파일(`docs/agents/ticket-loop.md`, `CLAUDE.md`, `loop.env`의 `REPORT_DIR` 등)이 있으면 목록을 보여 주니 손으로 고쳐 같은 PR에 넣는다. 특정 버전으로 고정하려면 `npx github:iwishash/ticket-loop-kit#v0.7.1 init`(bash 경로는 `--ref v0.3.0`). 바뀐 것은 `git diff`로 보고 PR로 올린다. npx는 한 번 받은 저장소를 캐시하므로, 같은 ref로 다시 받으려면 `npx --yes --prefer-online` 또는 `npm cache clean --force`.
+같은 설치 명령을 다시 실행한다. 키트 소유 파일과 mattpocock 스킬만 바뀌고, 프로젝트 소유 파일(`loop.env` 포함)은 그대로다. 0.3 이하가 설치한 저장소는 설치기가 `.agent-loop/`(0.2 이하는 `.orca-loop/`)를 `.ticket-loop/`로 `git mv`하고(로그·기록 포함), 옛 스킬 `setup-agent-loop`·`setup-orca-loop`와 `.gitignore`의 옛 줄을 지운다. 그 뒤 옛 경로를 아직 가리키는 파일(`docs/agents/ticket-loop.md`, `CLAUDE.md`, `loop.env`의 `REPORT_DIR` 등)이 있으면 목록을 보여 주니 손으로 고쳐 같은 PR에 넣는다. 특정 버전으로 고정하려면 `npx github:iwishash/ticket-loop-kit#v0.8.0 init`(bash 경로는 `--ref v0.3.0`). 바뀐 것은 `git diff`로 보고 PR로 올린다. npx는 한 번 받은 저장소를 캐시하므로, 같은 ref로 다시 받으려면 `npx --yes --prefer-online` 또는 `npm cache clean --force`.
 
-옵션: `--yes`, `--backend <orca|cmux>`, `--no-skills`, `--workflow-skills`/`--no-workflow-skills`, `--force-skills`, `--prune-skills`, `--no-github`, `--no-git-credential`, `--no-orca` (`npx github:iwishash/ticket-loop-kit --help`). bash 경로는 `--ref <ref>`도 받는다(`bash install.sh --help`).
+옵션: `--yes`, `--backend <orca|cmux|tmux>`, `--no-skills`, `--workflow-skills`/`--no-workflow-skills`, `--force-skills`, `--prune-skills`, `--no-github`, `--no-git-credential`, `--no-orca` (`npx github:iwishash/ticket-loop-kit --help`). bash 경로는 `--ref <ref>`도 받는다(`bash install.sh --help`).
 
 ## mattpocock 스킬: 무엇을 들이고, 무엇을 검사하나
 
@@ -140,9 +141,9 @@ bash <(gh api repos/iwishash/ticket-loop-kit/contents/install.sh -H "Accept: app
 한 번 설치한 저장소는 클론만 하면 다른 컴퓨터에서도 바로 돈다. 재설치는 키트 버전을 올릴 때만 한 컴퓨터에서 하고, 나머지는 `git pull`로 받는다.
 
 - 루프에 필요한 것은 전부 커밋돼 있다 — `scripts/ticket-loop.sh`, `.ticket-loop/loop.env`(`BACKEND`, `WORKTREE_SETUP_CMD` 포함), `worker-rules.md`, `kit.json`, `implement`·`pr` 스킬. 기계별인 것은 `.ticket-loop/*.log`와 `tickets.jsonl`뿐이고 둘 다 `.gitignore`다. 새 컴퓨터에서는 빈 상태로 새로 쌓인다.
-- 백엔드는 컴퓨터마다 달라도 된다. `loop.env`의 값은 `${BACKEND:-orca}` 꼴이라 실행할 때 준 환경변수가 이긴다 — A는 Orca로 `bash scripts/ticket-loop.sh N`, B는 cmux 터미널 안에서 `BACKEND=cmux bash scripts/ticket-loop.sh N`. cmux를 쓸 저장소는 `loop.env`에 `WORKTREE_SETUP_CMD`가 있어야 한다.
-- 워크트리는 백엔드가 각자 자기 자리에 둔다(Orca는 Orca 설정 위치, cmux는 `~/.cache/ticket-loop/<owner-repo>/worktrees`). 저장소 안에는 흔적이 없어 컴퓨터끼리 충돌하지 않는다.
-- 새 컴퓨터의 전제는 평소와 같다: `gh auth login`, `claude`, `jq`, 저장소의 패키지 매니저. cmux면 cmux 터미널 안에서 실행하고(소켓 모드 기본값 `cmuxOnly`) Settings의 Claude Code 통합이 켜져 있어야 한다 — 꺼져 있으면 `lifecycle`이 `unknown`만 돌아와 기동 유예 뒤 타임아웃으로 멈춘다.
+- 백엔드는 컴퓨터마다 달라도 된다. `loop.env`의 값은 `${BACKEND:-orca}` 꼴이라 실행할 때 준 환경변수가 이긴다 — A는 Orca로 `bash scripts/ticket-loop.sh N`, B는 cmux 터미널 안에서 `BACKEND=cmux bash scripts/ticket-loop.sh N`, C는 아무 터미널에서 `BACKEND=tmux bash scripts/ticket-loop.sh N`. cmux·tmux를 쓸 저장소는 `loop.env`에 `WORKTREE_SETUP_CMD`가 있어야 한다.
+- 워크트리는 백엔드가 각자 자기 자리에 둔다(Orca는 Orca 설정 위치, cmux·tmux는 `~/.cache/ticket-loop/<owner-repo>/worktrees`). 저장소 안에는 흔적이 없어 컴퓨터끼리 충돌하지 않는다.
+- 새 컴퓨터의 전제는 평소와 같다: `gh auth login`, `claude`, `jq`, 저장소의 패키지 매니저. cmux·tmux면 메인 체크아웃에서 `claude`를 한 번 열어 폴더를 신뢰해 둔다 — Claude Code는 워크트리의 신뢰를 메인 체크아웃 경로로 판정하므로, 안 해 두면 워커가 새 워크트리마다 신뢰 대화상자에 멈춘다(루프가 시작 때 `~/.claude.json`을 보고 막는다). cmux면 cmux 터미널 안에서 실행하고(소켓 모드 기본값 `cmuxOnly`) Settings의 Claude Code 통합이 켜져 있어야 한다 — 꺼져 있으면 `lifecycle`이 `unknown`만 돌아와 기동 유예 뒤 타임아웃으로 멈춘다.
 - 동시에 돌릴 때는 티켓을 나눈다. 번호를 지정하면 브랜치(`issue-N-…`)가 갈라져 겹칠 일이 없다. 자동 선택은 담당자가 있거나 PR이 열린 티켓을 건너뛰고 워커가 시작하자마자 자기를 담당자로 넣지만, 두 루프가 몇 초 간격으로 같은 티켓을 집는 경합까지 막지는 못한다 — 자동 선택으로 함께 돌릴 거면 `--parent`나 `--label`로 범위를 가른다. 한쪽이 병합해 다른 쪽 PR에 충돌이 나면 루프의 수리 단계가 처리한다.
 - 스펙 리포트(`--parent`)는 그 컴퓨터의 `tickets.jsonl`로 그리므로, 한 스펙은 한 컴퓨터에서 돌리는 편이 표가 온전하다. 기록이 없는 티켓은 PR 시각으로 대신 채운다.
 
@@ -175,5 +176,6 @@ bash <(gh api repos/iwishash/ticket-loop-kit/contents/install.sh -H "Accept: app
 - `install.sh`의 라벨 생성·Orca 등록 단계는 시험에서 껐다. 명령 자체는 rsrehab/rental-portal에서 쓰던 것이다
 - 키트판 `ticket-loop.sh`의 `POST_MERGE_CMD`·`POST_MERGE_PORT`·`CI_SKIP_CMD`·`CI_SKIP_REGEX` 경로와 수리 프롬프트 경로. boiler-webapp 1건은 병합 뒤 검증 없음·CI 경로 필터 없음·수리 0회였다. rental-portal(PR #82로 전환, `CI_SKIP_CMD`·`POST_MERGE_CMD` 설정)에서 실제 티켓을 돌리면 확인된다
 - cmux 백엔드 전체. `--dry-run`이 cmux 터미널 밖에서 소켓 오류로 멈추는 것까지만 확인했다
+- tmux 백엔드의 수리 경로(충돌·CI 실패 뒤 `repair`가 보내는 프롬프트). 더미 저장소 1건은 수리 0회였다. 함수 단위(`tmux_send`가 상태 파일로 수락을 확인)와 실제 Claude Code에 `send-keys`로 보낸 두 번째 프롬프트까지는 확인했다
 - 출처 저장소 rsrehab/rental-portal은 아직 저장소 전용판 `scripts/orca-ticket-loop.sh`를 쓴다(키트로 전환하지 않음)
 - Codex를 워커로 쓰는 것. 조각은 갖춰졌다 — `loop.env`의 `AGENT=codex` 프리셋(기동 명령 `codex --dangerously-bypass-approvals-and-sandbox`, 배너·모델 정규식, `$implement N`), 에이전트 중립 워커·수리 프롬프트, `.agents/skills/` 정본과 `.claude/skills/` 링크, `AGENTS.md`의 `## Agent skills`, `.codex/rules/ticket-loop.rules`, 설치기 `--agent codex`. 하지만 어느 것도 Codex가 설치된 컴퓨터에서 돌려 보지 않았다: idle 판정(Orca `tui-idle`, cmux shim의 lifecycle 훅), `$implement`가 스킬을 집는지, 수리 프롬프트, `.codex/rules/ticket-loop.rules`가 로드되는지(`codex execpolicy check --rules .codex/rules/ticket-loop.rules -- gh pr merge 12`)와 `--dangerously-bypass-approvals-and-sandbox` 아래에서도 유지되는지. 백엔드마다 티켓 1건이 지나가기 전에는 "지원"이 아니다
