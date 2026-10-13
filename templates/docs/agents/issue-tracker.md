@@ -1,6 +1,6 @@
 # Issue tracker: GitHub
 
-<!-- Project-owned. Seeded by ticket-loop-kit from mattpocock/skills (setup-matt-pocock-skills/issue-tracker-github.md, MIT). The vendored skills (ticket-review, to-tickets, to-spec) and the project's implement skill read this file through the "## Agent skills" block in CLAUDE.md. Edit freely; the installer never overwrites it. -->
+<!-- Project-owned. Seeded by ticket-loop-kit from mattpocock/skills (setup-matt-pocock-skills/issue-tracker-github.md, MIT). The vendored skills (ticket-review, to-tickets, to-spec) and the project's implement skill read this file through the "## Agent skills" block in AGENTS.md (CLAUDE.md imports it with `@AGENTS.md`). Edit freely; the installer never overwrites it. -->
 
 Issues and specs for this repo live as GitHub issues. Use the `gh` CLI for all operations.
 

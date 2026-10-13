@@ -1,0 +1,34 @@
+# ticket-loop-kit template (project-owned after install). Codex command rules for the ticket-loop worker —
+# the same three bans as the `deny` entries install.sh puts in .claude/settings.json for Claude Code:
+# no merging (the loop merges after CI), no force push, no direct push to the default branch.
+#
+# Codex loads <repo>/.codex/rules/*.rules only when the project's .codex/ layer is trusted (Codex asks on first run in
+# the repo, or set it in ~/.codex/config.toml under [projects."<path>"] trust_level = "trusted"). Whether these rules still
+# apply under --dangerously-bypass-approvals-and-sandbox (the flag the loop starts the worker with) has not been verified —
+# treat GitHub branch protection as the real guard. Check a rule with:
+#   codex execpolicy check --pretty --rules .codex/rules/ticket-loop.rules -- gh pr merge 12
+# Codex applies the most restrictive matching decision (forbidden > prompt > allow).
+
+prefix_rule(
+    pattern = ["gh", "pr", "merge"],
+    decision = "forbidden",
+    justification = "The ticket loop merges after CI passes; the worker never merges",
+    match = ["gh pr merge 12", "gh pr merge --squash 12"],
+    not_match = ["gh pr view 12", "gh pr create --base __BASE__"],
+)
+
+prefix_rule(
+    pattern = ["git", "push", ["--force", "-f", "--force-with-lease"]],
+    decision = "forbidden",
+    justification = "No force push from the unattended worker",
+    match = ["git push --force origin issue-12", "git push -f"],
+    not_match = ["git push -u origin issue-12-slug"],
+)
+
+prefix_rule(
+    pattern = ["git", "push", "origin", "__BASE__"],
+    decision = "forbidden",
+    justification = "The default branch changes only through merged PRs",
+    match = ["git push origin __BASE__"],
+    not_match = ["git push origin issue-12-slug"],
+)

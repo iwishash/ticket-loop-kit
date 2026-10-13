@@ -1,0 +1,6 @@
+# Project-owned (seeded by ticket-loop-kit). Codex metadata — Claude Code reads only the SKILL.md frontmatter.
+interface:
+  display_name: "Implement a ticket"
+  short_description: "Implement one GitHub issue end to end: branch, TDD, review, PR"
+policy:
+  allow_implicit_invocation: false   # same as disable-model-invocation: true — invoked only as $implement N

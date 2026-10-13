@@ -66,17 +66,20 @@ Both backends have been verified with one real ticket each (boiler-webapp #34 on
 | `files/scripts/ticket-loop.sh` | `scripts/ticket-loop.sh` | Overwritten every time (kit-owned) |
 | `files/scripts/ticket-state.sh` | `scripts/ticket-state.sh` | Overwritten every time |
 | `files/scripts/sync-mattpocock-skills.sh` | `scripts/sync-mattpocock-skills.sh` | Overwritten every time |
-| `files/.claude/skills/setup-ticket-loop/` | Same path | Overwritten every time |
-| `templates/.claude/skills/implement/`, `pr/` | Same path | Only when absent (project-owned afterwards) |
+| `files/.agents/skills/setup-ticket-loop/` | Same path, plus a `.claude/skills/setup-ticket-loop` link to it | Overwritten every time |
+| `templates/.agents/skills/implement/`, `pr/` | Same path, plus `.claude/skills/<name>` links | Only when absent (project-owned afterwards). `agents/openai.yaml` is Codex metadata |
+| `templates/.codex/rules/ticket-loop.rules` | Same path | Only when absent — the Codex counterpart of the `deny` rules (no merge, no force push, no push to the default branch); the installer fills in the default branch |
 | `templates/.ticket-loop/worker-rules.md` | Same path | Only when absent |
 | `templates/docs/loop-reports/README.md` | Same path | Only when absent |
 | `templates/docs/agents/issue-tracker.md` | Same path | Only when absent — GitHub tracker conventions read by the vendored skills and `implement` |
-| — | `.claude/skills/tdd`, `ticket-review` (+ 7 planning skills) | Vendored by `sync-mattpocock-skills.sh` |
+| — | `.agents/skills/tdd`, `ticket-review` (+ 7 planning skills), with `.claude/skills/<name>` links | Vendored by `sync-mattpocock-skills.sh` |
 | — | `.gitignore` (`/.ticket-loop/*.log`, `/.ticket-loop/*.jsonl`), `deny` in `.claude/settings.json` | Lines and entries merged |
 | — | 6 GitHub labels, repository git credentials (gh), Orca registration | Created when missing |
 | — | `.ticket-loop/kit.json` | Records the installed kit commit |
 
-Project-specific values live in the target repository's `.ticket-loop/loop.env` (loop defaults, including `BACKEND`), `orca.yaml` (Orca), `.ticket-loop/worker-rules.md`, and the `implement` and `pr` skills. Do not edit kit-owned files in the target repository; fix them in the kit.
+Skills live once, in `.agents/skills/<name>` (the directory Codex reads), and `.claude/skills/<name>` is a symbolic link to it for Claude Code — the layout `npx skills add` uses. Repositories installed with 0.6 or earlier have real directories under `.claude/skills/`; the installer and the sync script move them with `git mv` and leave links. The `## Agent skills` block that the vendored skills read belongs in `AGENTS.md` (Codex reads only that file), and `CLAUDE.md` imports it with `@AGENTS.md`; `/setup-ticket-loop` writes both.
+
+Project-specific values live in the target repository's `.ticket-loop/loop.env` (loop defaults, including `BACKEND` and `AGENT`), `orca.yaml` (Orca), `.ticket-loop/worker-rules.md`, and the `implement` and `pr` skills. Do not edit kit-owned files in the target repository; fix them in the kit.
 
 ## Update
 
@@ -96,14 +99,14 @@ The loop script itself does not depend on any skill. It sends `/implement N` to 
 
 The other upstream skills (`ask-matt`, `wizard`, `teach`, …) are not vendored into a fresh install. Install the plugin (`claude plugin install mattpocock-skills@claude-plugins-official`) if you want them. A repo that already has them keeps them: the kit put them there, so you may be using them, and the kit keeps updating them from the same upstream commit. The manifest `.claude/skills/.mattpocock.json` lists them under `kept`. A skill you deleted by hand is not brought back, and one upstream has dropped is left as is. The only exception is `setup-matt-pocock-skills`, which is removed because `/setup-matt-pocock-skills` is no longer needed: the `docs/agents/issue-tracker.md` it used to write comes from a kit template, and `/setup-ticket-loop` writes the `## Agent skills` block in `CLAUDE.md`.
 
-Before changing anything, the installer looks for the same skills installed another way (Claude Code does not warn about duplicates; run `bash scripts/sync-mattpocock-skills.sh --check` to see the result on its own).
+Before changing anything, the installer looks for the same skills installed another way (Claude Code does not warn about duplicates; run `bash scripts/sync-mattpocock-skills.sh --check` to see the result on its own). The plugin and `~/.claude/skills` checks are Claude Code matters and run only for `--agent claude`; with `--agent codex` a same-named `~/.agents/skills/<name>` is reported instead (Codex shows both in its skill selector).
 
 | Found | What happens | Handling |
 |---|---|---|
 | The `mattpocock-skills` plugin enabled for this repo (`enabledPlugins`, user < project < local) | Both load: `/tdd` and `/mattpocock-skills:tdd` appear side by side | Warning. The interactive checklist offers "disable the plugin for this repo", which runs `claude plugin disable … --scope project` |
 | The same skill in `~/.claude/skills/<name>` | A personal skill shadows the project skill, so the machine's copy runs instead of the committed one | Warning with the names. Remove them or accept it |
-| `skills-lock.json` from `npx skills add`, or a `.claude/skills/*` symbolic link | Two tools overwrite the same directories in turn | **Install stops**. Remove with `npx skills remove` and rerun (`--force-skills` to override, `--no-skills` to skip vendoring) |
-| A `.claude/skills/code-review` directory | A project skill replaces the built-in `/code-review`; the kit uses `ticket-review` | Warning with an `rm -rf` hint |
+| `skills-lock.json` from `npx skills add`, or a `.claude/skills/*` symbolic link that points anywhere but this repo's `.agents/skills/<name>` (the kit's own links are fine) | Two tools overwrite the same directories in turn | **Install stops**. Remove with `npx skills remove` and rerun (`--force-skills` to override, `--no-skills` to skip vendoring) |
+| A `code-review` skill directory (`.agents/skills/` or `.claude/skills/`) | A project skill replaces the built-in `/code-review`; the kit uses `ticket-review` | Warning with an `rm -rf` hint |
 | A same-named directory not in the manifest, or `.claude/commands/<name>.md` | Overwritten / the skill wins but both remain | Notice |
 | Skills an earlier install vendored outside the selected sets | Kept and synced | Notice with the names. `--prune-skills` removes them |
 
@@ -148,4 +151,4 @@ Not yet verified — check in the first repository that adopts the kit and updat
 - The kit's `ticket-loop.sh` paths for `POST_MERGE_CMD`, `POST_MERGE_PORT`, `CI_SKIP_CMD`, `CI_SKIP_REGEX`, and the repair prompt. The one boiler-webapp ticket had no post-merge verification, no CI path filter, and 0 repairs. Running a real ticket in rental-portal (switched in PR #82, with `CI_SKIP_CMD` and `POST_MERGE_CMD` configured) will confirm them
 - The cmux backend as a whole beyond that one ticket. Only `--dry-run` failing with a socket error outside a cmux terminal has been confirmed
 - The source repository rsrehab/rental-portal still uses its repository-specific `scripts/orca-ticket-loop.sh` (not switched to the kit)
-- Codex as the worker. `AGENT=codex` in `loop.env` is a preset only: it switches the launch command (`codex --dangerously-bypass-approvals-and-sandbox`), the banner and model regexes, and the skill prefix (`$implement N`), and the worker/repair prompts no longer name Claude Code tools. But the skills still live only in `.claude/skills/`, which Codex does not read (`.agents/skills/` + `AGENTS.md` placement is the next step), and idle detection, `$implement`, and repair prompts have not been run on a machine with Codex installed. Not "supported" until that happens
+- Codex as the worker. The pieces are in place — `AGENT=codex` preset in `loop.env` (launch command `codex --dangerously-bypass-approvals-and-sandbox`, banner and model regexes, `$implement N`), agent-neutral worker and repair prompts, skills in `.agents/skills/` with `.claude/skills/` links, `AGENTS.md` as the home of `## Agent skills`, `.codex/rules/ticket-loop.rules`, `--agent codex` on the installers — but none of it has run on a machine with Codex installed: idle detection (Orca `tui-idle`, the cmux shim's lifecycle hook), `$implement` picking up the skill, repair prompts, whether `.codex/rules/ticket-loop.rules` loads (`codex execpolicy check --rules .codex/rules/ticket-loop.rules -- gh pr merge 12`), and whether it still applies under `--dangerously-bypass-approvals-and-sandbox`. Not "supported" until one ticket has gone through on each backend

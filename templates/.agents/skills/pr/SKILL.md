@@ -3,7 +3,7 @@ name: pr
 description: "Use when writing a PR body."
 ---
 
-<!-- Project-owned: scripts/sync-mattpocock-skills.sh skips this skill. Seeded by ticket-loop-kit. Upstream `pr` is a summary + evidence + merge-danger template for human-driven PRs; ticket PRs are read afterwards for acceptance, seams, gaps and judgement calls, so the body is fixed to that shape. -->
+<!-- Project-owned: scripts/sync-mattpocock-skills.sh skips this skill. Seeded by ticket-loop-kit; lives in .agents/skills/ (.claude/skills/pr is a symbolic link to it). Upstream `pr` is a summary + evidence + merge-danger template for human-driven PRs; ticket PRs are read afterwards for acceptance, seams, gaps and judgement calls, so the body is fixed to that shape. -->
 
 Write the PR body in __PR_LANGUAGE__, in this order. Skip no section; write "none" (or its equivalent in that language) when a section is empty. Use the glossary's terms (`GLOSSARY.md`).
 

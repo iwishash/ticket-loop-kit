@@ -1,0 +1,4 @@
+# Project-owned (seeded by ticket-loop-kit). Codex metadata — Claude Code reads only the SKILL.md frontmatter.
+interface:
+  display_name: "PR body"
+  short_description: "The fixed shape of a ticket PR body (acceptance, seams, verification, judgement calls)"

@@ -67,17 +67,20 @@ bash <(gh api repos/iwishash/ticket-loop-kit/contents/install.sh -H "Accept: app
 | `files/scripts/ticket-loop.sh` | `scripts/ticket-loop.sh` | 매번 덮어씀(키트 소유) |
 | `files/scripts/ticket-state.sh` | `scripts/ticket-state.sh` | 매번 덮어씀 |
 | `files/scripts/sync-mattpocock-skills.sh` | `scripts/sync-mattpocock-skills.sh` | 매번 덮어씀 |
-| `files/.claude/skills/setup-ticket-loop/` | 같은 경로 | 매번 덮어씀 |
-| `templates/.claude/skills/implement/`, `pr/` | 같은 경로 | 없을 때만(이후 프로젝트 소유) |
+| `files/.agents/skills/setup-ticket-loop/` | 같은 경로 + `.claude/skills/setup-ticket-loop` 링크 | 매번 덮어씀 |
+| `templates/.agents/skills/implement/`, `pr/` | 같은 경로 + `.claude/skills/<이름>` 링크 | 없을 때만(이후 프로젝트 소유). `agents/openai.yaml`은 Codex 메타데이터 |
+| `templates/.codex/rules/ticket-loop.rules` | 같은 경로 | 없을 때만 — `deny` 규칙의 Codex 판(병합·강제 push·기본 브랜치 직접 push 금지). 기본 브랜치는 설치기가 채운다 |
 | `templates/.ticket-loop/worker-rules.md` | 같은 경로 | 없을 때만 |
 | `templates/docs/loop-reports/README.md` | 같은 경로 | 없을 때만 |
 | `templates/docs/agents/issue-tracker.md` | 같은 경로 | 없을 때만 — GitHub 트래커 관례. 벤더링된 스킬과 `implement`가 읽는다 |
-| — | `.claude/skills/tdd`, `ticket-review` (+ 기획 묶음 7개) | `sync-mattpocock-skills.sh`가 벤더링 |
+| — | `.agents/skills/tdd`, `ticket-review` (+ 기획 묶음 7개)와 `.claude/skills/<이름>` 링크 | `sync-mattpocock-skills.sh`가 벤더링 |
 | — | `.gitignore`(`/.ticket-loop/*.log`, `/.ticket-loop/*.jsonl`), `.claude/settings.json` `deny` | 줄·항목 병합 |
 | — | GitHub 라벨 6개, 저장소 git 자격 증명(gh), Orca 등록 | 없으면 만듦 |
 | — | `.ticket-loop/kit.json` | 설치한 키트 커밋 기록 |
 
-프로젝트별 값은 대상 저장소의 `.ticket-loop/loop.env`(루프 기본값, `BACKEND` 포함), `orca.yaml`(Orca), `.ticket-loop/worker-rules.md`, `implement`·`pr` 스킬에 있다. 키트 소유 파일은 대상 저장소에서 고치지 말고 키트에서 고친다.
+스킬은 `.agents/skills/<이름>`(Codex가 읽는 디렉터리)에 한 번만 두고, `.claude/skills/<이름>`은 Claude Code를 위한 심볼릭 링크다 — `npx skills add`와 같은 배치. 0.6 이하로 설치한 저장소는 `.claude/skills/` 아래 실제 디렉터리를 갖고 있는데, 설치기와 동기화 스크립트가 `git mv`로 옮기고 링크를 남긴다. 벤더링된 스킬이 읽는 `## Agent skills` 블록은 `AGENTS.md`에 두고(Codex는 그 파일만 읽는다) `CLAUDE.md`는 `@AGENTS.md`로 가져온다 — `/setup-ticket-loop`가 둘 다 쓴다.
+
+프로젝트별 값은 대상 저장소의 `.ticket-loop/loop.env`(루프 기본값, `BACKEND`·`AGENT` 포함), `orca.yaml`(Orca), `.ticket-loop/worker-rules.md`, `implement`·`pr` 스킬에 있다. 키트 소유 파일은 대상 저장소에서 고치지 말고 키트에서 고친다.
 
 ## 업데이트
 
@@ -103,8 +106,8 @@ bash <(gh api repos/iwishash/ticket-loop-kit/contents/install.sh -H "Accept: app
 |---|---|---|
 | `mattpocock-skills` 플러그인이 이 저장소에 켜져 있음(`enabledPlugins`, user < project < local) | 둘 다 로드돼 `/tdd`와 `/mattpocock-skills:tdd`가 함께 뜬다 | 경고. 대화형이면 "이 저장소에서 플러그인 끄기"를 체크리스트에 보여 주고, 고르면 `claude plugin disable … --scope project` |
 | `~/.claude/skills/<이름>`에 같은 스킬 | 개인 스킬이 프로젝트 스킬을 가려, 커밋한 버전이 아니라 그 PC의 사본이 돈다 | 경고 + 이름 목록. 지우거나 감수 |
-| `npx skills add`가 둔 `skills-lock.json`이나 `.claude/skills/*` 심볼릭 링크 | 두 도구가 같은 디렉터리를 번갈아 덮어쓴다 | **설치 중단**. `npx skills remove`로 걷어낸 뒤 재실행(`--force-skills`로 강행, `--no-skills`로 건너뜀) |
-| `.claude/skills/code-review` 디렉터리 | 프로젝트 스킬이 내장 `/code-review`를 대체한다. 키트는 `ticket-review`를 쓴다 | 경고 + `rm -rf` 안내 |
+| `npx skills add`가 둔 `skills-lock.json`, 또는 이 저장소의 `.agents/skills/<이름>`이 아닌 곳을 가리키는 `.claude/skills/*` 링크(키트 자신의 링크는 정상) | 두 도구가 같은 디렉터리를 번갈아 덮어쓴다 | **설치 중단**. `npx skills remove`로 걷어낸 뒤 재실행(`--force-skills`로 강행, `--no-skills`로 건너뜀) |
+| `code-review` 스킬 디렉터리(`.agents/skills/` 또는 `.claude/skills/`) | 프로젝트 스킬이 내장 `/code-review`를 대체한다. 키트는 `ticket-review`를 쓴다 | 경고 + `rm -rf` 안내 |
 | 매니페스트에 없는 같은 이름 디렉터리, `.claude/commands/<이름>.md` | 덮어쓴다 / 스킬이 우선하지만 둘이 남는다 | 알림 |
 | 지난 설치가 두 묶음 밖에 들인 스킬 | 유지·동기화 | 알림 + 이름 목록. `--prune-skills`로 지운다 |
 
@@ -149,4 +152,4 @@ bash <(gh api repos/iwishash/ticket-loop-kit/contents/install.sh -H "Accept: app
 - 키트판 `ticket-loop.sh`의 `POST_MERGE_CMD`·`POST_MERGE_PORT`·`CI_SKIP_CMD`·`CI_SKIP_REGEX` 경로와 수리 프롬프트 경로. boiler-webapp 1건은 병합 뒤 검증 없음·CI 경로 필터 없음·수리 0회였다. rental-portal(PR #82로 전환, `CI_SKIP_CMD`·`POST_MERGE_CMD` 설정)에서 실제 티켓을 돌리면 확인된다
 - cmux 백엔드 전체. `--dry-run`이 cmux 터미널 밖에서 소켓 오류로 멈추는 것까지만 확인했다
 - 출처 저장소 rsrehab/rental-portal은 아직 저장소 전용판 `scripts/orca-ticket-loop.sh`를 쓴다(키트로 전환하지 않음)
-- Codex를 워커로 쓰는 것. `loop.env`의 `AGENT=codex`는 프리셋일 뿐이다 — 기동 명령(`codex --dangerously-bypass-approvals-and-sandbox`), 배너·모델 정규식, 스킬 접두사(`$implement N`)를 바꾸고, 워커·수리 프롬프트에서 Claude Code 도구 이름을 뺐다. 하지만 스킬은 아직 `.claude/skills/`에만 있어 Codex가 읽지 못하고(`.agents/skills/`·`AGENTS.md` 배치는 다음 단계), idle 판정·`$implement` 호출·수리 프롬프트는 Codex가 설치된 컴퓨터에서 돌려 보지 않았다. 그때까지는 "지원"이 아니다
+- Codex를 워커로 쓰는 것. 조각은 갖춰졌다 — `loop.env`의 `AGENT=codex` 프리셋(기동 명령 `codex --dangerously-bypass-approvals-and-sandbox`, 배너·모델 정규식, `$implement N`), 에이전트 중립 워커·수리 프롬프트, `.agents/skills/` 정본과 `.claude/skills/` 링크, `AGENTS.md`의 `## Agent skills`, `.codex/rules/ticket-loop.rules`, 설치기 `--agent codex`. 하지만 어느 것도 Codex가 설치된 컴퓨터에서 돌려 보지 않았다: idle 판정(Orca `tui-idle`, cmux shim의 lifecycle 훅), `$implement`가 스킬을 집는지, 수리 프롬프트, `.codex/rules/ticket-loop.rules`가 로드되는지(`codex execpolicy check --rules .codex/rules/ticket-loop.rules -- gh pr merge 12`)와 `--dangerously-bypass-approvals-and-sandbox` 아래에서도 유지되는지. 백엔드마다 티켓 1건이 지나가기 전에는 "지원"이 아니다

@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# mattpocock/skills 중 티켓 루프가 쓰는 것만 이 저장소의 .claude/skills/에 프로젝트 단위로 들인다(벤더링).
+# mattpocock/skills 중 티켓 루프가 쓰는 것만 이 저장소의 .agents/skills/에 프로젝트 단위로 들인다(벤더링).
+# .claude/skills/<이름>은 그 링크다 — Codex는 .agents/skills/를, Claude Code는 .claude/skills/를 읽는다. 한 사본, 두 에이전트(`npx skills add`와 같은 배치).
+# 0.6 이하가 .claude/skills/<이름>에 실제 디렉터리로 들인 것은 매니페스트를 보고 .agents/skills/로 옮기고(git mv) 링크를 남긴다.
 #
 # 플러그인 설치 대신 파일을 커밋하는 이유:
 #   - Orca 워커 워크트리와 클라우드 세션이 clone만으로 같은 버전을 쓴다(사용자 PC 설치 상태와 무관)
@@ -24,14 +26,17 @@ set -euo pipefail
 #   bash scripts/sync-mattpocock-skills.sh --prune              # 지난 설치가 들인 kept 스킬을 지운다(기본은 유지·동기화)
 #   bash scripts/sync-mattpocock-skills.sh --check [--json]     # 들이지 않고 충돌만 검사한다(아래). 종료 0 없음 · 1 경고 · 3 차단
 #   --force   차단 수준 충돌이 있어도 들인다        --no-check   검사를 건너뛴다(설치기가 먼저 검사했을 때)
+#   --agent <claude|codex>   워커 에이전트(기본 claude). plugin·global 검사는 Claude Code에만 있는 일이라 claude 일 때만 한다
 #
 # 하는 일:
 #   1. 같은 스킬이 다른 경로로 이미 설치돼 있는지 검사한다. Claude Code는 중복을 경고하지 않으므로 여기서 본다
-#        plugin          mattpocock-skills 플러그인이 이 저장소에 켜져 있다 → 둘 다 뜬다(/tdd 와 /mattpocock-skills:tdd)        경고
-#        global          ~/.claude/skills/<이름> 이 있다 → 개인 스킬이 프로젝트 스킬을 가려 여기 둔 버전이 쓰이지 않는다      경고
-#        skills-cli      `npx skills add` 가 둔 skills-lock.json 이나 .agents/skills 심볼릭 링크 → 두 도구가 같은 디렉터리를 덮어쓴다  차단
-#        builtin-shadow  .claude/skills/code-review 가 있다 → 내장 /code-review 를 대체한다. 이 키트는 ticket-review 를 쓴다    경고
-#        foreign         .claude/skills/<이름> 이 있지만 지난 동기화 목록에 없다 → 이번에 덮어쓴다                              알림
+#        plugin          (claude) mattpocock-skills 플러그인이 이 저장소에 켜져 있다 → 둘 다 뜬다(/tdd 와 /mattpocock-skills:tdd)  경고
+#        global          (claude) ~/.claude/skills/<이름> 이 있다 → 개인 스킬이 프로젝트 스킬을 가려 여기 둔 버전이 쓰이지 않는다  경고
+#                        (codex) ~/.agents/skills/<이름> 이 있다 → Codex 는 합치지 않고 둘 다 선택기에 보인다                     알림
+#        skills-cli      `npx skills add` 가 둔 skills-lock.json, 또는 이 저장소의 .agents/skills/<이름> 이 아닌 곳을 가리키는 링크
+#                        → 두 도구가 같은 디렉터리를 덮어쓴다. 우리 배치의 링크(.claude/skills/<이름> → ../../.agents/skills/<이름>)는 정상  차단
+#        builtin-shadow  code-review 스킬 디렉터리가 있다 → Claude Code 내장 /code-review 를 대체한다. 이 키트는 ticket-review 를 쓴다  경고
+#        foreign         .agents/skills/<이름>(또는 옛 자리 .claude/skills/<이름>)이 있지만 지난 동기화 목록에 없다 → 이번에 덮어쓴다  알림
 #        commands        .claude/commands/<이름>.md 가 있다 → 스킬이 우선하지만 둘이 남는다                                      알림
 #        kept            지난 설치가 들였지만 이번 묶음에 없는 스킬이 있다 → 유지·동기화한다(--prune 이면 지운다)                알림
 #   2. upstream .claude-plugin/plugin.json 에서 core(+workflow, +kept) 스킬 경로를 찾아 복사한다
@@ -40,8 +45,8 @@ set -euo pipefail
 #      다른 스킬 본문의 code-review 참조와, 들이지 않는 /setup-matt-pocock-skills 안내(→ /setup-ticket-loop)도 같이 바꾼다
 #   5. 지운다(.claude/skills/.mattpocock.json 기준): --no-workflow 로 뺀 workflow 묶음, setup-matt-pocock-skills, --prune 일 때 kept 전부.
 #      매니페스트에 없는 디렉터리와 프로젝트 소유 스킬은 절대 건드리지 않는다
-#   6. 버전·커밋·묶음·kept·설치 목록을 .claude/skills/.mattpocock.json 에 남긴다
-# 끝나면 `git diff --stat .claude/skills`로 바뀐 것을 보고 커밋한다.
+#   6. 버전·커밋·묶음·kept·설치 목록을 .agents/skills/.mattpocock.json 에 남긴다(0.6 이하: .claude/skills/.mattpocock.json — 옮긴다)
+# 끝나면 `git diff --stat .agents/skills .claude/skills`로 바뀐 것을 보고 커밋한다.
 
 UPSTREAM="${MATTPOCOCK_UPSTREAM:-https://github.com/mattpocock/skills.git}"
 CORE_SKILLS=(tdd code-review)
@@ -51,10 +56,11 @@ SUPERSEDED=(setup-matt-pocock-skills)   # 이 키트가 역할을 대신한다 �
 RENAME_FROM="code-review"
 RENAME_TO="ticket-review"
 
-REF="main"; WORKFLOW="auto"; MODE="sync"; JSON=0; FORCE=0; CHECK=1; PRUNE=0
+REF="main"; WORKFLOW="auto"; MODE="sync"; JSON=0; FORCE=0; CHECK=1; PRUNE=0; AGENT="claude"
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --ref) REF="$2"; shift ;;
+    --agent) AGENT="$2"; shift ;;
     --workflow) WORKFLOW=1 ;;
     --no-workflow) WORKFLOW=0 ;;
     --prune) PRUNE=1 ;;
@@ -73,10 +79,32 @@ for tool in git jq; do
   command -v "$tool" >/dev/null 2>&1 || { echo "$tool is not installed." >&2; exit 1; }
 done
 
+case "$AGENT" in claude|codex) ;; *) echo "unknown agent: $AGENT (claude | codex)" >&2; exit 2 ;; esac
+
 ROOT="$(git rev-parse --show-toplevel)"
-DEST="$ROOT/.claude/skills"
+DEST="$ROOT/.agents/skills"            # 정본 — Codex 가 읽는다
+CLAUDE_SKILLS="$ROOT/.claude/skills"   # 링크 — Claude Code 가 읽는다
 MANIFEST="$DEST/.mattpocock.json"
+OLD_MANIFEST="$CLAUDE_SKILLS/.mattpocock.json"   # 0.6 이하
+[[ -f "$MANIFEST" || ! -f "$OLD_MANIFEST" ]] || MANIFEST="$OLD_MANIFEST"   # 아직 옮기기 전이면 옛것을 읽는다(--check 는 바꾸지 않는다)
 CLAUDE_HOME="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
+AGENTS_HOME="${CODEX_AGENTS_HOME:-$HOME/.agents}"
+
+# 스킬 디렉터리가 있는가 — 새 자리(.agents/skills) 또는 옛 자리(.claude/skills 의 실제 디렉터리). 링크는 디렉터리로 치지 않는다
+skill_dir_exists() { [[ -d "$DEST/$1" && ! -L "$DEST/$1" ]] || [[ -d "$CLAUDE_SKILLS/$1" && ! -L "$CLAUDE_SKILLS/$1" ]]; }
+# .claude/skills/<이름> → ../../.agents/skills/<이름>. 실제 디렉터리가 남아 있으면(옛 배치의 사본 또는 foreign — 검사에서 알렸다) 지운다
+link_claude() {
+  local n="$1" l="$CLAUDE_SKILLS/$1"
+  if [[ -L "$l" ]]; then
+    [[ "$(readlink "$l")" == "../../.agents/skills/$n" ]] && return 0
+    rm "$l"
+  elif [[ -e "$l" ]]; then
+    if git -C "$ROOT" ls-files --error-unmatch ".claude/skills/$n" >/dev/null 2>&1; then git -C "$ROOT" rm -rq ".claude/skills/$n"; else rm -rf "$l"; fi
+  fi
+  mkdir -p "$CLAUDE_SKILLS"
+  ln -s "../../.agents/skills/$n" "$l"
+}
+unlink_claude() { [[ -L "$CLAUDE_SKILLS/$1" ]] && rm "$CLAUDE_SKILLS/$1" || true; }
 
 has_name() { local n s; n="$1"; shift; for s in "$@"; do [[ "$s" == "$n" ]] && return 0; done; return 1; }
 is_owned() { has_name "$1" "${PROJECT_OWNED[@]}"; }
@@ -101,7 +129,7 @@ if [[ -f "$MANIFEST" ]]; then
   while IFS= read -r n; do
     [[ -n "$n" ]] || continue
     has_name "$n" "${DEST_NAMES[@]}" "${CORE_SKILLS[@]}" "${WORKFLOW_SKILLS[@]}" "${PROJECT_OWNED[@]}" "${SUPERSEDED[@]}" && continue
-    [[ -d "$DEST/$n" && ! -L "$DEST/$n" ]] || continue
+    skill_dir_exists "$n" || continue
     KEPT+=("$n")
   done < <(jq -r '((.skills // []) + (.kept // [])) | unique[]' "$MANIFEST" 2>/dev/null)
 fi
@@ -128,36 +156,52 @@ plugin_enabled_in() {   # 출력: "<id>\t<file>" (켜진 것만)
 }
 
 check_conflicts() {
-  local n line id src
-  while IFS=$'\t' read -r id src; do
-    [[ -n "$id" ]] || continue
-    add_finding warn plugin "plugin $id is enabled for this repo ($src) — its skills load twice (/tdd and /${id%%@*}:tdd)" \
-      "claude plugin disable $id --scope project"
-  done < <(plugin_enabled_in)
-  for n in "${DEST_NAMES[@]}"; do
-    if [[ -e "$CLAUDE_HOME/skills/$n/SKILL.md" ]]; then
-      add_finding warn global "~/.claude/skills/$n exists — a personal skill shadows the project copy, so the vendored $n is never the one that runs" \
-        "remove ~/.claude/skills/$n (npx skills remove $n -g, or rm -rf) or accept that this machine runs its own copy"
-    fi
-  done
+  local n line id src where
+  if [[ "$AGENT" == claude ]]; then
+    while IFS=$'\t' read -r id src; do
+      [[ -n "$id" ]] || continue
+      add_finding warn plugin "plugin $id is enabled for this repo ($src) — its skills load twice (/tdd and /${id%%@*}:tdd)" \
+        "claude plugin disable $id --scope project"
+    done < <(plugin_enabled_in)
+    for n in "${DEST_NAMES[@]}"; do
+      if [[ -e "$CLAUDE_HOME/skills/$n/SKILL.md" ]]; then
+        add_finding warn global "~/.claude/skills/$n exists — a personal skill shadows the project copy, so the vendored $n is never the one that runs" \
+          "remove ~/.claude/skills/$n (npx skills remove $n -g, or rm -rf) or accept that this machine runs its own copy"
+      fi
+    done
+  else
+    for n in "${DEST_NAMES[@]}"; do
+      if [[ -e "$AGENTS_HOME/skills/$n/SKILL.md" ]]; then
+        add_finding info global "~/.agents/skills/$n exists — Codex does not merge same-named skills; both appear in the skill selector" \
+          "remove ~/.agents/skills/$n if the committed copy should be the only one"
+      fi
+    done
+  fi
   if [[ -f "$ROOT/skills-lock.json" ]] && jq -e '(.skills // {}) | to_entries | map(select(.value.source == "mattpocock/skills")) | length > 0' "$ROOT/skills-lock.json" >/dev/null 2>&1; then
     add_finding block skills-cli "skills-lock.json lists mattpocock/skills — \`npx skills\` and this script would overwrite each other's files" \
       "npx skills remove <skill…> (or delete skills-lock.json and the .agents/skills copies), then rerun"
   fi
+  # 링크: .claude/skills/<이름> → ../../.agents/skills/<이름> 은 이 키트의 배치다. 다른 곳을 가리키거나 .agents/skills/<이름> 자체가 링크면 다른 도구다
   for n in "${DEST_NAMES[@]}" "$RENAME_FROM"; do
+    if [[ -L "$CLAUDE_SKILLS/$n" && "$(readlink "$CLAUDE_SKILLS/$n")" != "../../.agents/skills/$n" ]]; then
+      add_finding block skills-cli ".claude/skills/$n is a symbolic link to $(readlink "$CLAUDE_SKILLS/$n") — installed by another tool (this kit links to ../../.agents/skills/$n)" \
+        "remove the link and its target, then rerun"
+    fi
     if [[ -L "$DEST/$n" ]]; then
-      add_finding block skills-cli ".claude/skills/$n is a symbolic link ($(readlink "$DEST/$n")) — installed by another tool" \
+      add_finding block skills-cli ".agents/skills/$n is a symbolic link ($(readlink "$DEST/$n")) — installed by another tool" \
         "remove the link and its target, then rerun"
     fi
   done
-  if [[ -d "$DEST/$RENAME_FROM" && ! -L "$DEST/$RENAME_FROM" ]]; then
-    add_finding warn builtin-shadow ".claude/skills/$RENAME_FROM exists — a project skill named code-review replaces the built-in /code-review; this kit vendors it as $RENAME_TO" \
-      "rm -rf .claude/skills/$RENAME_FROM"
+  if skill_dir_exists "$RENAME_FROM"; then
+    where=".agents/skills"; [[ -d "$DEST/$RENAME_FROM" ]] || where=".claude/skills"
+    add_finding warn builtin-shadow "$where/$RENAME_FROM exists — a project skill named code-review replaces Claude Code's built-in /code-review; this kit vendors it as $RENAME_TO" \
+      "rm -rf $where/$RENAME_FROM"
   fi
   for n in "${DEST_NAMES[@]}"; do
-    if [[ -d "$DEST/$n" && ! -L "$DEST/$n" ]]; then
+    if skill_dir_exists "$n"; then
       if [[ ! -f "$MANIFEST" ]] || ! jq -e --arg n "$n" '(.skills // []) | index($n) != null' "$MANIFEST" >/dev/null 2>&1; then
-        add_finding info foreign ".claude/skills/$n exists but was not placed by this script — it will be overwritten" ""
+        where=".agents/skills"; [[ -d "$DEST/$n" && ! -L "$DEST/$n" ]] || where=".claude/skills"
+        add_finding info foreign "$where/$n exists but was not placed by this script — it will be overwritten" ""
       fi
     fi
     if [[ -f "$ROOT/.claude/commands/$n.md" ]]; then
@@ -172,8 +216,8 @@ check_conflicts() {
     fi
   fi
   for n in "${SUPERSEDED[@]}"; do
-    if [[ -d "$DEST/$n" ]] && [[ -f "$MANIFEST" ]] && jq -e --arg n "$n" '(.skills // []) | index($n) != null' "$MANIFEST" >/dev/null 2>&1; then
-      add_finding info superseded ".claude/skills/$n will be removed — this kit replaces it (docs/agents/issue-tracker.md + /setup-ticket-loop)" ""
+    if skill_dir_exists "$n" && [[ -f "$MANIFEST" ]] && jq -e --arg n "$n" '(.skills // []) | index($n) != null' "$MANIFEST" >/dev/null 2>&1; then
+      add_finding info superseded "$n will be removed — this kit replaces it (docs/agents/issue-tracker.md + /setup-ticket-loop)" ""
     fi
   done
   return 0   # set -e: 마지막 검사가 거짓이어도 함수가 실패로 끝나지 않게
@@ -210,6 +254,25 @@ if [[ $CHECK -eq 1 || "$MODE" == check ]]; then
   fi
 fi
 
+# ---------- 1'. 배치 마이그레이션 (0.6 이하: .claude/skills/<이름> 실제 디렉터리 → .agents/skills/<이름> + 링크) ----------
+# 이번에 관리할 이름(묶음 + kept)의 옛 자리 디렉터리를 먼저 옮긴다 — 덮어쓸 것도 옮긴 뒤 덮어써야 git 이 이동+수정으로 본다.
+# 프로젝트 소유·매니페스트 밖 디렉터리는 건드리지 않는다. 추적 중이면 git mv 로 이력을 잇는다
+moved=()
+for n in "${DEST_NAMES[@]}" "${KEPT[@]+"${KEPT[@]}"}"; do
+  is_owned "$n" && continue
+  [[ -d "$CLAUDE_SKILLS/$n" && ! -L "$CLAUDE_SKILLS/$n" && ! -e "$DEST/$n" ]] || continue
+  mkdir -p "$DEST"
+  if git -C "$ROOT" ls-files --error-unmatch ".claude/skills/$n" >/dev/null 2>&1; then git -C "$ROOT" mv ".claude/skills/$n" ".agents/skills/$n"; else mv "$CLAUDE_SKILLS/$n" "$DEST/$n"; fi
+  link_claude "$n"
+  moved+=("$n")
+done
+if [[ "$MANIFEST" == "$OLD_MANIFEST" && -f "$OLD_MANIFEST" ]]; then
+  mkdir -p "$DEST"
+  if git -C "$ROOT" ls-files --error-unmatch ".claude/skills/.mattpocock.json" >/dev/null 2>&1; then git -C "$ROOT" mv ".claude/skills/.mattpocock.json" ".agents/skills/.mattpocock.json"; else mv "$OLD_MANIFEST" "$DEST/.mattpocock.json"; fi
+  MANIFEST="$DEST/.mattpocock.json"
+fi
+[[ ${#moved[@]} -eq 0 ]] || echo "  moved   ${#moved[@]} skills from .claude/skills/ to .agents/skills/ (${moved[*]}; links left behind — Codex reads .agents/skills)"
+
 # ---------- 2. upstream ----------
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/mattpocock-skills.XXXXXX")"
 trap 'rm -rf "$WORK"' EXIT
@@ -236,6 +299,7 @@ for s in "${WANTED[@]}"; do
   [[ "$name" == "$RENAME_FROM" ]] && name="$RENAME_TO"
   rm -rf "${DEST:?}/$name"
   cp -R "$src" "$DEST/$name"
+  link_claude "$name"
   installed+=("$name")
 done
 
@@ -247,8 +311,10 @@ if [[ $PRUNE -eq 0 ]]; then
     if p="$(path_of "$name")" && [[ -f "$WORK/src/$p/SKILL.md" ]]; then
       rm -rf "${DEST:?}/$name"
       cp -R "$WORK/src/$p" "$DEST/$name"
+      link_claude "$name"
       installed+=("$name")
     else
+      link_claude "$name"
       kept_stale+=("$name"); echo "  kept    $name (no longer in upstream — left as is)"
     fi
   done
@@ -277,8 +343,12 @@ if [[ -f "$MANIFEST" ]]; then
     [[ -n "$old" ]] || continue
     has_name "$old" "${installed[@]}" "${kept_stale[@]+"${kept_stale[@]}"}" && continue
     is_owned "$old" && continue
-    [[ -d "$DEST/$old" && ! -L "$DEST/$old" ]] || continue
-    rm -rf "${DEST:?}/$old"
+    skill_dir_exists "$old" || continue
+    [[ -L "$DEST/$old" ]] || rm -rf "${DEST:?}/$old"
+    if [[ -L "$CLAUDE_SKILLS/$old" ]]; then rm "$CLAUDE_SKILLS/$old"
+    elif [[ -d "$CLAUDE_SKILLS/$old" ]]; then
+      if git -C "$ROOT" ls-files --error-unmatch ".claude/skills/$old" >/dev/null 2>&1; then git -C "$ROOT" rm -rq ".claude/skills/$old"; else rm -rf "${CLAUDE_SKILLS:?}/$old"; fi
+    fi
     if has_name "$old" "${SUPERSEDED[@]}"; then echo "  removed $old (superseded by /setup-ticket-loop)"
     elif has_name "$old" "${KEPT[@]+"${KEPT[@]}"}"; then echo "  removed $old (--prune)"
     else echo "  removed $old (not in this kit's skill set)"; fi

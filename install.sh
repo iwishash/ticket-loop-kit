@@ -10,23 +10,33 @@ set -euo pipefail
 # What it does (the part that is the same for every project):
 #   0. Migrates a 0.3 or 0.2 install: git mv .agent-loop/ (or .orca-loop/) to .ticket-loop/, removes the old setup-agent-loop /
 #      setup-orca-loop skill and the old .gitignore lines
+#      0.7: moves skills from .claude/skills/<name> to .agents/skills/<name> and leaves a symbolic link behind (see below)
 #   1. Overwrites the managed files: scripts/ticket-loop.sh, scripts/ticket-state.sh, scripts/sync-mattpocock-skills.sh,
-#      .claude/skills/setup-ticket-loop/
-#   2. Places templates only when missing (project-owned afterwards): .claude/skills/implement and pr, .ticket-loop/worker-rules.md,
-#      docs/loop-reports/README.md, docs/agents/issue-tracker.md (GitHub tracker facts the vendored skills read)
-#   3. Vendors the mattpocock skills the loop uses into .claude/skills/: always tdd and code-review (→ ticket-review), which the
+#      .agents/skills/setup-ticket-loop/
+#   2. Places templates only when missing (project-owned afterwards): .agents/skills/implement and pr, .codex/rules/ticket-loop.rules
+#      (default branch filled in), .ticket-loop/worker-rules.md, docs/loop-reports/README.md, docs/agents/issue-tracker.md
+#      (GitHub tracker facts the vendored skills read)
+#   3. Vendors the mattpocock skills the loop uses into .agents/skills/: always tdd and code-review (→ ticket-review), which the
 #      implement skill calls; the planning set (grill-with-docs, to-spec, to-tickets, retro + their 3 dependencies) only with
 #      --workflow-skills (default: keep what the previous install chose). Skills an earlier install vendored outside those sets
 #      are kept and synced, never removed, unless --prune-skills is given. Before touching anything it checks for the same skills
 #      installed another way (plugin, ~/.claude/skills, `npx skills`) and stops when two tools would fight over the same files
 #   4. Adds /.ticket-loop/*.log and /.ticket-loop/*.jsonl to .gitignore; merges deny rules into .claude/settings.json
-#      (no gh pr merge, no force push, no direct push to the default branch)
+#      (no gh pr merge, no force push, no direct push to the default branch). The Codex counterpart is .codex/rules (step 2)
 #   5. Creates the 6 GitHub labels, sets the repo-scoped git credential helper (gh), registers the repo with Orca
 #   6. Records the kit commit in .ticket-loop/kit.json
-# The project-specific part (verify command, orca.yaml, CI, worker rules) is done afterwards by /setup-ticket-loop in Claude Code.
+# The project-specific part (verify command, orca.yaml, CI, worker rules) is done afterwards by the setup-ticket-loop skill
+# (/setup-ticket-loop in Claude Code, $setup-ticket-loop in Codex).
+#
+# Skill layout (0.7): skills live in .agents/skills/<name>, which Codex reads, and .claude/skills/<name> is a symbolic link to it,
+# which Claude Code reads (the layout `npx skills add` uses). One copy, both agents. The checks below treat a link that points at
+# this repo's .agents/skills/<name> as the kit's own; a link anywhere else means another tool manages the skill.
 #
 # Options:
 #   --ref <ref>          kit tag, branch or commit (default main)
+#   --agent <name>       claude (default) | codex — the worker the loop will start. Decides which skill-conflict checks apply
+#                        (plugin and ~/.claude/skills only matter for claude) and what the next steps say. The loop reads AGENT
+#                        from .ticket-loop/loop.env; the npx shell writes it there, this script does not
 #   --no-skills          skip the mattpocock skill sync
 #   --workflow-skills    also vendor the planning skills (grill-with-docs, to-spec, to-tickets, retro + deps); --no-workflow-skills removes them
 #   --force-skills       vendor even when another tool (npx skills) manages mattpocock skills in this repo
@@ -40,6 +50,7 @@ set -euo pipefail
 KIT_REPO="${KIT_REPO:-iwishash/ticket-loop-kit}"
 KIT_DIR="${KIT_DIR:-}"
 REF="main"
+AGENT="claude"
 DO_SKILLS=1
 WORKFLOW_FLAG=""
 FORCE_SKILLS=0
@@ -51,6 +62,7 @@ DO_ORCA=1
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --ref) REF="$2"; shift ;;
+    --agent) AGENT="$2"; shift ;;
     --no-skills) DO_SKILLS=0 ;;
     --workflow-skills) WORKFLOW_FLAG="--workflow" ;;
     --no-workflow-skills) WORKFLOW_FLAG="--no-workflow" ;;
@@ -76,6 +88,7 @@ warn() { printf '%s! %s%s\n' "$C_Y" "$*" "$C_0" >&2; }
 die() { printf '%s✗ %s%s\n' "$C_R" "$*" "$C_0" >&2; exit 1; }
 
 for tool in git jq; do command -v "$tool" >/dev/null 2>&1 || die "$tool is not installed."; done
+case "$AGENT" in claude|codex) ;; *) die "Unknown agent $AGENT (claude | codex)." ;; esac
 ROOT="$(git rev-parse --show-toplevel 2>/dev/null)" || die "Run this inside a git repository."
 cd "$ROOT"
 
@@ -109,7 +122,7 @@ BASE="${BASE:-main}"
 # 다른 도구가 .claude/skills 를 관리하는 경우(차단)는 설치를 멈춘다 — 두 도구가 같은 파일을 번갈아 덮어쓰기 때문이다
 if [[ $DO_SKILLS -eq 1 ]]; then
   rc=0
-  bash "$KIT_DIR/files/scripts/sync-mattpocock-skills.sh" --check $WORKFLOW_FLAG $PRUNE_FLAG || rc=$?
+  bash "$KIT_DIR/files/scripts/sync-mattpocock-skills.sh" --check --agent "$AGENT" $WORKFLOW_FLAG $PRUNE_FLAG || rc=$?
   if [[ $rc -eq 3 && $FORCE_SKILLS -eq 0 ]]; then
     die "Another tool manages mattpocock skills in this repo (see above). Remove that install, or rerun with --force-skills, or skip vendoring with --no-skills."
   elif [[ $rc -ne 0 ]]; then
@@ -138,6 +151,32 @@ if [[ -f .gitignore ]] && grep -qE '^/\.(agent|orca)-loop/' .gitignore; then
   say "Removed the /.agent-loop/ and /.orca-loop/ lines from .gitignore"
 fi
 
+# ---------- 0'. 스킬 배치 (0.6 이하: .claude/skills/<name> 실제 디렉터리 → .agents/skills/<name> + 링크) ----------
+# 키트가 놓는 스킬(관리 1개 + 템플릿 2개)만 여기서 옮긴다. 벤더링한 mattpocock 스킬은 sync-mattpocock-skills.sh 가 자기 매니페스트로 옮긴다
+link_skill() {   # .claude/skills/<name> → ../../.agents/skills/<name>. 실제 디렉터리가 남아 있으면 지우고 링크를 둔다(옮긴 뒤라 사본이다)
+  local n="$1" l=".claude/skills/$1"
+  [[ -d ".agents/skills/$n" ]] || return 0
+  if [[ -L "$l" ]]; then
+    [[ "$(readlink "$l")" == "../../.agents/skills/$n" ]] && return 0
+    rm "$l"
+  elif [[ -d "$l" ]]; then
+    if git ls-files --error-unmatch "$l" >/dev/null 2>&1; then git rm -rq "$l"; else rm -rf "$l"; fi
+  fi
+  mkdir -p .claude/skills
+  ln -s "../../.agents/skills/$n" "$l"
+}
+kit_skills=()
+while IFS= read -r d; do kit_skills+=("$(basename "$d")"); done < <(find "$KIT_DIR/files/.agents/skills" "$KIT_DIR/templates/.agents/skills" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | sort)
+moved=()
+for n in "${kit_skills[@]}"; do
+  if [[ -d ".claude/skills/$n" && ! -L ".claude/skills/$n" && ! -e ".agents/skills/$n" ]]; then
+    mkdir -p .agents/skills
+    if git ls-files --error-unmatch ".claude/skills/$n" >/dev/null 2>&1; then git mv ".claude/skills/$n" ".agents/skills/$n"; else mv ".claude/skills/$n" ".agents/skills/$n"; fi
+    moved+=("$n")
+  fi
+done
+[[ ${#moved[@]} -eq 0 ]] || say "Moved ${moved[*]} from .claude/skills/ to .agents/skills/ (Codex reads .agents/skills; .claude/skills keeps a link)"
+
 # ---------- 1. 관리 파일 (매번 덮어쓴다) ----------
 managed=()
 while IFS= read -r -d '' f; do
@@ -157,16 +196,25 @@ while IFS= read -r -d '' f; do
   else
     mkdir -p "$(dirname "$rel")"
     cp "$f" "$rel"
-    echo "  added $rel (template — /setup-ticket-loop fills it in)"
+    if [[ "$rel" == .codex/rules/* ]]; then
+      sed -i.bak "s/__BASE__/${BASE}/g" "$rel" && rm -f "$rel.bak"
+      echo "  added $rel (Codex command rules — default branch ${BASE} filled in)"
+    elif [[ "$rel" == */agents/openai.yaml ]]; then
+      echo "  added $rel (Codex skill metadata)"
+    else
+      echo "  added $rel (template — the setup-ticket-loop skill fills it in)"
+    fi
   fi
 done < <(find "$KIT_DIR/templates" -type f -print0 | sort -z)
+for n in "${kit_skills[@]}"; do link_skill "$n"; done
+echo "  linked .claude/skills/{$(IFS=,; echo "${kit_skills[*]}")} → .agents/skills/"
 
 # ---------- 3. mattpocock 스킬 ----------
 if [[ $DO_SKILLS -eq 1 ]]; then
   say "Syncing the mattpocock skills"
   force=""; [[ $FORCE_SKILLS -eq 1 ]] && force="--force"
-  bash scripts/sync-mattpocock-skills.sh --no-check $WORKFLOW_FLAG $PRUNE_FLAG $force \
-    || warn "Skill sync failed — run bash scripts/sync-mattpocock-skills.sh ${WORKFLOW_FLAG} ${PRUNE_FLAG} later"
+  bash scripts/sync-mattpocock-skills.sh --no-check --agent "$AGENT" $WORKFLOW_FLAG $PRUNE_FLAG $force \
+    || warn "Skill sync failed — run bash scripts/sync-mattpocock-skills.sh --agent ${AGENT} ${WORKFLOW_FLAG} ${PRUNE_FLAG} later"
 fi
 
 # ---------- 4. .gitignore · settings.json ----------
@@ -184,7 +232,7 @@ jq --arg base "$BASE" '
     "Bash(git push -f:*)",
     ("Bash(git push origin " + $base + ":*)")
   ] | unique)' .claude/settings.json > "$tmp" && mv "$tmp" .claude/settings.json
-say "Merged deny rules into .claude/settings.json (default branch ${BASE})"
+say "Merged deny rules into .claude/settings.json (default branch ${BASE}; Codex: .codex/rules/ticket-loop.rules)"
 
 # ---------- 5. GitHub · git · Orca ----------
 OWNER_REPO=""
@@ -247,7 +295,12 @@ $(printf '  %s\n' $stale)"
 
 step() { printf '  %s%s.%s %s\n' "$C_C" "$1" "$C_0" "$2"; }
 printf '\n%sNext steps%s\n' "$C_B" "$C_0"
-step 1 "In Claude Code: ${C_C}/setup-ticket-loop${C_0} — fills in the verify command, orca.yaml, CI and worker rules for this repo and opens a PR"
+if [[ "$AGENT" == codex ]]; then
+  step 1 "In Codex (or Claude Code): ${C_C}\$setup-ticket-loop${C_0} — fills in the verify command, orca.yaml, CI and worker rules for this repo and opens a PR"
+  printf '     Codex as the worker is a preset that has not been verified on a real ticket yet. Trust this repo in Codex so .codex/rules applies; keep GitHub branch protection on\n'
+else
+  step 1 "In Claude Code: ${C_C}/setup-ticket-loop${C_0} — fills in the verify command, orca.yaml, CI and worker rules for this repo and opens a PR"
+fi
 step 2 "Orca Settings → Projects → <repo> → Worktree Hooks → Advanced:"
 printf '     Command Source %s"orca.yaml only"%s, enable %s"Wait for setup to complete before starting agent"%s\n' "$C_C" "$C_0" "$C_C" "$C_0"
 step 3 "After the PR is merged: ${C_C}bash scripts/ticket-loop.sh --dry-run${C_0}, then ${C_C}--max 1${C_0}"

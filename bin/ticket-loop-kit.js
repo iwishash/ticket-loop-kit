@@ -7,7 +7,7 @@
 //   npx github:iwishash/ticket-loop-kit init --yes      묻지 않고 기본값으로(비대화 환경에서는 자동)
 //   npx github:iwishash/ticket-loop-kit#v0.4.0 init     키트 버전 고정(태그·브랜치·커밋)
 //
-// Node 쪽이 맡는 것: 백엔드 선택, .ticket-loop/loop.env의 BACKEND 줄, 설치 단계 켜고 끄기, 도구 점검.
+// Node 쪽이 맡는 것: 백엔드·에이전트 선택, .ticket-loop/loop.env의 BACKEND·AGENT 줄, 설치 단계 켜고 끄기, 도구 점검.
 // 파일 복사·병합·라벨·등록은 install.sh가 그대로 한다.
 
 const fs = require('fs');
@@ -24,6 +24,11 @@ const BACKENDS = {
   cmux: { label: 'cmux', available: true, note: 'The loop creates git worktrees and starts the agent in a cmux workspace; run the loop inside a cmux terminal' },
 };
 
+const AGENTS = {
+  claude: { label: 'Claude Code', note: 'the worker is started with claude --dangerously-skip-permissions and reads .claude/skills/ (links to .agents/skills/)' },
+  codex: { label: 'Codex CLI', note: 'preset only, not yet verified on a real ticket — codex --dangerously-bypass-approvals-and-sandbox, reads .agents/skills/ and AGENTS.md' },
+};
+
 const HELP = `ticket-loop-kit ${pkg.version} — installer for the unattended ticket loop
 
 Usage
@@ -34,6 +39,7 @@ Usage
 Options
   -y, --yes              Use defaults without asking (automatic when not a TTY)
   --backend <name>       ${Object.entries(BACKENDS).map(([k, b]) => `${k}${b.available ? '' : ' (coming soon)'}`).join(' | ')}  (default: orca)
+  --agent <name>         ${Object.keys(AGENTS).join(' | ')}  (default: claude) — the worker the loop starts; written to loop.env as AGENT
   --no-skills            Skip vendoring the mattpocock skills (implement calls tdd and ticket-review — only skip if you vendor them yourself)
   --workflow-skills      Also vendor the planning skills: grill-with-docs, to-spec, to-tickets, retro (+ 3 skills they call)
   --no-workflow-skills   Remove the planning skills if a previous install vendored them (default: keep the previous choice)
@@ -45,7 +51,8 @@ Options
   --ref <ref>            Kit ref to record in .ticket-loop/kit.json (default: the #ref of the npx spec, else "npx")
 
 Pin a kit version with a tag on the npx spec:  npx github:iwishash/ticket-loop-kit#v0.4.0 init
-Requires git, gh (logged in), jq and bash. The backend app (Orca or cmux) and the worker agent (Claude Code; Codex via AGENT=codex is a preset, not yet verified) are needed to run the loop.
+Requires git, gh (logged in), jq and bash. The backend app (Orca or cmux) and the worker agent (Claude Code, or Codex — a preset
+not yet verified on a real ticket) are needed to run the loop.
 `;
 
 // ---------- 색 ----------
@@ -165,13 +172,14 @@ async function checklist(title, items) {
 }
 
 function parseArgs(argv) {
-  const o = { command: null, yes: false, backend: null, ref: null, skills: true, workflow: null, forceSkills: false, pruneSkills: false, github: true, credential: true, orca: true };
+  const o = { command: null, yes: false, backend: null, agent: null, ref: null, skills: true, workflow: null, forceSkills: false, pruneSkills: false, github: true, credential: true, orca: true };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     switch (a) {
       case 'init': o.command = 'init'; break;
       case '-y': case '--yes': o.yes = true; break;
       case '--backend': o.backend = argv[++i]; break;
+      case '--agent': o.agent = argv[++i]; break;
       case '--ref': o.ref = argv[++i]; break;
       case '--no-skills': o.skills = false; break;
       case '--workflow-skills': o.workflow = true; break;
@@ -185,7 +193,7 @@ function parseArgs(argv) {
       case '-v': case '--version': o.command = 'version'; break;
       default: die(`Unknown argument: ${a}\n\n${HELP}`, 2);
     }
-    if ((a === '--backend' || a === '--ref') && o[a.slice(2)] == null) die(`${a} needs a value.`, 2);
+    if ((a === '--backend' || a === '--agent' || a === '--ref') && o[a.slice(2)] == null) die(`${a} needs a value.`, 2);
   }
   return o;
 }
@@ -219,38 +227,48 @@ function kitRef() {
   return 'local';
 }
 
-// .ticket-loop/loop.env — 없으면 만들고, 있으면 BACKEND 줄만 없을 때 덧붙인다(프로젝트 소유 파일이라 나머지는 건드리지 않는다)
-function writeLoopEnv(root, backend) {
+// .ticket-loop/loop.env — 없으면 만들고, 있으면 BACKEND·AGENT 줄이 없을 때만 덧붙인다(프로젝트 소유 파일이라 나머지는 건드리지 않는다)
+const ENV_KEYS = {
+  BACKEND: { comment: () => `# 백엔드: ${Object.keys(BACKENDS).join(' | ')}` },
+  AGENT: { comment: () => `# 에이전트: ${Object.keys(AGENTS).join(' | ')} (기본 claude). 기동 명령·배너·모델 정규식·스킬 접두사(/implement ↔ $implement)를 프리셋이 정한다 — scripts/ticket-loop.sh 머리의 "에이전트 프리셋" 절. codex 는 아직 실측 전` },
+};
+function envLine(key, value) { return `${key}="\${${key}:-${value}}"`; }
+function envValue(text, key) {
+  const m = text.match(new RegExp(`^\\s*${key}=["']?\\$\\{${key}:-([a-z]+)\\}["']?\\s*$`, 'm')) || text.match(new RegExp(`^\\s*${key}=["']?([a-z]+)["']?\\s*$`, 'm'));
+  return m ? m[1] : null;
+}
+function writeLoopEnv(root, backend, agent) {
   const dir = path.join(root, LOOP_DIR);
   const file = path.join(dir, 'loop.env');
-  const line = `BACKEND="\${BACKEND:-${backend}}"`;
+  const wanted = { BACKEND: backend, AGENT: agent };
   if (!fs.existsSync(file)) {
     fs.mkdirSync(dir, { recursive: true });
     fs.writeFileSync(file, [
       '# ticket-loop-kit — 이 저장소의 티켓 루프 기본값. ticket-loop.sh가 시작할 때 읽는다.',
       '# VAR="${VAR:-값}" 꼴로 적어 두면 실행할 때 준 환경변수가 이긴다. 나머지 값(CI_SKIP_REGEX, POST_MERGE_CMD,',
-      '# POST_MERGE_PORT …)은 /setup-ticket-loop 가 저장소를 읽고 채운다.',
-      `# 백엔드: ${Object.keys(BACKENDS).join(' | ')}`,
-      line,
-      '# 에이전트: claude | codex (기본 claude). 기동 명령·배너·모델 정규식·스킬 접두사(/implement ↔ $implement)를 프리셋이 정한다 — scripts/ticket-loop.sh 머리의 "에이전트 프리셋" 절.',
-      '# Codex 는 .agents/skills/ 를 읽으므로 스킬 배치가 따라와야 한다(키트 다음 단계). 아직 실측 전이다',
-      '# AGENT="${AGENT:-claude}"',
+      '# POST_MERGE_PORT …)은 setup-ticket-loop 스킬이 저장소를 읽고 채운다.',
+      ...Object.entries(wanted).flatMap(([k, v]) => [ENV_KEYS[k].comment(), envLine(k, v)]),
       ...(backend === 'cmux' ? [
         '# cmux는 orca.yaml setup 대신 이 명령으로 새 워크트리를 준비한다(의존성 설치·env 복사). LOOP_ROOT_PATH, LOOP_WORKTREE_PATH 사용 가능',
         '# WORKTREE_SETUP_CMD="${WORKTREE_SETUP_CMD:-pnpm install}"',
       ] : []),
       '',
     ].join('\n'));
-    return `Created ${LOOP_DIR}/loop.env (BACKEND=${backend})`;
+    return `Created ${LOOP_DIR}/loop.env (BACKEND=${backend}, AGENT=${agent})`;
   }
-  const text = fs.readFileSync(file, 'utf8');
-  const m = text.match(/^\s*BACKEND=["']?\$\{BACKEND:-([a-z]+)\}["']?\s*$/m) || text.match(/^\s*BACKEND=["']?([a-z]+)["']?\s*$/m);
-  if (!m) {
-    fs.appendFileSync(file, `${text.endsWith('\n') || text === '' ? '' : '\n'}# 백엔드: ${Object.keys(BACKENDS).join(' | ')}\n${line}\n`);
-    return `Added BACKEND=${backend} to ${LOOP_DIR}/loop.env`;
+  const notes = [];
+  for (const [k, v] of Object.entries(wanted)) {
+    const text = fs.readFileSync(file, 'utf8');
+    const cur = envValue(text, k);
+    if (cur === null) {
+      fs.appendFileSync(file, `${text.endsWith('\n') || text === '' ? '' : '\n'}${ENV_KEYS[k].comment()}\n${envLine(k, v)}\n`);
+      notes.push(`added ${k}=${v}`);
+    } else {
+      if (cur !== v) warn(`Keeping ${k}=${cur} in ${LOOP_DIR}/loop.env (differs from the selected ${v} — edit the file to change it).`);
+      notes.push(`${k}=${cur}`);
+    }
   }
-  if (m[1] !== backend) warn(`Keeping BACKEND=${m[1]} in ${LOOP_DIR}/loop.env (differs from the selected ${backend} — edit the file to change it).`);
-  return `Kept ${LOOP_DIR}/loop.env (BACKEND=${m[1]})`;
+  return `${notes.some((n) => n.startsWith('added')) ? 'Updated' : 'Kept'} ${LOOP_DIR}/loop.env (${notes.join(', ')})`;
 }
 
 async function init(o) {
@@ -283,6 +301,14 @@ async function init(o) {
   }
   backend = backend || 'orca';
   if (!BACKENDS[backend].available) die(`The ${BACKENDS[backend].label} backend is not available yet. ${BACKENDS[backend].note}.`);
+  let agent = o.agent;
+  if (agent && !AGENTS[agent]) die(`Unknown agent ${agent}. Choose one of: ${Object.keys(AGENTS).join(', ')}`);
+  if (interactive && !agent) {
+    agent = await select('Worker agent — which CLI runs each ticket?',
+      Object.entries(AGENTS).map(([key, a]) => ({ key, label: a.label, note: a.note })), 'claude');
+    if (agent === null) { console.log(c.dim('Aborted.')); process.exit(130); }
+  }
+  agent = agent || 'claude';
 
   // origin 이 실제로 쓰는 주소 — ls-remote --get-url 은 insteadOf 규칙까지 적용한 값을 준다. SSH 면 gh 토큰 단계는 쓰이지 않는다
   const originUrl = run('git', ['ls-remote', '--get-url', 'origin']).out;
@@ -291,10 +317,10 @@ async function init(o) {
 
   // 스킬 충돌 검사 — 같은 mattpocock 스킬이 플러그인·~/.claude/skills·`npx skills` 로 이미 있으면 보여 준다(Claude Code 는 중복을 경고하지 않는다).
   // 다른 도구가 .claude/skills 를 관리하면(차단) 멈춘다. 지난 설치가 workflow 묶음을 들였으면 그 선택을 기본값으로 이어 간다
-  const manifest = readJson(path.join(root, '.claude', 'skills', '.mattpocock.json'));
+  const manifest = readJson(path.join(root, '.agents', 'skills', '.mattpocock.json')) || readJson(path.join(root, '.claude', 'skills', '.mattpocock.json'));   // 0.6 이하는 옛 자리
   if (o.workflow === null) o.workflow = !!(manifest && (manifest.workflow === true || (Array.isArray(manifest.skills) && manifest.skills.includes('to-tickets'))));
-  const findings = o.skills ? skillConflicts(root, o.workflow) : [];
-  const plugins = findings.filter((f) => f.kind === 'plugin');
+  const findings = o.skills ? skillConflicts(root, o.workflow, agent) : [];
+  const plugins = agent === 'claude' ? findings.filter((f) => f.kind === 'plugin') : [];   // 플러그인 끄기는 Claude Code 워커일 때만 뜻이 있다
   const kept = findings.find((f) => f.kind === 'kept');   // 지난 설치가 들였지만 이번 묶음에 없는 스킬 — 기본은 유지
   if (findings.length) {
     console.log('');
@@ -312,8 +338,8 @@ async function init(o) {
   // 설치 단계 — Enter 만 치면 기본값
   if (interactive) {
     const items = [
-      { key: 'skills', label: 'Vendor tdd + ticket-review', note: 'the two mattpocock skills implement calls, pinned into .claude/skills/ (code-review is renamed ticket-review); leaves implement·pr alone', on: o.skills },
-      { key: 'workflow', label: 'Also vendor the planning skills', note: `grill-with-docs · to-spec · to-tickets · retro + the 3 skills they call — for the spec → tickets → retro flow inside Claude Code${manifest ? (o.workflow ? ' (kept from the previous install)' : ' (previous install did not have them)') : ''}`, on: o.workflow },
+      { key: 'skills', label: 'Vendor tdd + ticket-review', note: 'the two mattpocock skills implement calls, pinned into .agents/skills/ with links from .claude/skills/ (code-review is renamed ticket-review); leaves implement·pr alone', on: o.skills },
+      { key: 'workflow', label: 'Also vendor the planning skills', note: `grill-with-docs · to-spec · to-tickets · retro + the 3 skills they call — for the spec → tickets → retro flow inside ${AGENTS[agent].label}${manifest ? (o.workflow ? ' (kept from the previous install)' : ' (previous install did not have them)') : ''}`, on: o.workflow },
       ...(kept ? [{ key: 'pruneSkills', label: 'Remove the other skills an earlier install vendored', note: `${kept.names.length > 6 ? `${kept.names.slice(0, 6).join(' · ')} +${kept.names.length - 6} more` : kept.names.join(' · ')} — off: keep them and sync them with the rest; on: delete them`, on: o.pruneSkills }] : []),
       ...plugins.map((f) => ({ key: `disable:${f.id}`, label: `Disable plugin ${f.id} for this repo`, note: 'writes enabledPlugins=false to .claude/settings.json so the vendored copies are the only ones that load', on: true })),
       { key: 'github', label: 'Create the 6 GitHub labels', note: 'ready-for-agent · in-review …', on: o.github },
@@ -328,10 +354,10 @@ async function init(o) {
   if (backend !== 'orca') o.orca = false;
 
   console.log('');
-  say(`Backend: ${c.cyan(BACKENDS[backend].label)}`);
+  say(`Backend: ${c.cyan(BACKENDS[backend].label)} · Agent: ${c.cyan(AGENTS[agent].label)}`);
 
   // install.sh 가 먼저 돈다 — 옛 .agent-loop/ (.orca-loop/) 를 .ticket-loop/ 로 옮기는 마이그레이션이 거기 있어서, loop.env 는 그 뒤에 쓴다
-  const args = [INSTALL_SH, '--ref', o.ref || kitRef()];
+  const args = [INSTALL_SH, '--ref', o.ref || kitRef(), '--agent', agent];
   if (!o.skills) args.push('--no-skills');
   if (o.skills) args.push(o.workflow ? '--workflow-skills' : '--no-workflow-skills');
   if (o.forceSkills) args.push('--force-skills');
@@ -342,7 +368,7 @@ async function init(o) {
   const r = spawnSync('bash', args, { cwd: root, stdio: 'inherit', env: { ...process.env, KIT_DIR: PKG_ROOT, KIT_COMMIT: commit } });
   if (r.error) die(`Failed to run install.sh: ${r.error.message}`);
   if (r.status !== 0) process.exit(r.status == null ? 1 : r.status);
-  say(writeLoopEnv(root, backend));
+  say(writeLoopEnv(root, backend, agent));
 
   // 이 저장소에서 플러그인 끄기(사용자가 체크리스트에서 골랐을 때만). 프로젝트 범위라 .claude/settings.json 에 남아 팀이 같이 받는다
   for (const f of plugins) {
@@ -355,8 +381,8 @@ async function init(o) {
 
 // 충돌 검사는 bash 스크립트(files/scripts/sync-mattpocock-skills.sh --check --json)가 한다 — 설치기 두 경로가 같은 판정을 내도록.
 // 반환: [{severity, kind, detail, fix, id?, names?}]. 스크립트가 없거나 깨지면 빈 목록(검사 실패가 설치를 막지는 않는다)
-function skillConflicts(root, workflow) {
-  const r = run('bash', [path.join(PKG_ROOT, 'files', 'scripts', 'sync-mattpocock-skills.sh'), '--check', '--json', workflow ? '--workflow' : '--no-workflow'], { cwd: root });
+function skillConflicts(root, workflow, agent) {
+  const r = run('bash', [path.join(PKG_ROOT, 'files', 'scripts', 'sync-mattpocock-skills.sh'), '--check', '--json', '--agent', agent, workflow ? '--workflow' : '--no-workflow'], { cwd: root });
   let list;
   try { list = JSON.parse(r.out); } catch { return []; }
   if (!Array.isArray(list)) return [];

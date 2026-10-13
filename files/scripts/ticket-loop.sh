@@ -666,7 +666,7 @@ close_spec_if_done() {
 suggest_retro() {
   local spec report skill="${SKILL_PREFIX:-/}retro" log_src
   [[ -n "${CLOSED_SPECS// /}" ]] || return 0
-  [[ -d "${ROOT:-.}/.claude/skills/retro" ]] || skill="${skill}(이 저장소에는 아직 없다 — 키트 설치 때 --workflow-skills 로 들일 수 있다)"
+  [[ -d "${ROOT:-.}/.agents/skills/retro" || -d "${ROOT:-.}/.claude/skills/retro" ]] || skill="${skill}(이 저장소에는 아직 없다 — 키트 설치 때 --workflow-skills 로 들일 수 있다)"
   log_src="$LOG_FILE"; [[ "$LOG_FILE" != "/dev/null" ]] || log_src="(로그를 꺼 둬서 없음)"
   for spec in $CLOSED_SPECS; do
     report="$REPORT_DIR/spec-${spec}.html"

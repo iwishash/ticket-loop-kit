@@ -1,0 +1,6 @@
+# ticket-loop-kit 관리 파일: install.sh가 덮어쓴다. Codex용 메타데이터 — Claude Code는 SKILL.md의 frontmatter만 읽는다.
+interface:
+  display_name: "Set up the ticket loop"
+  short_description: "Fill in this repo's ticket-loop settings after installing ticket-loop-kit and open a PR"
+policy:
+  allow_implicit_invocation: false   # Claude Code의 disable-model-invocation: true 에 해당 — $setup-ticket-loop 로만 부른다
