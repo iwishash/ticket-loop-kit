@@ -50,6 +50,7 @@ disable-model-invocation: true
 | `POST_MERGE_CMD` 등 | 병합 뒤 검증 명령·복사 파일, 또는 끔 |
 | `POST_MERGE_PORT` | 그 명령이 띄우는 고정 포트(예 `next dev`의 3000). 루프가 병합마다 비기를 기다리고, 시작할 때 차 있으면 알린다. 없으면 비움 |
 | `REPORT_DIR` | 스펙 리포트 HTML 디렉터리. 기본 `docs/loop-reports`를 바꿀 이유가 있을 때만 |
+| `REPORT_OPEN` | 리포트를 쓴 뒤 기본 브라우저로 열기. 기본 켬(1). 끌 이유가 있을 때만 `0` — SSH 세션·화면 없는 Linux에서는 값과 무관하게 열지 않는다 |
 | `CI_SKIP_REGEX` / `CI_SKIP_CMD` | 워크플로에 경로 필터(`paths`/`paths-ignore`)가 있을 때만. 루프가 그 필터를 따라 하도록 알려 주는 값이다 — 단순 제외 목록이면 정규식, 순서 규칙이 있으면 파일 목록을 stdin으로 받아 `run`/`skip`을 찍는 저장소 스크립트. 필터가 없으면 둘 다 비움 |
 
 ## 4. 쓰기

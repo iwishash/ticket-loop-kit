@@ -418,6 +418,24 @@ out="$(retro_case "" "reports" "$S")" || fail "suggest_retro(빈) 실패"
 grep -c -E '^suggest_retro$|; suggest_retro; ' "$KIT/files/scripts/ticket-loop.sh" | grep -qx 2 || fail "suggest_retro 호출이 두 곳(티켓 없음·정상 종료)이 아니다"
 echo "ok  회고 안내"
 
+# 리포트 자동 열기 — 가짜 open·xdg-open으로 세 경우를 본다: REPORT_OPEN=0 → 안 연다, SSH 세션 → 안 연다, 켬 → 연다
+O="$T/open"; mkdir -p "$O"
+for b in open xdg-open; do printf '#!/bin/bash\necho "%s $*" >> "$OPEN_LOG"\n' "$b" > "$O/$b"; chmod +x "$O/$b"; done
+sed -n '/^open_report() {/,/^}/p' "$KIT/files/scripts/ticket-loop.sh" > "$O/fn.sh"
+grep -q 'xdg-open' "$O/fn.sh" || fail "open_report 를 찾지 못함"
+open_case() {  # $1 환경 설정(bash 문장), $2 기대(opened|skipped)
+  : > "$O/open.log"
+  (cd "$O" && env -u SSH_CONNECTION -u SSH_TTY PATH="$O:$PATH" OPEN_LOG="$O/open.log" DISPLAY=:0 \
+     bash -c "set -euo pipefail; REPORT_OPEN=1; $1; source fn.sh; open_report /x/spec-7.html") || fail "open_report 실패($2)"
+  if [[ "$2" == opened ]]; then grep -q ' /x/spec-7.html$' "$O/open.log" || fail "리포트를 열지 않음"
+  else [[ ! -s "$O/open.log" ]] || fail "열면 안 되는 경우($1)에 열음"; fi
+}
+open_case 'REPORT_OPEN=0' skipped
+open_case 'export SSH_CONNECTION="1.2.3.4 1 5.6.7.8 22"' skipped
+open_case ':' opened
+grep -q '^    open_report "\$out"$' "$KIT/files/scripts/ticket-loop.sh" || fail "리포트 생성 성공 분기에서 open_report 를 부르지 않는다"
+echo "ok  리포트 자동 열기"
+
 # 템플릿 자리표: 무거운 테스트는 스위트와 파일 하나 실행 명령 두 자리표로, 설정 스킬의 결정 표가 둘 다 묻는다
 for f in .ticket-loop/worker-rules.md .agents/skills/implement/SKILL.md .agents/skills/pr/SKILL.md; do
   grep -q '__HEAVY_TEST_FILE__' "$KIT/templates/$f" || fail "templates/$f 에 __HEAVY_TEST_FILE__ 없음"

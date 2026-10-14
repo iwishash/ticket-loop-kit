@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.8.2 — 2026-10-14
+
+- 스펙 리포트 자동 열기. `--parent` 실행이 리포트를 쓰면 기본 브라우저로 연다(macOS `open`, Linux `xdg-open`). 리포트는 사람이 보라고 만든 것이라 경로를 찾아 여는 한 단계를 줄였다. SSH 세션(`SSH_CONNECTION`·`SSH_TTY`)이나 `DISPLAY`·`WAYLAND_DISPLAY`가 없는 Linux에서는 열지 않고, 열기 실패는 루프 결과를 바꾸지 않는다. 새 변수 `REPORT_OPEN`(기본 1, `0`이면 끔). `--dry-run`과 `die`로 멈춘 실행은 리포트를 쓰지 않으니 열지도 않는다. `tests/smoke.sh`가 `open_report`의 세 경우(끔 → 안 연다, SSH → 안 연다, 켬 → 연다)를 가짜 `open`으로 본다. `setup-ticket-loop` 결정 표와 `docs/loop-reports/README.md` 템플릿에 한 줄
+- 가이드북: 2.5절 cmux·tmux 백엔드(루프가 백엔드에 시키는 아홉 가지 일의 Orca/cmux/tmux 대응표, 실행 조건과 메인 체크아웃 신뢰, `WORKTREE_SETUP_CMD`, 훅 기반 idle의 성질, 실측), 4장 끝 Windows 절(WSL2 + tmux 백엔드 W1~W5, Windows용 Orca는 선택), 본문의 Orca 전용 표현을 백엔드 기준으로, 3장 상태 표에 cmux lane·tmux 창 이름, 6장 변수 표에 `BACKEND`·`CMUX_CLI`·`TMUX_CLI`·`TMUX_SESSION`·`WORKTREE_DIR`·`WORKTREE_SETUP_CMD`·`REPORT_OPEN`, 10장 복구에 cmux·tmux 경우, FAQ 두 문항, 부록 A에 cmux·tmux 명령, 부록 D 재생성, 부록 E 두 행. PDF 재빌드
+
 ## 0.8.1 — 2026-10-14
 
 저장소를 공개로 전환했다(2026-10-14). LICENSE(MIT) 추가, `package.json`의 license를 `UNLICENSED`에서 `MIT`로.

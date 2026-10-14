@@ -5,4 +5,5 @@
 - 같은 스펙은 같은 파일을 덮어쓴다 — 끝난 스펙의 리포트를 다시 뽑으려면 `bash scripts/ticket-loop.sh --parent <N>`을 한 번 더 돌린다(남은 티켓이 없으면 리포트만 만들고 끝난다)
 - 루프는 커밋하지 않는다. 사람이 보고 PR로 올린다
 - 경과 시간 · 모델의 원자료는 기계별 `.ticket-loop/tickets.jsonl`(커밋 안 함)이다. 기록이 없는 티켓(다른 PC · 사람이 처리 · 이 기능 이전)은 PR 생성→병합 시간으로 대신하고 그렇게 표시하며 모델은 "not recorded"로 나온다
+- 리포트를 쓰면 기본 브라우저로 연다(macOS `open`, Linux `xdg-open`). SSH 세션이나 화면 없는 Linux에서는 열지 않는다. 끄려면 `.ticket-loop/loop.env`에 `REPORT_OPEN=0`
 - 위치를 바꾸려면 `.ticket-loop/loop.env`에 `REPORT_DIR`, `RECORDS_FILE`을 적는다

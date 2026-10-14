@@ -14,7 +14,7 @@ set -euo pipefail
 #   6. 워크트리·브랜치를 지우고, 티켓 요약 한 줄을 로그에, 기록 한 줄을 RECORDS_FILE에 남기고, 다음 티켓으로 간다
 #      (자동 선택이면 대상 재계산)
 #   7. `--parent` 실행이 정상 종료하면 하위 이슈가 모두 닫힌 스펙 이슈를 닫고(아직 열려 있으면), 스펙 리포트 HTML(티켓별 결과·경과 시간·
-#      모델 표)을 REPORT_DIR/spec-<N>.html에 쓴다
+#      모델 표)을 REPORT_DIR/spec-<N>.html에 쓰고 브라우저로 연다(REPORT_OPEN=0이면 열지 않음)
 #   8. 이번 실행에서 끝난 스펙이 있으면 회고를 권하는 안내 한 줄을 남긴다(/retro로 읽을 자료 안내). 권고일 뿐 아무것도 실행하지 않는다 —
 #      회고는 사람이 후보를 보고 고르는 단계라 무인으로 돌리지 않는다
 #
@@ -75,6 +75,7 @@ set -euo pipefail
 #   LOG_FILE            진행 로그 파일 (기본 .ticket-loop/loop-MMDD.log, /dev/null이면 끔)
 #   RECORDS_FILE        티켓별 기록 JSONL (기본 .ticket-loop/tickets.jsonl, 기계별 — 커밋하지 않는다)
 #   REPORT_DIR          스펙 리포트 HTML 디렉터리 (기본 docs/loop-reports — 리포트는 사람이 PR로 커밋)
+#   REPORT_OPEN         리포트를 쓴 뒤 브라우저로 여는지 (기본 1). 0이면 안 연다. SSH 세션·화면 없는 Linux에서는 값과 무관하게 안 연다
 #   MODEL_REGEX         워커 터미널에서 모델 이름을 뽑는 정규식(ERE) (claude: 상태줄·배너의 "Opus 5.5" 꼴, codex: "gpt-5.1-codex" 꼴).
 #                       못 찾으면 리포트에 not recorded
 #
@@ -123,6 +124,7 @@ POST_MERGE_WORKTREE="${POST_MERGE_WORKTREE:-}"
 LOG_FILE="${LOG_FILE:-.ticket-loop/loop-$(date +%m%d).log}"
 RECORDS_FILE="${RECORDS_FILE:-.ticket-loop/tickets.jsonl}"
 REPORT_DIR="${REPORT_DIR:-docs/loop-reports}"
+REPORT_OPEN="${REPORT_OPEN:-1}"
 # ----- 에이전트 프리셋 -----
 # AGENT가 기동 명령·배너·모델 정규식·스킬 접두사의 기본값을 정한다. loop.env나 환경변수로 준 값이 이긴다.
 #   claude  Claude Code. 스킬은 /이름. 모델명은 상태줄·배너의 "Opus 5.5" 꼴
@@ -925,7 +927,18 @@ def post: if . == "건너뜀" then "skipped"
   + "</tbody></table></div><footer>Elapsed is wall-clock time from when the loop created the worktree to when merge and cleanup finished. Tickets with no loop record use PR created→merged time instead.</footer></main></body></html>"
 JQ
 
-# --parent 실행이 정상 종료하면 스펙 리포트 HTML을 쓴다. 생성 실패는 루프 결과를 바꾸지 않는다(로그만).
+# 리포트를 기본 브라우저로 연다 — 리포트는 사람이 보라고 만든 것이라 경로를 찾아 여는 한 단계를 줄인다. REPORT_OPEN=0이면 끔.
+# 화면이 없는 곳(SSH 세션, DISPLAY 없는 Linux)에서는 열지 않고, 열기 실패는 루프 결과를 바꾸지 않는다(notify와 같은 태도).
+open_report() {
+  [[ "$REPORT_OPEN" == 1 && -z "${SSH_CONNECTION:-}${SSH_TTY:-}" ]] || return 0
+  if [[ "$(uname -s)" == Darwin ]] && command -v open >/dev/null 2>&1; then
+    open "$1" >/dev/null 2>&1 || true
+  elif [[ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]] && command -v xdg-open >/dev/null 2>&1; then
+    xdg-open "$1" >/dev/null 2>&1 || true
+  fi
+}
+
+# --parent 실행이 정상 종료하면 스펙 리포트 HTML을 쓰고 브라우저로 연다. 생성 실패는 루프 결과를 바꾸지 않는다(로그만).
 # 리포트는 커밋하지 않는다 — 사람이 보고 PR로 올린다(루프가 도는 동안 기본 브랜치 직접 커밋 금지).
 write_spec_report() {
   [[ -n "$PARENT" ]] || return 0
@@ -941,6 +954,7 @@ write_spec_report() {
     && jq -rn --argjson spec "$spec" --argjson issues "$issues" --argjson prs "$prs" --argjson recs "$recs" \
          --arg prefix "$BRANCH_PREFIX" --arg now "$(date '+%Y-%m-%d %H:%M')" "$REPORT_JQ" > "$out"; then
     log "스펙 #${PARENT} 리포트: ${out#"$ROOT"/} — 확인 뒤 PR로 커밋하세요"
+    open_report "$out"
   else
     log "스펙 #${PARENT} 리포트 생성 실패 — ticket-loop.sh --parent ${PARENT}를 다시 돌리면 다시 만든다"
   fi
