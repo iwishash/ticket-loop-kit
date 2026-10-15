@@ -32,10 +32,11 @@ set -euo pipefail
 # 저장소 안에서 실행.
 # 진행 로그는 기본으로 .ticket-loop/loop-MMDD.log에 덧붙인다(.gitignore에 /.ticket-loop/*.log 권장).
 # PR을 기다리는 동안은 워크트리를 PROGRESS_SEC마다 들여다봐 브랜치 생성·첫 파일 수정·새 커밋을 바로, 그 사이 변경 파일 목록이 달라졌으면
-# HEARTBEAT_SEC마다 "작업 중" 한 줄을 찍는다. 지난번과 같은 내용이면 찍지 않는다.
+# HEARTBEAT_SEC마다 "working" 한 줄을 찍는다. 지난번과 같은 내용이면 찍지 않는다.
+# 터미널·로그 파일에 찍는 문구는 영어다(워커 프롬프트·GitHub 코멘트·백엔드 상태 코멘트는 그대로).
 # 터미널에는 단계별로 색을 입힌다(티켓 제목·단계·성공·주의·오류). stderr가 터미널이 아니거나 NO_COLOR가 있으면 맨글자고,
 # 로그 파일에는 언제나 색 코드 없이 쓴다.
-# 티켓마다 "#N 요약: …" 한 줄(벽시계·PR·CI 소요·수리·idle 오판·병합 뒤 검증)을 남겨 /retro가 읽는다.
+# 티켓마다 "#N summary: …" 한 줄(벽시계·PR·CI 소요·수리·idle 오판·병합 뒤 검증)을 남겨 /retro가 읽는다.
 # 같은 내용 + 모델을 RECORDS_FILE(JSONL)에도 남기고, 스펙 리포트가 GitHub의 PR과 합쳐 표로 만든다.
 # 저장소별 설정은 .ticket-loop/loop.env에 둔다(있으면 읽는다). 그 파일은 `VAR="${VAR:-값}"` 꼴로 써서
 # 실행할 때 준 환경변수가 이기게 한다. 예: CI_SKIP_REGEX="${CI_SKIP_REGEX:-^docs/}" POST_MERGE_PORT="${POST_MERGE_PORT:-3000}"
@@ -80,7 +81,7 @@ set -euo pipefail
 #                       절대 경로로 굳힌다 — 병합 뒤 검증 로그(post-merge-N.log)도 같은 디렉터리에 둔다
 #   PROGRESS_SEC        PR·수리를 기다리는 동안 워크트리(git)를 들여다보는 간격 (기본 60초). 브랜치 생성·첫 파일 수정·새 커밋(제목 그대로)을
 #                       그때 바로 한 줄씩 찍는다. 0이면 끄고 전처럼 idle 대기 상한(10분)마다만 돌아온다
-#   HEARTBEAT_SEC       커밋은 없지만 변경 파일 목록이 지난 줄과 달라졌을 때 "작업 중 — N분 경과, 커밋 안 된 변경 …" 한 줄을 찍는 최소 간격
+#   HEARTBEAT_SEC       커밋은 없지만 변경 파일 목록이 지난 줄과 달라졌을 때 "working — Nm elapsed, N uncommitted files …" 한 줄을 찍는 최소 간격
 #                       (기본 300초). 목록이 같으면 아무리 지나도 찍지 않는다 — 같은 내용을 되풀이하지 않는다
 #   RECORDS_FILE        티켓별 기록 JSONL (기본 .ticket-loop/tickets.jsonl, 기계별 — 커밋하지 않는다). 상대 경로는 저장소 루트 기준
 #   REPORT_DIR          스펙 리포트 HTML 디렉터리 (기본 docs/loop-reports — 리포트는 사람이 PR로 커밋). 상대 경로는 저장소 루트 기준
@@ -249,21 +250,21 @@ notify() {
   fi
 }
 # 티켓 처리 중(CUR_N이 있을 때) 멈추면 그 티켓을 "stopped"로 기록해 스펙 리포트에 시도로 남긴다
-die() { log err "ERROR: $*"; [[ -z "${CUR_N:-}" ]] || record_ticket "stopped" "$*"; notify "티켓 루프 중단" "$*"; exit 1; }
+die() { log err "ERROR: $*"; [[ -z "${CUR_N:-}" ]] || record_ticket "stopped" "$*"; notify "Ticket loop stopped" "$*"; exit 1; }
 fmt_epoch() { date -r "$1" '+%H:%M:%S' 2>/dev/null || date -d "@$1" '+%H:%M:%S'; }   # macOS / Linux
 
 for tool in gh jq git; do
-  command -v "$tool" >/dev/null 2>&1 || die "${tool} 이(가) 없습니다."
+  command -v "$tool" >/dev/null 2>&1 || die "${tool} is not installed."
 done
 [[ -n "$AGENT_RESTART_CMD" && -n "$AGENT_BANNER_REGEX" ]] \
-  || die "AGENT=${AGENT} 에는 프리셋이 없습니다 (claude | codex). AGENT_RESTART_CMD·AGENT_BANNER_REGEX 를 .ticket-loop/loop.env 에 적으세요."
+  || die "AGENT=${AGENT} has no preset (claude | codex). Set AGENT_RESTART_CMD and AGENT_BANNER_REGEX in .ticket-loop/loop.env."
 
 ROOT="$(git rev-parse --show-toplevel)"
 MAIN_WT="$(git worktree list --porcelain | sed -n '1s/^worktree //p')"
 # 루프는 저장소당 하나만 — 두 루프가 같은 티켓을 집지 않게 한다
 LOCK_DIR="$(cd "$ROOT" && git rev-parse --path-format=absolute --git-common-dir)/ticket-loop.lock"
 if [[ $DRY_RUN -eq 0 ]]; then
-  mkdir "$LOCK_DIR" 2>/dev/null || die "다른 루프가 실행 중입니다 (${LOCK_DIR}). 실행 중인 루프가 없으면(pgrep -fl ticket-loop) 그 디렉터리를 지우세요."
+  mkdir "$LOCK_DIR" 2>/dev/null || die "Another loop is running (${LOCK_DIR}). If no loop is running (pgrep -fl ticket-loop), remove that directory."
   trap 'rmdir "$LOCK_DIR" 2>/dev/null || true' EXIT
 fi
 
@@ -318,10 +319,10 @@ pick_targets() {
   local n assignees title
   while IFS=$'\t' read -r n assignees title; do
     [[ -n "${n}" ]] || continue
-    if [[ "${assignees}" != "0" ]]; then log "skip #${n} (${title}): 담당자 있음(진행 중이거나 사람이 맡음)"; continue; fi
-    if [[ "$(sub_issue_count "${n}")" != "0" ]]; then log "skip #${n} (${title}): 하위 이슈가 있는 스펙 이슈"; continue; fi
-    if [[ "$(blocked_by "${n}")" != "0" ]]; then log "skip #${n} (${title}): 선행 이슈 열림"; continue; fi
-    if [[ -n "$(open_pr_for "${n}")" ]]; then log "skip #${n} (${title}): PR 이미 열림"; continue; fi
+    if [[ "${assignees}" != "0" ]]; then log "skip #${n} (${title}): has an assignee (in progress or taken by a person)"; continue; fi
+    if [[ "$(sub_issue_count "${n}")" != "0" ]]; then log "skip #${n} (${title}): spec issue with sub-issues"; continue; fi
+    if [[ "$(blocked_by "${n}")" != "0" ]]; then log "skip #${n} (${title}): blocked by an open issue"; continue; fi
+    if [[ -n "$(open_pr_for "${n}")" ]]; then log "skip #${n} (${title}): PR already open"; continue; fi
     printf '%s\t%s\n' "${n}" "${title}"
   done < <(candidates)
 }
@@ -348,7 +349,7 @@ backend_interrupt()       { "${BACKEND}_interrupt" "$@"; }
 backend_wait_idle()       { "${BACKEND}_wait_idle" "$@"; }
 backend_tail()            { "${BACKEND}_tail" "$@"; }
 backend_set_status()      { "${BACKEND}_set_status" "$@"; }
-case "$BACKEND" in orca) BACKEND_NAME=Orca ;; cmux|tmux) BACKEND_NAME="$BACKEND" ;; *) die "BACKEND=${BACKEND} 를 모릅니다 (orca | cmux | tmux)." ;; esac
+case "$BACKEND" in orca) BACKEND_NAME=Orca ;; cmux|tmux) BACKEND_NAME="$BACKEND" ;; *) die "Unknown BACKEND=${BACKEND} (orca | cmux | tmux)." ;; esac
 
 # 프롬프트를 셸 명령 인자로 넘길 때는 파일을 거친다(따옴표·백틱이 섞여도 안전). 파일은 티켓이 끝나도 지우지 않는다(디버그용, tmp)
 prompt_file() { local f; f="$(mktemp "${TMPDIR:-/tmp}/ticket-loop-prompt-$1.XXXXXX")"; printf '%s' "$2" > "$f"; printf '%s' "$f"; }
@@ -359,13 +360,13 @@ agent_launch_cmd() { printf '%s "$(cat %q)"' "$AGENT_RESTART_CMD" "$1"; }   # �
 orca_json() { "$ORCA_CLI" "$@" --json; }
 
 orca_check() {
-  command -v "$ORCA_CLI" >/dev/null 2>&1 || die "Orca CLI(${ORCA_CLI})가 없습니다 (Orca Settings → General → Orca CLI)."
+  command -v "$ORCA_CLI" >/dev/null 2>&1 || die "Orca CLI (${ORCA_CLI}) not found (Orca Settings → General → Orca CLI)."
   # canonicalKey는 보통 github.com/<owner>/<repo>지만, SSH 별칭 호스트(~/.ssh/config의 github.com-<계정>)를 쓰면
   # github.com-<계정>/<owner>/<repo>가 된다(2026-10-12 실측). 호스트는 보지 않고 /<owner>/<repo>로 끝나는지만 본다
   REPO_ID="$("$ORCA_CLI" repo list --json \
     | jq -r --arg suffix "/${OWNER_REPO}" \
         '.result.repos[] | select((.gitRemoteIdentity.canonicalKey // "") | endswith($suffix)) | .id' | head -n1)"
-  [[ -n "$REPO_ID" ]] || die "Orca에 ${OWNER_REPO} 저장소가 없습니다. '${ORCA_CLI} repo add --path ${ROOT} --json'으로 등록하세요."
+  [[ -n "$REPO_ID" ]] || die "Repository ${OWNER_REPO} is not registered in Orca. Register it with '${ORCA_CLI} repo add --path ${ROOT} --json'."
 }
 
 orca_worktree_create() {
@@ -373,11 +374,11 @@ orca_worktree_create() {
   created="$(orca_json worktree create --repo "id:$REPO_ID" --name "${BRANCH_PREFIX}${n}" --no-parent \
     --base-branch "origin/${BASE_BRANCH}" --issue "${n}" --agent "$AGENT" \
     --prompt "$prompt" --comment "티켓 루프: ${SKILL_PREFIX}implement ${n} 진행 중")"
-  jq -e '.ok == true' <<<"$created" >/dev/null || die "워크트리 생성 실패: $(jq -c '.error' <<<"$created")"
+  jq -e '.ok == true' <<<"$created" >/dev/null || die "Worktree creation failed: $(jq -c '.error' <<<"$created")"
   WT="$(jq -r '.result.worktree.id' <<<"$created")"
   WT_PATH="${WT#*::}"
   HANDLE="$(jq -r '.result.agentTerminalHandle // .result.startupTerminal.handle // empty' <<<"$created")"
-  [[ -n "${HANDLE}" ]] || die "에이전트 터미널 핸들을 받지 못했습니다 (${WT})"
+  [[ -n "${HANDLE}" ]] || die "No agent terminal handle returned (${WT})"
   # Orca가 워크트리용으로 만든 브랜치(설정에 따라 `issue-N` 또는 `<git 사용자>/issue-N`) — 워커가 브랜치를 바꾸기 전에 기록한다
   WT_BRANCH="$(git -C "$WT_PATH" rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
 }
@@ -406,7 +407,7 @@ orca_wait_idle() {
   for i in $(seq 1 "$TERMINAL_RETRY"); do
     sleep "$TERMINAL_RETRY_SEC"
     if orca_json terminal read --terminal "$1" 2>/dev/null | jq -e '.ok == true' >/dev/null 2>&1; then
-      log warn "터미널 $1: wait 응답 이상(${code:-빈 출력}) — 터미널은 살아 있어 계속 기다린다"
+      log warn "terminal $1: unexpected wait response (${code:-empty output}) — terminal is alive, keep waiting"
       return 1
     fi
   done
@@ -437,7 +438,7 @@ claude_trust_check() {
   [[ -f "$cfg" ]] || return 0
   trusted="$(jq -r --arg p "$MAIN_WT" '.projects[$p].hasTrustDialogAccepted // false' "$cfg" 2>/dev/null)" || return 0
   [[ "$trusted" == true ]] \
-    || die "Claude Code가 ${MAIN_WT} 를 아직 신뢰하지 않습니다 — 워커가 새 워크트리에서 신뢰 대화상자에 멈춥니다. 메인 체크아웃에서 claude 를 한 번 열어 'Yes, I trust this folder' 를 고르세요."
+    || die "Claude Code does not trust ${MAIN_WT} yet — workers would stall at the trust dialog in a new worktree. Open claude once in the main checkout and choose 'Yes, I trust this folder'."
 }
 
 # 워크트리는 루프가 git으로 만든다 (Orca는 orca worktree create가 한다)
@@ -445,14 +446,14 @@ claude_trust_check() {
 loop_worktree_add() {
   local n="$1" path
   path="${WORKTREE_DIR}/${BRANCH_PREFIX}${n}"
-  [[ ! -e "$path" ]] || die "워크트리 경로가 이미 있습니다: ${path} (지난 실행의 잔재면 'git worktree remove --force' 뒤 다시)"
+  [[ ! -e "$path" ]] || die "Worktree path already exists: ${path} (if left over from a previous run, 'git worktree remove --force' it and retry)"
   mkdir -p "$WORKTREE_DIR"
   git -C "$ROOT" branch -D "${BRANCH_PREFIX}${n}" >/dev/null 2>&1 || true
-  git -C "$ROOT" worktree add -q -b "${BRANCH_PREFIX}${n}" "$path" "origin/${BASE_BRANCH}" || die "git worktree add 실패 (${path})"
+  git -C "$ROOT" worktree add -q -b "${BRANCH_PREFIX}${n}" "$path" "origin/${BASE_BRANCH}" || die "git worktree add failed (${path})"
   if [[ -n "$WORKTREE_SETUP_CMD" ]]; then
-    log step "#${n}: 워크트리 준비 — ${WORKTREE_SETUP_CMD}"
+    log step "#${n}: worktree setup — ${WORKTREE_SETUP_CMD}"
     (cd "$path" && LOOP_ROOT_PATH="$MAIN_WT" LOOP_WORKTREE_PATH="$path" bash -c "$WORKTREE_SETUP_CMD") \
-      || die "#${n}: WORKTREE_SETUP_CMD 실패 (${path})"
+      || die "#${n}: WORKTREE_SETUP_CMD failed (${path})"
   fi
   WT_PATH="$path"
   WT_BRANCH="${BRANCH_PREFIX}${n}"
@@ -474,9 +475,9 @@ loop_worktree_add() {
 cmux_j() { CMUX_QUIET=1 "$CMUX_CLI" "$@" --json; }
 
 cmux_check() {
-  [[ -x "$CMUX_CLI" ]] || command -v "$CMUX_CLI" >/dev/null 2>&1 || die "cmux CLI(${CMUX_CLI})가 없습니다 (CMUX_CLI=경로)."
+  [[ -x "$CMUX_CLI" ]] || command -v "$CMUX_CLI" >/dev/null 2>&1 || die "cmux CLI (${CMUX_CLI}) not found (set CMUX_CLI=<path>)."
   "$CMUX_CLI" identify --json >/dev/null 2>&1 \
-    || die "cmux 소켓에 닿지 못했습니다. cmux 터미널 안에서 실행하거나 소켓 모드를 바꾸세요 ('${CMUX_CLI} socket-status --json')."
+    || die "Cannot reach the cmux socket. Run inside a cmux terminal or change the socket mode ('${CMUX_CLI} socket-status --json')."
   [[ -n "$WORKTREE_DIR" ]] || WORKTREE_DIR="$HOME/.cache/ticket-loop/${OWNER_REPO//\//-}/worktrees"
   claude_trust_check
 }
@@ -486,10 +487,10 @@ cmux_worktree_create() {
   loop_worktree_add "$n"
   pf="$(prompt_file "$n" "$prompt")"
   out="$(cmux_j workspace create --name "${BRANCH_PREFIX}${n}" --cwd "$WT_PATH" --focus false --id-format uuids \
-           --command "$(agent_launch_cmd "$pf")" 2>/dev/null)" || die "cmux workspace create 실패"
+           --command "$(agent_launch_cmd "$pf")" 2>/dev/null)" || die "cmux workspace create failed"
   WT="$(jq -r '.workspace_id // empty' <<<"$out" 2>/dev/null || true)"
   HANDLE="$(jq -r '.surface_id // empty' <<<"$out" 2>/dev/null || true)"
-  [[ -n "$WT" && -n "$HANDLE" ]] || die "cmux workspace create 응답에서 workspace_id/surface_id를 찾지 못했습니다: ${out}"
+  [[ -n "$WT" && -n "$HANDLE" ]] || die "workspace_id/surface_id missing from cmux workspace create response: ${out}"
 }
 
 cmux_worktree_remove() {
@@ -526,7 +527,7 @@ cmux_wait_idle() {
       *)
         if cmux_alive "$handle"; then
           fails=0
-          [[ $warned -eq 1 ]] || { log warn "터미널 ${handle}: lifecycle 빈 값 — 화면은 읽혀 계속 기다린다"; warned=1; }
+          [[ $warned -eq 1 ]] || { log warn "terminal ${handle}: empty lifecycle — screen is readable, keep waiting"; warned=1; }
         else
           fails=$((fails + 1)); [[ $fails -lt $TERMINAL_RETRY ]] || return 3
           sleep "$TERMINAL_RETRY_SEC"
@@ -564,8 +565,8 @@ cmux_set_status() {
 #   - 루프를 tmux 안에서 돌리면 그 세션에 창을 열고, 밖에서 돌리면 ticket-loop 세션을 만든다(TMUX_SESSION으로 바꾼다)
 
 tmux_check() {
-  command -v "$TMUX_CLI" >/dev/null 2>&1 || die "tmux(${TMUX_CLI})가 없습니다 (brew install tmux, 또는 TMUX_CLI=경로)."
-  case "$AGENT" in claude|codex) ;; *) die "tmux 백엔드는 AGENT=claude|codex 만 지원합니다 (idle을 에이전트 훅으로 알기 때문)." ;; esac
+  command -v "$TMUX_CLI" >/dev/null 2>&1 || die "tmux (${TMUX_CLI}) not found (brew install tmux, or set TMUX_CLI=<path>)."
+  case "$AGENT" in claude|codex) ;; *) die "The tmux backend supports only AGENT=claude|codex (idle is reported by agent hooks)." ;; esac
   [[ -n "$WORKTREE_DIR" ]] || WORKTREE_DIR="$HOME/.cache/ticket-loop/${OWNER_REPO//\//-}/worktrees"
   claude_trust_check
   if [[ -z "$TMUX_SESSION" ]]; then
@@ -579,7 +580,7 @@ tmux_check() {
     claude) AGENT_RESTART_CMD="$AGENT_RESTART_CMD --settings $(printf %q "$TMUX_DIR/claude-hooks.json")" ;;
     codex)  AGENT_RESTART_CMD="$AGENT_RESTART_CMD -c $(printf %q "notify=[\"bash\",\"$TMUX_DIR/hook.sh\",\"$TMUX_DIR/state\"]")" ;;
   esac
-  log "tmux 세션 ${TMUX_SESSION} — 워커 창은 '${TMUX_CLI} attach -t ${TMUX_SESSION}' 으로 본다"
+  log "tmux session ${TMUX_SESSION} — view worker windows with '${TMUX_CLI} attach -t ${TMUX_SESSION}'"
 }
 
 # 훅 스크립트와 Claude Code 훅 설정. 루프가 시작할 때마다 다시 쓴다(키트 버전을 따라간다)
@@ -619,16 +620,16 @@ tmux_worktree_create() {
   printf 'running\n' > "$TMUX_STATE_FILE"   # 지난 실행의 idle이 남아 있으면 기동 직후를 idle로 오판한다
   if "$TMUX_CLI" has-session -t "=${TMUX_SESSION}" 2>/dev/null; then
     out="$("$TMUX_CLI" new-window -d -t "=${TMUX_SESSION}:" -n "${BRANCH_PREFIX}${n}" -c "$WT_PATH" -P -F '#{window_id} #{pane_id}')" \
-      || die "tmux new-window 실패"
+      || die "tmux new-window failed"
   else
     out="$("$TMUX_CLI" new-session -d -s "$TMUX_SESSION" -n "${BRANCH_PREFIX}${n}" -c "$WT_PATH" -x 200 -y 50 -P -F '#{window_id} #{pane_id}')" \
-      || die "tmux new-session 실패"
+      || die "tmux new-session failed"
   fi
   WT="${out%% *}"; HANDLE="${out##* }"
-  [[ "$WT" == @* && "$HANDLE" == %* ]] || die "tmux 창 id를 받지 못했습니다: ${out}"
+  [[ "$WT" == @* && "$HANDLE" == %* ]] || die "No tmux window id returned: ${out}"
   pf="$(prompt_file "$n" "$prompt")"
   sleep 1   # 셸이 뜨기를 잠깐 기다린다
-  tmux_type "$HANDLE" "$(agent_launch_cmd "$pf")" || die "tmux send-keys 실패"
+  tmux_type "$HANDLE" "$(agent_launch_cmd "$pf")" || die "tmux send-keys failed"
 }
 
 tmux_worktree_remove() {
@@ -682,7 +683,7 @@ tmux_set_status() {
 
 terminal_idle() { backend_wait_idle "$@"; }
 terminal_tail() { backend_tail "$@"; }
-send_prompt() { backend_send "$1" "$2" || die "프롬프트 전송이 수락되지 않았습니다 (terminal $1)"; }
+send_prompt() { backend_send "$1" "$2" || die "Prompt was not accepted (terminal $1)"; }
 
 worker_prompt() {
   # 한 줄로 보낸다 — TUI에서는 줄바꿈이 곧 제출이다.
@@ -705,13 +706,13 @@ ensure_agent_started() {
       sleep 3
     done
     [[ $attempt -eq 1 ]] || break
-    log warn "#${n}: 에이전트가 뜨지 않음 — 터미널에서 다시 띄운다"
+    log warn "#${n}: agent did not start — relaunching in the terminal"
     promptfile="$(prompt_file "${n}" "$(worker_prompt "${n}")")"
     backend_interrupt "${handle}" || true   # Ctrl-C로 입력 줄 비움
     sleep 1
-    backend_type "${handle}" "$(agent_launch_cmd "${promptfile}")" || die "#${n}: 재기동 명령 전송 실패"
+    backend_type "${handle}" "$(agent_launch_cmd "${promptfile}")" || die "#${n}: failed to send the relaunch command"
   done
-  die "#${n}: 에이전트가 터미널 ${handle}에서 뜨지 않습니다"
+  die "#${n}: agent did not start in terminal ${handle}"
 }
 
 # ----- 진행 로그 -----
@@ -745,26 +746,26 @@ progress_check() {   # $1 티켓 번호. 바뀐 것이 있으면 한 줄씩, 없
   now="$(date +%s)"
   branch="$(git -C "$PROG_WT" rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
   if [[ -n "$branch" && "$branch" != "$PROG_BRANCH" ]]; then
-    log step "#${n}: 브랜치 ${branch}"; PROG_BRANCH="$branch"; noted=1
+    log step "#${n}: branch ${branch}"; PROG_BRANCH="$branch"; noted=1
   fi
   head="$(git -C "$PROG_WT" rev-parse HEAD 2>/dev/null || true)"
   if [[ -n "$head" && "$head" != "$PROG_HEAD" ]]; then
     # 지난 HEAD 이후의 커밋들. HEAD가 뒤로 갔거나(amend·reset) 지난 값이 없으면 지금 커밋 하나만
     commits="$(git -C "$PROG_WT" log --reverse --format='%h %s' "${PROG_HEAD:-$head}..${head}" 2>/dev/null || true)"
     [[ -n "$commits" ]] || commits="$(git -C "$PROG_WT" log -1 --format='%h %s' "$head" 2>/dev/null || true)"
-    while IFS= read -r line; do [[ -z "$line" ]] || log step "#${n}: 커밋 ${line}"; done <<<"$commits"
+    while IFS= read -r line; do [[ -z "$line" ]] || log step "#${n}: commit ${line}"; done <<<"$commits"
     PROG_HEAD="$head"; noted=1
   fi
   files="$(progress_dirty)"
   cnt=0; [[ -z "$files" ]] || cnt="$(printf '%s\n' "$files" | grep -c .)"
   names="$(printf '%s\n' "$files" | head -n 3 | paste -sd ',' - | sed 's/,/, /g')"
-  [[ $cnt -le 3 ]] || names="${names} 외 $((cnt - 3))"
+  [[ $cnt -le 3 ]] || names="${names} +$((cnt - 3)) more"
   if [[ $PROG_DIRTY_SEEN -eq 0 && $cnt -gt 0 ]]; then
-    log step "#${n}: 파일 수정 시작 — ${names}"; PROG_DIRTY_SEEN=1; noted=1
+    log step "#${n}: first file changes — ${names}"; PROG_DIRTY_SEEN=1; noted=1
   fi
   # 심장박동: 변경 파일 목록이 지난 줄과 다를 때만. 같은 목록(또는 빈 목록)이면 시간이 아무리 지나도 되풀이하지 않는다
   if [[ $noted -eq 0 && $cnt -gt 0 && "$files" != "$PROG_LAST_FILES" && $(( now - PROG_LAST_LOG )) -ge $HEARTBEAT_SEC ]]; then
-    log "#${n}: 작업 중 — $(( (now - PROG_START) / 60 ))분 경과, 커밋 안 된 변경 ${cnt}개 파일: ${names}"; noted=1
+    log "#${n}: working — $(( (now - PROG_START) / 60 ))m elapsed, ${cnt} uncommitted file$([[ $cnt -eq 1 ]] || echo s): ${names}"; noted=1
   fi
   [[ $noted -eq 0 ]] || { PROG_LAST_LOG="$now"; PROG_LAST_FILES="$files"; }
 }
@@ -799,7 +800,7 @@ wait_for_pr() {
       screen="$(terminal_tail "${handle}" | cksum | cut -d' ' -f1)"
       if [[ "$screen" != "$last_screen" ]]; then strikes=0; last_screen="$screen"; fi
       strikes=$((strikes + 1))
-      log warn "#${n}: 워커 idle, PR 없음 (${strikes}/${IDLE_STRIKES})"
+      log warn "#${n}: worker idle, no PR (${strikes}/${IDLE_STRIKES})"
       [[ ${strikes} -lt $IDLE_STRIKES ]] || return 1
       sleep "$IDLE_RECHECK_SEC"
     else
@@ -817,7 +818,7 @@ repair() {
     idle=0; terminal_idle "${handle}" "$wait_ms" || idle=$?
     [[ $idle -eq 3 ]] || [[ "$PROGRESS_SEC" -le 0 ]] || progress_check "${CUR_N}"
     [[ $idle -ne 0 ]] || return 0
-    [[ $idle -ne 3 ]] || die "${BACKEND_NAME} 터미널 ${handle} 에 닿지 못했습니다 (${BACKEND_NAME} 앱 종료?)"
+    [[ $idle -ne 3 ]] || die "Cannot reach ${BACKEND_NAME} terminal ${handle} (${BACKEND_NAME} app closed?)"
     [[ "$(date +%s)" -lt "$deadline" ]] || return 1
   done
 }
@@ -833,7 +834,7 @@ wait_checks_appear() {
 }
 
 ci_passed() {
-  wait_checks_appear "$1" || { log warn "PR #$1: 체크가 등록되지 않았습니다"; return 1; }
+  wait_checks_appear "$1" || { log warn "PR #$1: no checks were registered"; return 1; }
   gh pr checks "$1" --watch --fail-fast >/dev/null   # 끝날 때까지 블록, 실패 시 비0
 }
 
@@ -883,10 +884,10 @@ run_post_merge() {
   wt="$(post_merge_worktree_path)"
   if [[ ! -d "$wt/.git" && ! -f "$wt/.git" ]]; then
     mkdir -p "$(dirname "$wt")"
-    git -C "$ROOT" worktree add -q --detach "$wt" "origin/${BASE_BRANCH}" || { log warn "#${n}: 병합 뒤 검증 워크트리 생성 실패 (${wt})"; return 1; }
+    git -C "$ROOT" worktree add -q --detach "$wt" "origin/${BASE_BRANCH}" || { log warn "#${n}: failed to create the post-merge check worktree (${wt})"; return 1; }
   fi
   git -C "$ROOT" fetch -q origin "$BASE_BRANCH"
-  git -C "$wt" checkout -q --detach "origin/${BASE_BRANCH}" || { log warn "#${n}: 검증 워크트리를 origin/${BASE_BRANCH}으로 못 옮김"; return 1; }
+  git -C "$wt" checkout -q --detach "origin/${BASE_BRANCH}" || { log warn "#${n}: failed to move the check worktree to origin/${BASE_BRANCH}"; return 1; }
   for f in $POST_MERGE_COPY; do
     [[ ! -f "$MAIN_WT/$f" ]] || cp "$MAIN_WT/$f" "$wt/$f"
   done
@@ -896,10 +897,10 @@ run_post_merge() {
     # 조용히 기다렸다). 처음 한 번 점유 프로세스와 기한을 적는다 — 그 서버를 끄면 30초 안에 이어 간다
     if port_in_use "$POST_MERGE_PORT"; then
       holder="$(port_holder "$POST_MERGE_PORT")"
-      log warn "#${n}: 포트 ${POST_MERGE_PORT} 사용 중(${holder:-?}) — 비기를 $(fmt_epoch "$port_deadline")까지 기다린다. 그 서버를 끄면 바로 이어 간다"
+      log warn "#${n}: port ${POST_MERGE_PORT} in use (${holder:-?}) — waiting for it to free up until $(fmt_epoch "$port_deadline"). Stop that server and the loop continues right away"
     fi
     while port_in_use "$POST_MERGE_PORT"; do
-      [[ "$(date +%s)" -lt "$port_deadline" ]] || { log warn "#${n}: 포트 ${POST_MERGE_PORT}이 비지 않았다 — 루프가 도는 동안 그 포트를 비우거나 --skip-post-merge"; return 1; }
+      [[ "$(date +%s)" -lt "$port_deadline" ]] || { log warn "#${n}: port ${POST_MERGE_PORT} did not free up — keep it free while the loop runs, or use --skip-post-merge"; return 1; }
       sleep 30
     done
   fi
@@ -909,14 +910,14 @@ run_post_merge() {
   POST_MERGE_LOG="$logfile"
   mkdir -p "$(dirname "$logfile")"
   started="$(date +%s)"
-  log step "#${n}: 병합 뒤 검증 시작 (${wt}, 로그 ${logfile})"
+  log step "#${n}: post-merge check started (${wt}, log ${logfile})"
   if (cd "$wt" && bash -c "$POST_MERGE_CMD" >"$logfile" 2>&1); then
-    POST_MERGE_RESULT="통과 $(( $(date +%s) - started ))초"
-    log ok "#${n}: 병합 뒤 검증 ${POST_MERGE_RESULT}"
+    POST_MERGE_RESULT="passed in $(( $(date +%s) - started ))s"
+    log ok "#${n}: post-merge check ${POST_MERGE_RESULT}"
     return 0
   fi
-  POST_MERGE_RESULT="실패 $(( $(date +%s) - started ))초"
-  log warn "#${n}: 병합 뒤 검증 실패 — 꼬리 ---"; tail -n 40 "$logfile" | dim_lines || true
+  POST_MERGE_RESULT="failed in $(( $(date +%s) - started ))s"
+  log warn "#${n}: post-merge check failed — tail ---"; tail -n 40 "$logfile" | dim_lines || true
   return 1
 }
 
@@ -948,10 +949,10 @@ close_spec_if_done() {
   read -r total open <<<"$counts"
   [[ "${total:-0}" -gt 0 && "${open:-1}" -eq 0 ]] || return 0
   if gh issue close "$spec" --comment "하위 이슈 ${total}건이 모두 닫혀 완료 (ticket-loop)" >/dev/null 2>&1; then
-    log ok "스펙 #${spec}: 하위 이슈 ${total}건 모두 닫힘 → 스펙 이슈를 닫았다"
+    log ok "spec #${spec}: all ${total} sub-issues closed → closed the spec issue"
     CLOSED_SPECS="${CLOSED_SPECS:-} ${spec}"
   else
-    log warn "스펙 #${spec}: 하위 이슈 ${total}건이 모두 닫혔지만 스펙 이슈를 닫지 못했다 — gh issue close ${spec}"
+    log warn "spec #${spec}: all ${total} sub-issues are closed but the spec issue could not be closed — gh issue close ${spec}"
   fi
 }
 
@@ -959,13 +960,13 @@ close_spec_if_done() {
 suggest_retro() {
   local spec report skill="${SKILL_PREFIX:-/}retro" log_src
   [[ -n "${CLOSED_SPECS// /}" ]] || return 0
-  [[ -d "${ROOT:-.}/.agents/skills/retro" || -d "${ROOT:-.}/.claude/skills/retro" ]] || skill="${skill}(이 저장소에는 아직 없다 — 키트 설치 때 --workflow-skills 로 들일 수 있다)"
-  log_src="$LOG_FILE"; [[ "$LOG_FILE" != "/dev/null" ]] || log_src="(로그를 꺼 둬서 없음)"
+  [[ -d "${ROOT:-.}/.agents/skills/retro" || -d "${ROOT:-.}/.claude/skills/retro" ]] || skill="${skill} (not in this repository yet — install it with the kit's --workflow-skills)"
+  log_src="$LOG_FILE"; [[ "$LOG_FILE" != "/dev/null" ]] || log_src="(none — logging is off)"
   for spec in $CLOSED_SPECS; do
     report="$REPORT_DIR/spec-${spec}.html"
-    if [[ -f "$report" || -f "${ROOT:-.}/$report" ]]; then report="리포트 ${report}"
-    else report="리포트는 ticket-loop.sh --parent ${spec} 로 뽑을 수 있다"; fi
-    log "스펙 #${spec} 완료. 원하면 ${skill}로 이번 묶음을 돌아보세요 — 읽을 자료: 로그 ${log_src}, ${report}, 병합된 PR 본문의 '남은 판단 사항'·'검증하지 못한 것'. 환경(스킬·worker-rules.md·자동 검사)을 고치게 되면 PR로 올리는 것을 권합니다"
+    if [[ -f "$report" || -f "${ROOT:-.}/$report" ]]; then report="report ${report}"
+    else report="the report can be generated with ticket-loop.sh --parent ${spec}"; fi
+    log "spec #${spec} complete. If you like, review this batch with ${skill} — material to read: log ${log_src}, ${report}, and the 'remaining decisions' / 'not verified' sections of the merged PR bodies. If you end up changing the environment (skills, worker-rules.md, automated checks), a PR is recommended"
   done
 }
 
@@ -985,13 +986,14 @@ record_ticket() {
     + (if $ci != "" then {ci_sec: ($ci | tonumber)} else {} end)
     + (if $post != "" then {post_merge: $post} else {} end)
     + (if $model != "" then {model: $model} else {} end)' >> "$file" 2>/dev/null \
-    || log warn "#${CUR_N}: 티켓 기록을 남기지 못했습니다 (${file})"
+    || log warn "#${CUR_N}: failed to write the ticket record (${file})"
 }
 
 # 스펙 리포트 HTML — jq 하나로 그린다(의존 도구를 늘리지 않는다). 표: 이슈·티켓·상태·결과 브리프(PR 제목, 본문의
 # 인수 조건 체크 수, 중단 사유, CI·수리·병합 뒤 검증)·경과 시간·모델·마친 시각. 문자열은 전부 @html로 이스케이프한다.
 # 리포트의 고정 문구는 영어, GitHub에서 가져온 값(이슈·PR 제목, 본문)과 기록의 중단 사유는 그대로(한국어면 한국어) 둔다.
-# 기록의 post_merge("통과 N초"·"실패 N초"·"건너뜀")는 표시할 때만 영어로 바꾼다(기록 파일은 그대로).
+# 기록의 post_merge는 0.8.7부터 영어("passed in Ns"·"failed in Ns"·"skipped")다. 그 전 기록의 한국어 값("통과 N초"·"실패 N초"·"건너뜀")은
+# 표시할 때만 영어로 바꾼다(기록 파일은 그대로).
 read -r -d '' REPORT_JQ <<'JQ' || true
 def dur: if . == null then "—" elif . >= 3600 then "\(. / 3600 | floor)h \((. % 3600) / 60 | floor)m"
          elif . >= 60 then "\(. / 60 | floor)m" else "\(. | floor)s" end;
@@ -1002,7 +1004,7 @@ def order: (.title | capture("^T(?<n>[0-9]+)") | .n | tonumber) // 999999;
 def checks: ("\n" + .) | {checked: ([scan("\n[ \t]*[-*] \\[x\\]"; "i")] | length), total: ([scan("\n[ \t]*[-*] \\[[ x]\\]"; "i")] | length)};
 def badge: {merged: ["Merged", "ok"], "closed-without-pr": ["Closed without PR", "muted"], "pr-open": ["PR open", "warn"],
             "in-progress": ["In progress", "warn"], stopped: ["Stopped", "bad"], pending: ["Not started", "muted"]}[.];
-# 기록의 post_merge 값을 표시용 영어로. 모르는 값은 그대로.
+# 0.8.6 이하 기록의 한국어 post_merge 값을 표시용 영어로. 그 밖(이미 영어)은 그대로.
 def post: if . == "건너뜀" then "skipped"
           else (capture("^(?<k>통과|실패) (?<s>[0-9]+)초$") // null) as $m
           | if $m == null then . else "\(if $m.k == "통과" then "passed" else "failed" end) in \($m.s)s" end end;
@@ -1084,10 +1086,10 @@ write_spec_report() {
     && mkdir -p "$(dirname "$out")" \
     && jq -rn --argjson spec "$spec" --argjson issues "$issues" --argjson prs "$prs" --argjson recs "$recs" \
          --arg prefix "$BRANCH_PREFIX" --arg now "$(date '+%Y-%m-%d %H:%M')" "$REPORT_JQ" > "$out"; then
-    log ok "스펙 #${PARENT} 리포트: ${out#"$ROOT"/} — 확인 뒤 PR로 커밋하세요"
+    log ok "spec #${PARENT} report: ${out#"$ROOT"/} — review it, then commit it via a PR"
     open_report "$out"
   else
-    log warn "스펙 #${PARENT} 리포트 생성 실패 — ticket-loop.sh --parent ${PARENT}를 다시 돌리면 다시 만든다"
+    log warn "spec #${PARENT}: report generation failed — rerun ticket-loop.sh --parent ${PARENT} to regenerate it"
   fi
 }
 
@@ -1098,7 +1100,7 @@ run_ticket() {
   local deadline=$(( $(date +%s) + TICKET_TIMEOUT_SEC )) started_at ci_sec=0 ci_started
   started_at="$(date +%s)"
   IDLE_FALSE_POSITIVES=0
-  POST_MERGE_RESULT="건너뜀"; POST_MERGE_LOG=""
+  POST_MERGE_RESULT="skipped"; POST_MERGE_LOG=""
   log title "=== #${n} ${title} ==="
   CUR_N="$n"; CUR_TITLE="$title"; CUR_STARTED="$started_at"; CUR_STARTED_ISO="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
   CUR_PR=""; CUR_MODEL=""; CUR_CI_SEC=""; CUR_ROUND=0
@@ -1110,7 +1112,7 @@ run_ticket() {
   backend_worktree_create "${n}" "$(worker_prompt "${n}")"
   wt="$WT"; wt_path="$WT_PATH"; orca_branch="$WT_BRANCH"; handle="$HANDLE"
   backend_set_status "${wt}" in-progress || true
-  log step "#${n}: 워크트리 ${wt} (${wt_path}) / 터미널 ${handle}"
+  log step "#${n}: worktree ${wt} (${wt_path}) / terminal ${handle}"
   ensure_agent_started "${n}" "${handle}"
   CUR_MODEL="$(detect_model "${handle}")"
 
@@ -1118,13 +1120,13 @@ run_ticket() {
   progress_reset "${wt_path}"
   pr="$(wait_for_pr "${n}" "${handle}" "$deadline")" || rc=$?
   if [[ $rc -ne 0 ]]; then
-    log warn "#${n}: 워커 출력 꼬리 ---"; terminal_tail "${handle}" | dim_lines || true
+    log warn "#${n}: worker output tail ---"; terminal_tail "${handle}" | dim_lines || true
     backend_set_status "${wt}" todo "" "루프 중단: PR 없이 멈춤 — 확인 필요" || true
-    [[ $rc -ne 2 ]] || die "#${n}: 티켓 타임아웃(${TICKET_TIMEOUT_SEC}s)"
-    [[ $rc -ne 3 ]] || die "#${n}: ${BACKEND_NAME} 터미널 ${handle} 에 닿지 못했습니다 (${BACKEND_NAME} 앱 종료?). 워크트리는 디스크에 남아 있습니다."
-    die "#${n}: 워커가 PR 없이 멈췄습니다 (질문·실패 가능). ${BACKEND_NAME}에서 ${BRANCH_PREFIX}${n} 워크트리를 확인하세요."
+    [[ $rc -ne 2 ]] || die "#${n}: ticket timed out (${TICKET_TIMEOUT_SEC}s)"
+    [[ $rc -ne 3 ]] || die "#${n}: cannot reach ${BACKEND_NAME} terminal ${handle} (${BACKEND_NAME} app closed?). The worktree is still on disk."
+    die "#${n}: worker stopped without a PR (a question or a failure?). Check the ${BRANCH_PREFIX}${n} worktree in ${BACKEND_NAME}."
   fi
-  log step "#${n}: PR #${pr} 열림"
+  log step "#${n}: PR #${pr} opened"
   progress_sync
   CUR_PR="$pr"; model_now="$(detect_model "${handle}")"; [[ -z "$model_now" ]] || CUR_MODEL="$model_now"
   backend_set_status "${wt}" in-review "${pr}" "PR #${pr} — CI 대기" || true
@@ -1133,38 +1135,38 @@ run_ticket() {
   while :; do
     state="$(mergeable_state "${pr}")"
     if [[ "$state" == "CONFLICTING" ]]; then
-      [[ ${round} -lt $REPAIR_ROUNDS ]] || die "#${n}: PR #${pr} 이 ${BASE_BRANCH}과 충돌합니다 (수리 ${REPAIR_ROUNDS}회 소진)"
-      round=$((round + 1)); CUR_ROUND=$round; log warn "#${n}: 충돌 → 워커에 수리 요청 (${round})"
+      [[ ${round} -lt $REPAIR_ROUNDS ]] || die "#${n}: PR #${pr} conflicts with ${BASE_BRANCH} (${REPAIR_ROUNDS} repair round(s) used up)"
+      round=$((round + 1)); CUR_ROUND=$round; log warn "#${n}: conflict → asking the worker to repair (${round})"
       repair "${handle}" "PR #${pr} 이 ${BASE_BRANCH}과 충돌한다. \`git fetch origin && git merge origin/${BASE_BRANCH}\`으로 충돌을 해결하고 테스트·lint를 다시 돌린 뒤 같은 브랜치에 push해라. 질문하지 말고 끝까지 해라." "$deadline" \
-        || die "#${n}: 충돌 수리 중 타임아웃"
+        || die "#${n}: timed out while repairing the conflict"
       continue
     fi
     if ! ci_expected "${pr}"; then
-      log step "#${n}: 저장소 CI의 경로 필터에 걸리는 PR(${CI_SKIP_CMD:+CI_SKIP_CMD}${CI_SKIP_CMD:-CI_SKIP_REGEX}) — 체크 없이 병합한다 (PR #${pr})"
+      log step "#${n}: PR excluded by the repository CI path filter (${CI_SKIP_CMD:+CI_SKIP_CMD}${CI_SKIP_CMD:-CI_SKIP_REGEX}) — merging without checks (PR #${pr})"
       ci_sec=-1
       break
     fi
-    log step "#${n}: CI 대기 (PR #${pr})"
+    log step "#${n}: waiting for CI (PR #${pr})"
     ci_started="$(date +%s)"
     if ci_passed "${pr}"; then ci_sec=$(( $(date +%s) - ci_started )); break; fi
-    [[ ${round} -lt $REPAIR_ROUNDS ]] || die "#${n}: PR #${pr} CI 실패 (수리 ${REPAIR_ROUNDS}회 소진). gh pr checks ${pr} 로 확인하세요."
-    round=$((round + 1)); CUR_ROUND=$round; log warn "#${n}: CI 실패 → 워커에 수리 요청 (${round})"
+    [[ ${round} -lt $REPAIR_ROUNDS ]] || die "#${n}: PR #${pr} CI failed (${REPAIR_ROUNDS} repair round(s) used up). See gh pr checks ${pr}."
+    round=$((round + 1)); CUR_ROUND=$round; log warn "#${n}: CI failed → asking the worker to repair (${round})"
     before="$(pr_head_sha "${pr}")"
     repair "${handle}" "PR #${pr} 의 CI가 실패했다. \`gh pr checks ${pr}\` 와 \`gh run view --log-failed\` 로 원인을 보고 고친 뒤 테스트·lint를 다시 돌리고 같은 브랜치에 push해라. 테스트를 건너뛰거나 지우지 마라. 질문하지 말고 끝까지 해라." "$deadline" \
-      || die "#${n}: CI 수리 중 타임아웃"
-    [[ "$(pr_head_sha "${pr}")" != "$before" ]] || die "#${n}: 수리 뒤에도 새 커밋이 push되지 않았습니다"
+      || die "#${n}: timed out while repairing CI"
+    [[ "$(pr_head_sha "${pr}")" != "$before" ]] || die "#${n}: no new commit was pushed after the repair"
   done
-  log ok "#${n}: CI 통과"
+  log ok "#${n}: CI passed"
   CUR_CI_SEC="$ci_sec"
 
   if [[ $NO_MERGE -eq 1 ]]; then
-    log step "#${n}: --no-merge — PR #${pr} 을 사람이 병합하세요. 워크트리는 남겨 둡니다(${wt})."
+    log step "#${n}: --no-merge — merge PR #${pr} yourself. The worktree is kept (${wt})."
     record_ticket "no-merge"; CUR_N=""
     return 0
   fi
 
-  gh pr merge "${pr}" "--$MERGE_METHOD" || die "#${n}: PR #${pr} 병합 실패"
-  log ok "#${n}: PR #${pr} 병합됨"
+  gh pr merge "${pr}" "--$MERGE_METHOD" || die "#${n}: failed to merge PR #${pr}"
+  log ok "#${n}: PR #${pr} merged"
   sleep 5
   if [[ "$(gh issue view "${n}" --json state -q .state)" != "CLOSED" ]]; then
     gh issue close "${n}" --comment "PR #${pr} 병합으로 완료 (ticket-loop)" || true
@@ -1181,31 +1183,31 @@ run_ticket() {
 
   local branch; branch="$(gh pr view "${pr}" --json headRefName -q .headRefName)"
   backend_set_status "${wt}" completed "${pr}" "PR #${pr} 병합 완료" || true
-  backend_worktree_remove "${wt}" "${wt_path}" || log warn "#${n}: 워크트리 삭제 실패 — 수동 정리 필요 (${wt}, ${wt_path})"
+  backend_worktree_remove "${wt}" "${wt_path}" || log warn "#${n}: failed to remove the worktree — clean up manually (${wt}, ${wt_path})"
   git -C "$ROOT" worktree prune || true
   git -C "$ROOT" branch -D "${branch}" >/dev/null 2>&1 || true
   if [[ -n "$orca_branch" && "$orca_branch" != "HEAD" && "$orca_branch" != "$BASE_BRANCH" ]]; then
     git -C "$ROOT" branch -D "${orca_branch}" >/dev/null 2>&1 || true
   fi
   git -C "$ROOT" push -q origin --delete "${branch}" >/dev/null 2>&1 || true
-  log ok "#${n} 요약: 벽시계 $(( ($(date +%s) - started_at) / 60 ))분, PR #${pr}, CI $([[ $ci_sec -ge 0 ]] && echo "${ci_sec}초" || echo "없음(CI 제외 경로)"), 수리 ${round}회, idle 오판 ${IDLE_FALSE_POSITIVES}회, 병합 뒤 검증 ${POST_MERGE_RESULT}"
+  log ok "#${n} summary: wall-clock $(( ($(date +%s) - started_at) / 60 ))m, PR #${pr}, CI $([[ $ci_sec -ge 0 ]] && echo "${ci_sec}s" || echo "none (path excluded from CI)"), repairs ${round}, idle false positives ${IDLE_FALSE_POSITIVES}, post-merge check ${POST_MERGE_RESULT}"
   record_ticket "merged"; CUR_N=""
-  [[ $post_rc -eq 0 ]] || die "#${n}: 병합된 ${BASE_BRANCH}에서 병합 뒤 검증이 실패했습니다. 로그(${POST_MERGE_LOG})와 검증 워크트리($(post_merge_worktree_path))를 확인하고 수정 PR 뒤에 다시 실행하세요."
-  notify "티켓 완료" "#${n} ${title}"
+  [[ $post_rc -eq 0 ]] || die "#${n}: post-merge check failed on the merged ${BASE_BRANCH}. Check the log (${POST_MERGE_LOG}) and the check worktree ($(post_merge_worktree_path)), then rerun after a fix PR."
+  notify "Ticket done" "#${n} ${title}"
 }
 
 # ---------- 메인 ----------
 
 backend_check
 targets="$(pick_targets)"
-log "저장소 ${OWNER_REPO} / 백엔드 ${BACKEND_NAME} / 기준 브랜치 ${BASE_BRANCH} / 라벨 ${READY_LABEL}${SCOPE_LABEL:+ + ${SCOPE_LABEL}}${PARENT:+ / 스펙 #${PARENT}의 하위 이슈}"
-log "병합 뒤 검증: $([[ $POST_MERGE -eq 1 ]] && echo "실행 — ${POST_MERGE_CMD}" || echo "끔")"
+log "repository ${OWNER_REPO} / backend ${BACKEND_NAME} / base branch ${BASE_BRANCH} / label ${READY_LABEL}${SCOPE_LABEL:+ + ${SCOPE_LABEL}}${PARENT:+ / sub-issues of spec #${PARENT}}"
+log "post-merge check: $([[ $POST_MERGE -eq 1 ]] && echo "on — ${POST_MERGE_CMD}" || echo "off")"
 if [[ $POST_MERGE -eq 1 && -n "$POST_MERGE_PORT" ]] && port_in_use "$POST_MERGE_PORT"; then
-  log warn "주의: 포트 ${POST_MERGE_PORT} 사용 중($(port_holder "$POST_MERGE_PORT" || true)) — 루프가 도는 동안 비워 두세요. 그대로면 병합마다 비기를 최대 $((PORT_WAIT_SEC / 60))분 기다린다(끄려면 --skip-post-merge)"
+  log warn "note: port ${POST_MERGE_PORT} in use ($(port_holder "$POST_MERGE_PORT" || true)) — keep it free while the loop runs. Otherwise each merge waits up to $((PORT_WAIT_SEC / 60))m for it (or use --skip-post-merge)"
 fi
 # 티켓이 더 없어도 --parent면 스펙 닫기·리포트는 다시 한다(사람이 마지막 티켓을 닫은 스펙, 끝난 스펙의 리포트를 다시 뽑는 길)
-[[ -n "$targets" ]] || { log "처리할 티켓이 없습니다."; [[ $DRY_RUN -eq 1 ]] || { close_spec_if_done "$PARENT"; write_spec_report; suggest_retro; }; exit 0; }
-log "대상(현재 선행 이슈가 모두 닫힌 것):"; printf '%s\n' "$targets" | dim_lines "  #"
+[[ -n "$targets" ]] || { log "No tickets to process."; [[ $DRY_RUN -eq 1 ]] || { close_spec_if_done "$PARENT"; write_spec_report; suggest_retro; }; exit 0; }
+log "targets (all blocking issues currently closed):"; printf '%s\n' "$targets" | dim_lines "  #"
 [[ $DRY_RUN -eq 0 ]] || exit 0
 
 # 목록을 stdin으로 물리지 않는다 — 루프 안의 gh·백엔드 CLI·git이 stdin을 읽으면 다음 티켓이 사라진다.
@@ -1216,8 +1218,8 @@ while :; do
   if [[ ${#TICKETS[@]} -gt 0 ]]; then
     [[ $done_count -lt ${#TICKETS[@]} ]] || break
     n="${TICKETS[$done_count]}"; title="$(issue_title "${n}")"
-    [[ "$(blocked_by "${n}")" == "0" ]] || die "#${n}: 선행 이슈가 열려 있습니다"
-    [[ -z "$(open_pr_for "${n}")" ]] || die "#${n}: 이미 열린 PR이 있습니다"
+    [[ "$(blocked_by "${n}")" == "0" ]] || die "#${n}: blocked by an open issue"
+    [[ -z "$(open_pr_for "${n}")" ]] || die "#${n}: a PR is already open"
   else
     [[ $done_count -eq 0 ]] || targets="$(pick_targets </dev/null)"
     # 이번 실행에서 이미 처리한 티켓은 다시 집지 않는다(이슈 닫힘 반영이 늦는 경우 대비)
@@ -1226,16 +1228,16 @@ while :; do
       [[ -n "${cand}" && " ${PROCESSED} " != *" ${cand} "* ]] || continue
       n="${cand}"; title="${ctitle}"; break
     done <<<"$targets"
-    [[ -n "${n}" ]] || { log "더 처리할 티켓이 없습니다."; break; }
+    [[ -n "${n}" ]] || { log "No more tickets to process."; break; }
   fi
   run_ticket "${n}" "${title}" </dev/null
   PROCESSED="${PROCESSED} ${n}"
   done_count=$((done_count + 1))
-  [[ $MAX -eq 0 || $done_count -lt $MAX ]] || { log "--max $MAX 도달"; break; }
+  [[ $MAX -eq 0 || $done_count -lt $MAX ]] || { log "--max $MAX reached"; break; }
 done
 
 close_spec_if_done "$PARENT"
 write_spec_report
 suggest_retro
-log ok "완료: ${done_count}건"
-notify "티켓 루프 종료" "${done_count}건 완료$([[ -z "${CLOSED_SPECS// /}" ]] || echo " · 스펙${CLOSED_SPECS// / #} 끝 — 원하면 /retro로 회고")"
+log ok "done: ${done_count} ticket$([[ $done_count -eq 1 ]] || echo s)"
+notify "Ticket loop finished" "${done_count} done$([[ -z "${CLOSED_SPECS// /}" ]] || echo " · spec${CLOSED_SPECS// / #} complete — consider /retro")"

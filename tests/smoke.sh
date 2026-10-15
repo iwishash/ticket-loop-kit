@@ -367,7 +367,7 @@ LOGGED=""; log() { LOGGED+="$*"$'\n'; }; die() { echo "die: $*" >&2; exit 1; }
 source "$1"
 export FAKE_LC=idle FAKE_SCREEN=ok; cmux_wait_idle s1 1000 || die "idle 인데 wait_idle 이 0 이 아님"
 export FAKE_LC=none FAKE_SCREEN=ok; rc=0; cmux_wait_idle s1 0 || rc=$?; [[ $rc -eq 1 ]] || die "lifecycle 빈 값·화면 읽힘인데 1(계속 기다림)이 아님: $rc"
-[[ "$LOGGED" == *"계속 기다린다"* ]] || die "화면이 읽히는데 안내 로그가 없다"
+[[ "$LOGGED" == *"keep waiting"* ]] || die "화면이 읽히는데 안내 로그가 없다"
 export FAKE_LC=none FAKE_SCREEN=gone; rc=0; cmux_wait_idle s1 60000 || rc=$?; [[ $rc -eq 3 ]] || die "lifecycle 빈 값·화면도 못 읽는데 3 이 아님: $rc"
 echo ok
 SH
@@ -387,7 +387,7 @@ printf 'codex --dangerously-bypass-approvals-and-sandbox "$(cat /tmp/p)"\n' | gr
 printf 'model: gpt-5.1-codex-max.\n' | grep -oE "$(sed -n 3p <<<"$out")" | grep -qx 'gpt-5.1-codex-max' || fail "codex MODEL_REGEX 가 모델명을 못 뽑음"
 out="$(AGENT_RESTART_CMD='codex --yolo' SKILL_PREFIX=/ preset codex)"; [[ "$(sed -n 1p <<<"$out")" == "codex --yolo" && "$(sed -n 4p <<<"$out")" == "/" ]] || fail "loop.env 값이 프리셋을 이기지 않음: $out"
 out="$(preset bogus)"; [[ -z "$(sed -n 1p <<<"$out")" && -z "$(sed -n 2p <<<"$out")" && "$(sed -n 4p <<<"$out")" == "/" ]] || fail "모르는 AGENT 에 프리셋이 생김: $out"
-grep -q 'AGENT=\${AGENT} 에는 프리셋이 없습니다' "$KIT/files/scripts/ticket-loop.sh" || fail "모르는 AGENT 를 시작 때 멈추는 검사가 없음"
+grep -q 'AGENT=\${AGENT} has no preset' "$KIT/files/scripts/ticket-loop.sh" || fail "모르는 AGENT 를 시작 때 멈추는 검사가 없음"
 sed -n '/^worker_prompt() {/,/^}/p' "$KIT/files/scripts/ticket-loop.sh" > "$A/prompt.sh"
 wp() { ROOT="$A" WORKER_RULES_FILE="rules.md" SKILL_PREFIX="$1" bash -c 'set -euo pipefail; source "$0"; worker_prompt 12' "$A/prompt.sh"; }
 out="$(wp '$')"; [[ "$out" == '$implement 12 — '* ]] || fail "codex 워커 프롬프트가 \$implement 로 시작하지 않음: $out"
@@ -417,7 +417,7 @@ spec_case() {  # $1 하위 이슈 JSON, $2 기대(closed|kept)
   local out
   printf '%s' "$1" > "$S/subs.json"; : > "$S/gh.log"
   out="$(cd "$S" && PATH="$S:$PATH" GH_LOG="$S/gh.log" SUBS="$S/subs.json" OWNER_REPO=o/r bash -c 'set -euo pipefail; log() { echo "$*"; }; source fn.sh; close_spec_if_done 40; echo "CLOSED=${CLOSED_SPECS:-}"')" || fail "close_spec_if_done 실패($2)"
-  if [[ "$2" == closed ]]; then grep -q '^issue close 40 ' "$S/gh.log" && grep -q '스펙 #40: 하위 이슈 2건 모두 닫힘' <<<"$out" && grep -q '^CLOSED= 40$' <<<"$out" || fail "모두 닫힌 스펙을 닫지 않았거나 CLOSED_SPECS 에 적지 않음: $out"
+  if [[ "$2" == closed ]]; then grep -q '^issue close 40 ' "$S/gh.log" && grep -q 'spec #40: all 2 sub-issues closed' <<<"$out" && grep -q '^CLOSED= 40$' <<<"$out" || fail "모두 닫힌 스펙을 닫지 않았거나 CLOSED_SPECS 에 적지 않음: $out"
   else ! grep -q '^issue close' "$S/gh.log" || fail "닫으면 안 되는 스펙($2)을 닫음"; fi
 }
 spec_case '[{"number":41,"state":"closed"},{"number":42,"state":"closed"}]' closed
@@ -433,12 +433,12 @@ retro_case() {  # $1 CLOSED_SPECS, $2 REPORT_DIR, $3 ROOT → 출력
   (cd "$S" && CLOSED_SPECS="$1" REPORT_DIR="$2" ROOT="$3" LOG_FILE=".ticket-loop/loop-0101.log" bash -c 'set -euo pipefail; log() { echo "$*"; }; source fn.sh; suggest_retro')
 }
 out="$(retro_case " 40" "reports" "$S")" || fail "suggest_retro 실패"
-grep -q '^스펙 #40 완료. 원하면 /retro로' <<<"$out" && grep -q '리포트 reports/spec-40.html' <<<"$out" && grep -q 'loop-0101.log' <<<"$out" || fail "회고 안내 문구가 다름: $out"
-! grep -q -E '해야|반드시|필수' <<<"$out" || fail "회고 안내가 강제 어조: $out"
+grep -q '^spec #40 complete. If you like, review this batch with /retro' <<<"$out" && grep -q 'report reports/spec-40.html' <<<"$out" && grep -q 'loop-0101.log' <<<"$out" || fail "회고 안내 문구가 다름: $out"
+! grep -q -iE 'must|required|mandatory' <<<"$out" || fail "회고 안내가 강제 어조: $out"
 out="$(retro_case " 40 41" "reports" "$S")" || fail "suggest_retro(둘) 실패"
-[[ "$(grep -c '^스펙 #' <<<"$out")" == 2 ]] && grep -q 'ticket-loop.sh --parent 41 로 뽑을 수 있다' <<<"$out" || fail "리포트 없는 스펙 안내가 다름: $out"
+[[ "$(grep -c '^spec #' <<<"$out")" == 2 ]] && grep -q 'can be generated with ticket-loop.sh --parent 41' <<<"$out" || fail "리포트 없는 스펙 안내가 다름: $out"
 out="$(retro_case " 40" "reports" "$T/nowhere")" || fail "suggest_retro(스킬 없음) 실패"
-grep -q '/retro(이 저장소에는 아직 없다' <<<"$out" || fail "retro 스킬이 없을 때 안내가 다름: $out"
+grep -q '/retro (not in this repository yet' <<<"$out" || fail "retro 스킬이 없을 때 안내가 다름: $out"
 out="$(retro_case "" "reports" "$S")" || fail "suggest_retro(빈) 실패"
 [[ -z "$out" ]] || fail "끝난 스펙이 없는데 회고 안내가 나옴: $out"
 grep -c -E '^suggest_retro$|; suggest_retro; ' "$KIT/files/scripts/ticket-loop.sh" | grep -qx 2 || fail "suggest_retro 호출이 두 곳(티켓 없음·정상 종료)이 아니다"
@@ -504,12 +504,12 @@ out="$(postmerge_case 'echo hello-from-post-merge; exit 1' '.ticket-loop/loop-01
 [[ ! -e "$P/wt/.ticket-loop" ]] || fail "post-merge 로그가 검증 워크트리 안에 생겼다(0.8.4 이하의 버그)"
 grep -q '^  hello-from-post-merge$' <<<"$out" || fail "실패 꼬리가 비었다: $out"
 ! grep -q 'No such file' <<<"$out" || fail "꼬리 tail 이 파일을 못 찾았다: $out"
-grep -q "병합 뒤 검증 시작 ($P/wt, 로그 $P/repo/.ticket-loop/post-merge-7.log)" <<<"$out" || fail "시작 줄의 로그 경로가 실제 위치(절대 경로)가 아니다: $out"
+grep -q "post-merge check started ($P/wt, log $P/repo/.ticket-loop/post-merge-7.log)" <<<"$out" || fail "시작 줄의 로그 경로가 실제 위치(절대 경로)가 아니다: $out"
 grep -q "^POST_MERGE_LOG=$P/repo/.ticket-loop/post-merge-7.log$" <<<"$out" || fail "POST_MERGE_LOG(die 가 찍는 경로)가 절대 경로가 아니다: $out"
 out="$(postmerge_case 'exit 0' 'sub/dir/loop.log' pass)" || fail "run_post_merge(통과) 실패: $out"
 [[ -f "$P/repo/sub/dir/post-merge-7.log" ]] || fail "LOG_FILE 을 다른 상대 디렉터리로 줘도 저장소 루트 기준이어야 한다"
-grep -q '병합 뒤 검증 통과 [0-9]*초' <<<"$out" || fail "통과 줄이 없음: $out"
-grep -q '로그(${POST_MERGE_LOG})' "$KIT/files/scripts/ticket-loop.sh" || fail "병합 뒤 검증 실패 die 줄에 로그 경로가 없다"
+grep -q 'post-merge check passed in [0-9]*s' <<<"$out" || fail "통과 줄이 없음: $out"
+grep -q 'log (${POST_MERGE_LOG})' "$KIT/files/scripts/ticket-loop.sh" || fail "병합 뒤 검증 실패 die 줄에 로그 경로가 없다"
 grep -q '^LOG_FILE="$(abs_path "$LOG_FILE")"$' "$KIT/files/scripts/ticket-loop.sh" && grep -q '^RECORDS_FILE="$(abs_path "$RECORDS_FILE")"$' "$KIT/files/scripts/ticket-loop.sh" && grep -q '^REPORT_DIR="$(abs_path "$REPORT_DIR")"$' "$KIT/files/scripts/ticket-loop.sh" \
   || fail "LOG_FILE·RECORDS_FILE·REPORT_DIR 를 시작 때 절대 경로로 굳히지 않는다"
 [[ "$(cd "$P/repo" && ROOT="$P/repo" FN="$P/fn.sh" bash -c 'source "$FN"; abs_path /dev/null; echo; abs_path /abs/x; echo; abs_path rel/y')" == $'/dev/null\n/abs/x\n'"$P/repo/rel/y" ]] || fail "abs_path 가 /dev/null·절대 경로를 그대로 두고 상대 경로만 ROOT 에 붙이지 않는다"
@@ -540,21 +540,21 @@ out="$(cd "$Q" && FN="$Q/fn.sh" bash -c '
 want="== quiet
 == quiet-heartbeat0
 == branch+edit
-[step] #7: 브랜치 issue-7-export
-[step] #7: 파일 수정 시작 — a.ts, b.ts, c.ts 외 1
+[step] #7: branch issue-7-export
+[step] #7: first file changes — a.ts, b.ts, c.ts +1 more
 == same
 == commits
-[step] #7: 커밋 SHA feat: a #7
-[step] #7: 커밋 SHA test: b #7
+[step] #7: commit SHA feat: a #7
+[step] #7: commit SHA test: b #7
 == amend
-[step] #7: 커밋 SHA test: b amended #7
+[step] #7: commit SHA test: b amended #7
 == heartbeat-after-commit
 == heartbeat-changed
-[#7: 작업 중 — 0분 경과, 커밋 안 된 변경 3개 파일: c.ts, d.ts, e.ts] 
+[#7: working — 0m elapsed, 3 uncommitted files: c.ts, d.ts, e.ts] 
 == sync
 == wait 60000 600000
 == gone"
-[[ "$(sed -E 's/커밋 [0-9a-f]{7,} /커밋 SHA /' <<<"$out")" == "$want" ]] || fail "진행 로그 출력이 기대와 다르다:
+[[ "$(sed -E 's/commit [0-9a-f]{7,} /commit SHA /' <<<"$out")" == "$want" ]] || fail "진행 로그 출력이 기대와 다르다:
 $out"
 grep -q 'progress_reset "${wt_path}"' "$KIT/files/scripts/ticket-loop.sh" && grep -q '^  progress_sync$' "$KIT/files/scripts/ticket-loop.sh" || fail "run_ticket 이 progress_reset(PR 대기 전)·progress_sync(PR 열린 뒤)를 부모 셸에서 부르지 않는다"
 [[ "$(grep -c 'progress_check "${n}"\|progress_check "${CUR_N}"' "$KIT/files/scripts/ticket-loop.sh")" -ge 3 ]] || fail "wait_for_pr·repair 가 progress_check 를 부르지 않는다"
@@ -608,9 +608,10 @@ jq -rn --arg prefix issue- --arg now "2026-10-12 09:00" \
                   {"number":51,"title":"T03 PR","body":"","state":"MERGED","url":"https://x/p51","createdAt":"2026-10-11T00:00:00Z","mergedAt":"2026-10-11T01:00:00Z","headRefName":"issue-43-three"},
                   {"number":52,"title":"T04 PR","body":"","state":"MERGED","url":"https://x/p52","createdAt":"2026-10-11T02:00:00Z","mergedAt":"2026-10-11T03:00:00Z","headRefName":"issue-44"}]' \
   --argjson recs '[{"spec":40,"issue":41,"title":"T01: 하나","result":"merged","started":"2026-10-12T00:00:00Z","finished":"2026-10-12T00:31:00Z","wall_sec":1860,"repairs":1,"idle_false_positives":0,"agent":"claude","pr":50,"ci_sec":200,"post_merge":"통과 90초","model":"Opus 5.5"},
-                   {"spec":40,"issue":42,"title":"T02: 둘","result":"stopped","reason":"워커가 PR 없이 멈췄습니다","started":"2026-10-12T01:00:00Z","finished":"2026-10-12T01:10:00Z","wall_sec":600,"repairs":0,"idle_false_positives":2,"agent":"claude"}]' \
+                   {"spec":40,"issue":42,"title":"T02: 둘","result":"stopped","reason":"워커가 PR 없이 멈췄습니다","started":"2026-10-12T01:00:00Z","finished":"2026-10-12T01:10:00Z","wall_sec":600,"repairs":0,"idle_false_positives":2,"agent":"claude"},
+                   {"spec":40,"issue":43,"title":"T03: 셋","result":"merged","started":"2026-10-11T00:00:00Z","finished":"2026-10-11T01:01:00Z","wall_sec":3660,"repairs":0,"idle_false_positives":0,"agent":"claude","pr":51,"ci_sec":100,"post_merge":"failed in 12s","model":"Opus 5.5"}]' \
   "$REPORT_JQ" > "$T/report.html" || fail "스펙 리포트 jq 실패"
-for want in '<!doctype html>' '<html lang="en">' 'PR #50' 'Acceptance criteria 1/2' '>Merged<' '>Stopped<' 'Stop reason: 워커가 PR 없이 멈췄습니다' 'Opus 5.5' 'PR created→merged' 'not recorded' '1 repair ·' 'post-merge check passed in 90s' 'T01: 하나'; do
+for want in '<!doctype html>' '<html lang="en">' 'PR #50' 'Acceptance criteria 1/2' '>Merged<' '>Stopped<' 'Stop reason: 워커가 PR 없이 멈췄습니다' 'Opus 5.5' 'PR created→merged' 'not recorded' '1 repair ·' 'post-merge check passed in 90s' 'post-merge check failed in 12s' 'T01: 하나'; do
   grep -qF "$want" "$T/report.html" || fail "스펙 리포트에 '$want' 없음"
 done
 # head 가 정확히 issue-44 인 PR #52 는 T04 의 PR 이고(Merged 3건), 이슈 4 에는 붙지 않는다(기록도 PR 도 없는 이슈 4 는 Not started)

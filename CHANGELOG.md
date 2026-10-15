@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.8.7 — 2026-10-15
+
+루프가 터미널(과 로그 파일)에 찍는 문구를 영어로 바꿨다. 한국어 터미널 로그를 영어로 보고 싶다는 요구.
+
+- `ticket-loop.sh`: `log`·`die`·`notify`로 나가는 문구 전부 — 시작 줄("repository … / backend … / base branch … / label …", "post-merge check: on|off"), 건너뜀("skip #N (…): blocked by an open issue" 등), 대상 목록("targets (all blocking issues currently closed):"), 티켓 단계("worktree … / terminal …", "branch …", "first file changes — …", "working — Nm elapsed, N uncommitted files: …", "commit …", "PR #N opened", "waiting for CI", "CI passed", "PR #N merged", "post-merge check started/passed in Ns/failed — tail"), 수리("conflict → asking the worker to repair (1)", "CI failed → …"), idle("worker idle, no PR (1/3)"), 요약("#N summary: wall-clock 54m, PR #46, CI 261s, repairs 0, idle false positives 1, post-merge check passed in 212s"), 스펙("spec #40: all 4 sub-issues closed → closed the spec issue", 리포트·회고 안내), 종료("No tickets to process", "No more tickets to process", "--max N reached", "done: N tickets"), 모든 ERROR 줄과 백엔드 점검 안내(Orca·cmux·tmux CLI 없음, 소켓, 신뢰 대화상자, 잠금), 데스크톱 알림("Ticket done", "Ticket loop stopped", "Ticket loop finished"). 요약 줄은 `grep "summary:"`로 찾는다
+- 그대로인 것: 워커 프롬프트와 수리 프롬프트(에이전트에게 보내는 글), GitHub 코멘트(이슈·스펙 닫을 때), 백엔드 상태 코멘트(Orca 워크스페이스·cmux 로그), 스크립트의 주석과 `--help` 머리글
+- 티켓 기록(`RECORDS_FILE`)의 `post_merge` 값이 "passed in Ns"·"failed in Ns"·"skipped"가 된다. 0.8.6 이하 기록의 "통과 N초"·"실패 N초"·"건너뜀"은 스펙 리포트가 전처럼 표시할 때 영어로 바꾸므로 옛 기록과 섞여도 한 표에 같이 나온다. `reason`(중단 사유)은 전처럼 ERROR 문구 그대로라 새 기록부터 영어다
+- `tests/smoke.sh`: 영어 문구로 고친 단정(cmux "keep waiting", 스펙 닫기, 회고 안내 — 강제 어조 검사는 must/required/mandatory, 병합 뒤 검증 시작·통과 줄, 진행 로그 기대 출력). 리포트 고정 자료에 영어 `post_merge` 기록 한 건을 더해 옛 한국어 값과 새 영어 값이 둘 다 "post-merge check …"로 나오는 것
+- 가이드북: 4·7·9·10장의 예시 로그와 인용 문구를 새 문구로, `grep "요약:"` → `grep "summary:"`, 부록 D 재생성, 부록 E 한 행. README 버전 고정 `#v0.8.7`. PDF 재빌드
+- 이미 설치된 저장소: `npx github:iwishash/ticket-loop-kit#v0.8.7 init`(또는 `install.sh`)으로 스크립트가 바뀐다. 설정은 없다. 운영 문서 `docs/agents/ticket-loop.md`나 셸 별칭에 `grep "요약:"`을 적어 뒀다면 `summary:`로 맞춘다
+
 ## 0.8.6 — 2026-10-15
 
 루프를 처음 돌리면 "워크트리 … / 터미널 …" 줄 뒤 첫 PR이 열릴 때까지(보통 수십 분) 루프 터미널에 아무 줄도 없어 멈춘 것처럼 보였다. 워커는 다른 창에서 일하고, 루프는 idle 대기 상한(10분)마다 돌아와 PR만 물었기 때문이다. 그 구간에 진행 로그를 넣었다.
