@@ -36,7 +36,7 @@ GitHub 이슈 티켓을 워크트리에서 한 건씩 무인으로 구현·검�
 npx github:iwishash/ticket-loop-kit init
 ```
 
-백엔드와 설치 단계를 키보드로 고른다(`--yes`면 묻지 않고, `NO_COLOR`로 색을 끈다). 버전 고정은 `npx github:iwishash/ticket-loop-kit#v0.8.7 init`. Node 없이:
+백엔드와 설치 단계를 키보드로 고른다(`--yes`면 묻지 않고, `NO_COLOR`로 색을 끈다). 버전 고정은 `npx github:iwishash/ticket-loop-kit#v0.8.8 init`. Node 없이:
 
 ```bash
 bash <(curl -fsSL https://raw.githubusercontent.com/iwishash/ticket-loop-kit/main/install.sh)
@@ -130,10 +130,36 @@ Claude Code는 새 워크트리의 신뢰를 메인 체크아웃 경로로 판�
 
 클론만 하면 다른 컴퓨터에서도 바로 돈다. 재설치는 키트를 올릴 때만 한 컴퓨터에서 하고 나머지는 `git pull`.
 
-- 루프에 필요한 것은 전부 커밋돼 있다. 기계별인 것은 `.ticket-loop/*.log`와 `tickets.jsonl`뿐이다(ignore).
+- 루프에 필요한 것은 전부 커밋돼 있다. 기계별인 것은 `.ticket-loop/*.log`와 `tickets.jsonl`(ignore), 그리고 저장소 밖의 `~/.config/ticket-loop/loop.env`(Slack Webhook URL 같은 비밀 값, 아래 "알림")뿐이다.
 - 백엔드는 컴퓨터마다 달라도 된다. `BACKEND=cmux bash scripts/ticket-loop.sh N`처럼 환경변수가 `loop.env` 기본값을 이긴다. cmux·tmux는 `loop.env`에 `WORKTREE_SETUP_CMD`가 있어야 하고, 워크트리는 `~/.cache/ticket-loop/<owner-repo>/worktrees`에 두며, 메인 체크아웃을 Claude Code가 신뢰해야 한다(거기서 `claude`를 한 번 연다).
 - 동시에 돌릴 때는 티켓 번호를 지정하거나 `--parent`·`--label`로 자동 선택 범위를 가른다. 담당자·열린 PR 검사는 몇 초 간격의 경합까지 막지 못한다. 충돌이 난 PR은 수리 단계가 처리한다.
 - 스펙 리포트는 그 컴퓨터의 `tickets.jsonl`로 그리므로 한 스펙은 한 컴퓨터에서 돌린다. 기록이 없는 티켓은 PR 시각으로 대신 채운다.
+
+## 알림: Slack과 GitHub 멈춤 기록
+
+자리를 비운 사이 루프가 끊겨도 밖에서 알 수 있게 두 갈래로 남긴다.
+
+- **Slack(알림)**: `SLACK_WEBHOOK_URL`이 있으면 루프 시작, 티켓 완료, 멈춤, 루프 종료를 채널에 올린다. 멈춤에는 사유와 로그 끝 12줄(워커 화면 꼬리 포함)이 붙고, `SLACK_MENTION`이 있으면 그 멘션이 앞에 붙는다(Ctrl-C로 멈춘 것은 빼고).
+- **GitHub(기록)**: 티켓 처리 중 멈추면 그 이슈에 코멘트(사유, 머신, PR, 워크트리, 루프 자신의 로그 끝 30줄)를 달고 `loop-stopped` 라벨(`STOPPED_LABEL`)을 붙인다. 루프는 본인 계정으로 쓰므로 GitHub는 본인에게 알리지 않는다. 알림이 아니라 기록이다. 대상 선택은 이 라벨을 보지 않고, 루프가 그 티켓을 병합하면 뗀다. 워커 화면은 공개 저장소에 올리지 않으려고 코멘트에서 뺀다.
+
+멈춤은 어떻게 끝나든 한 번 보고된다: 멈추는 조건(PR 없이 멈춤, 타임아웃, 수리 소진 등), 터미널 창 닫힘, Ctrl-C, `kill`, `set -e`에 걸린 명령(네트워크가 끊겨 `git fetch`·`gh`가 실패하는 등). `kill -9`, 전원 꺼짐, 잠자기는 스크립트가 아무것도 보내지 못해 잡지 못한다.
+
+Slack 설정(컴퓨터마다 한 번):
+
+1. <https://api.slack.com/apps> → **Create New App** → **Blank app**(예전 화면의 From scratch) → 이름(예 `ticket-loop`)과 워크스페이스.
+2. 이어지는 마법사에서 **Bot scopes**에 `incoming-webhook` 하나만 넣고(User scopes·이벤트는 비운다) **Create and Install** → 웹후크를 위한 채널(예 미리 만든 비공개 `#ticket-loop`, 본인이 들어가 있어야 목록에 보인다) → **허용**. **Go to App Settings** → 왼쪽 **Incoming Webhooks**의 "Webhook URLs for Your Workspace"에서 URL을 복사한다(Slack CLI 안내는 필요 없다). 예전 화면이면 **Incoming Webhooks** → **Activate Incoming Webhooks** → **Add New Webhook**으로 같은 URL을 만든다. 워크스페이스가 앱 설치를 제한하면 관리자 승인이 필요하다.
+3. 나온 URL을 커밋하지 않는 기계별 설정 파일에 둔다. 저장소 `loop.env`는 커밋되므로 쓰지 않는다(거기 있으면 시작할 때 경고한다). URL만 있으면 누구나 그 채널에 글을 쓸 수 있다.
+   ```bash
+   mkdir -p ~/.config/ticket-loop
+   cat >> ~/.config/ticket-loop/loop.env <<'EOF'
+   SLACK_WEBHOOK_URL="${SLACK_WEBHOOK_URL:-https://hooks.slack.com/services/T…/B…/…}"
+   SLACK_MENTION="${SLACK_MENTION:-<@U012AB3CD>}"   # 선택: Slack 프로필 → ⋮ → Copy member ID
+   EOF
+   chmod 600 ~/.config/ticket-loop/loop.env
+   ```
+   이 파일은 그 컴퓨터의 모든 저장소에 적용되고(`XDG_CONFIG_HOME`을 따른다), 저장소 `loop.env`보다 먼저 읽혀 이긴다.
+4. 폰 알림: 채널 알림을 "모든 새 메시지"로 두거나, "멘션만"으로 두고 `SLACK_MENTION`으로 멈출 때만 울리게 한다.
+5. 확인: 루프 시작 줄에 `notifications: desktop + Slack`이 보이고 채널에 "Ticket loop started"가 올라온다. `--dry-run`은 보내지 않는다.
 
 ## 키트를 고칠 때
 
@@ -162,3 +188,4 @@ Claude Code는 새 워크트리의 신뢰를 메인 체크아웃 경로로 판�
 - Linux와 WSL. Linux 분기는 한 번도 실행되지 않았다. WSL 안의 tmux 백엔드부터 시도할 것. WSL에서 `orca-ide`로 Orca를 조종하는 건 미해결(Windows 앱이냐 WSLg의 Linux AppImage냐, 경로 대응).
 - Codex 워커. 프리셋·프롬프트·스킬 배치·`AGENTS.md`·`.codex/rules/ticket-loop.rules`·`--agent codex`는 갖춰졌지만 Codex가 설치된 컴퓨터에서 돌린 적이 없다: idle 판정, `$implement`가 스킬을 집는지, 수리 프롬프트, 규칙 파일이 `--dangerously-bypass-approvals-and-sandbox` 아래에서도 로드되는지.
 - 출처 저장소 rsrehab/rental-portal은 아직 자체 `scripts/orca-ticket-loop.sh`를 쓴다.
+- 실제 루프 실행에서의 Slack 알림과 GitHub 멈춤 기록. 실제 Slack 워크스페이스에는 루프의 `slack_post`로 네 종류 메시지를 보내 렌더링(아이콘·`#N` 링크·로그 코드 블록)만 확인했고, 멈춤 경로는 가짜 `gh`·`curl`과 pty를 닫는 터미널 닫힘 흉내로 확인했다.

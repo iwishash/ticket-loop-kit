@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.8.8 — 2026-10-15
+
+자리를 비운 사이 루프가 끊기면 밖에서 알 길이 없었다. 알림은 데스크톱(macOS 알림 센터)뿐이었고, 그마저 `die`로 멈출 때만 갔다 — `set -e`에 걸린 명령(네트워크가 끊겨 `git fetch`·`gh`가 실패하는 등), 터미널 창 닫힘, Ctrl-C, `kill`로 끝나면 알림도 티켓 기록도 없었다. 알림은 Slack으로, GitHub는 기록으로 나눴다. GitHub 코멘트를 알림으로 쓰지 않는 이유: 루프는 사용자 계정(`gh auth`)으로 쓰고 GitHub는 본인 활동을 본인에게 알리지 않는다.
+
+- `ticket-loop.sh`: 멈춤 보고(`stop_report`)를 한 곳으로 모으고 한 번만 한다. `die`, 새 `on_exit`(EXIT — `set -e`에 걸린 명령을 사유로, trap 안의 `BASH_COMMAND`), 새 `on_signal`(HUP·INT·TERM·PIPE)이 모두 여기로 온다. bash는 신호에도 EXIT trap을 돌리지만 그 안의 `$?`가 0이라(5.3·3.2 실험) 신호는 따로 잡는다. 보고 내용: 진행 중 티켓을 `stopped`로 기록(전과 같음, 이제 신호·`set -e`에도), 그 이슈에 GitHub 기록, 데스크톱과 Slack 알림. 종료 코드는 그대로다(`die` 1, `set -e`는 걸린 명령의 것, HUP 129·INT 130·PIPE 141·TERM 143)
+- PIPE: 로그를 받던 `tee`만 먼저 죽은 상태에서 루프가 로그 한 줄을 쓰면 SIGPIPE(141)로 죽고 EXIT trap도 돌지 않아 보고 없이 잠금까지 남았다(실험 — 다음 실행이 "Another loop is running"으로 막힌다). PIPE도 잡아 보고하고, 보고하는 동안은 PIPE를 무시한다. trap은 자식에 이어지지 않으므로 파이프 안 명령의 SIGPIPE 동작은 그대로다. pty를 닫아 터미널 창 닫힘을 흉내 낸 실험에서는 `tee`가 살아 ERROR 줄까지 로그에 남았다
+- Slack: `SLACK_WEBHOOK_URL`(Incoming Webhook)이 있으면 루프 시작(대상 목록 10개까지), 티켓 완료(PR·경과 분), 멈춤(사유 + 로그 끝 12줄 — 워커 화면 꼬리가 들어 있어 "왜 멈췄나"가 보인다), 루프 종료를 올린다. 본문의 `#N`은 이슈·PR 링크(`gh repo view`의 URL — GitHub Enterprise도 맞다), `&`·`<`·`>`는 Slack 규칙대로 이스케이프한다. `SLACK_MENTION`(예 `<@U012AB3CD>`)은 멈춤에만 앞에 붙고 Ctrl-C에는 붙지 않는다. 잠금을 잡은 실행만 보낸다 — `--dry-run`, 그리고 이미 도는 루프와 겹쳐 시작하자마자 멈춘 실행이 "루프가 멈췄다"고 알리지 않게. 보내기 실패는 경고 한 줄이고 루프 결과를 바꾸지 않는다. 시작 줄에 "notifications: desktop + Slack"
+- GitHub 기록: 티켓 처리 중(`STOP_ISSUE` — 병합 뒤 검증 실패도 그 티켓) 멈추면 그 이슈에 코멘트(사유, 머신·백엔드·에이전트·모델, 티켓 시작→중단 시각, PR, 남겨 둔 워크트리(`~` 경로), 루프 로그 파일, 루프 자신의 로그 끝 30줄)를 달고 `STOPPED_LABEL`(기본 `loop-stopped`, 없으면 만든다)을 붙인다. 코멘트의 로그는 `[시각]`으로 시작하는 루프 자신의 줄뿐이다 — 들여 쓴 워커 화면·검증 로그는 공개 저장소에 올리지 않는다. 대상 선택은 이 라벨을 보지 않고, 루프가 그 티켓을 병합하면 뗀다
+- 기계별 설정 파일 `~/.config/ticket-loop/loop.env`(`XDG_CONFIG_HOME`을 따른다): 저장소 `loop.env`보다 먼저 읽어 그쪽이 이긴다(환경변수는 둘 다 이긴다). Webhook URL 같은 비밀 값은 커밋하는 저장소 `loop.env`에 둘 수 없어서다. 저장소 `loop.env`에 `hooks.slack.com`이 있으면 시작할 때 경고한다
+- 데스크톱 알림(macOS)이 문구를 AppleScript 소스에 끼우지 않고 인자로 넘긴다 — 티켓 제목이나 멈춤 사유(`set -e`의 명령)의 따옴표가 스크립트를 깨 알림이 조용히 사라지던 것
+- 잠금: EXIT trap이 `on_exit` 하나가 되고, 잠금은 이 실행이 잡았을 때(`LOCK_HELD`)만 푼다. trap은 잠금 전에 건다
+- `tests/smoke.sh`: 알림·멈춤 보고 블록을 가짜 `gh`·`curl`·`osascript`로 그대로 부른다 — `die`·`set -e`·HUP·INT·TERM·PIPE·정상 종료 일곱 가지의 종료 코드·사유·보고 횟수(한 번)·잠금 해제, Slack 페이로드(아이콘·멘션은 멈춤만·Ctrl-C 제외·`#N` 링크·이스케이프·로그 꼬리), 데스크톱 알림 인자, GitHub 호출 순서(라벨 만들기·코멘트·라벨 붙이기)와 코멘트 내용(워커 화면 줄이 없을 것), 잠금을 못 잡은 실행(Slack·GitHub 없음, 남의 잠금 유지), 웹훅이 없을 때, 완료·시작 알림. 본 스크립트의 연결(사용자 설정 파일을 먼저 읽음, trap→잠금→`LOCK_HELD` 순서, EXIT trap 하나, `STOP_ISSUE`, 병합 뒤 라벨 떼기). 넣은 결함(Ctrl-C 멘션, 남의 잠금 지우기)을 잡는 것을 확인했고 bash 3.2로도 통과한다
+- 손으로 확인한 것: 실제 `curl`을 로컬 HTTP 서버로 — `application/json`, 본문 그대로, 연결 실패 시 경고만. pty를 닫아 터미널 창 닫힘 흉내 — 129로 끝나며 기록·GitHub·Slack·잠금 해제. `tee`만 먼저 죽였을 때 — PIPE를 안 잡으면 141로 조용히 죽고 잠금이 남고, 잡으면 보고한다. 실제 Slack 워크스페이스(비공개 채널, 새 앱 마법사 Blank app → Bot scope `incoming-webhook` → Create and Install에서 채널 선택)에 `slack_post`로 네 종류를 보내 아이콘·`#N` 링크·로그 코드 블록이 그대로 그려지는 것을 봤다. 실제 루프 실행으로는 아직 돌리지 않았다
+- 잡지 못하는 것: `kill -9`, 전원 꺼짐, 잠자기 — 스크립트가 아무것도 보내지 못한다. 외부 데드맨 스위치(주기적 핑이 끊기면 알리는 서비스)가 필요한 몫이라 이번에는 넣지 않았다
+- 가이드북: 6장 변수 표 세 행과 기계별 설정 파일 한 줄, 10.2 첫머리(멈춤 보고와 어디부터 볼지), 부록 D 재생성, 부록 E 한 행. README 두 벌에 "알림" 절(Slack 앱 만들기·설정 파일·폰 알림·확인)과 기계별 파일 한 줄, 버전 고정 `#v0.8.8`. PDF 재빌드
+- 이미 설치된 저장소: `npx github:iwishash/ticket-loop-kit#v0.8.8 init`(또는 `install.sh`)으로 스크립트가 바뀐다. 설정 없이도 GitHub 기록은 켜진다(라벨은 첫 멈춤 때 만든다). Slack은 컴퓨터마다 `~/.config/ticket-loop/loop.env`에 `SLACK_WEBHOOK_URL`을 둔다
+
 ## 0.8.7 — 2026-10-15
 
 루프가 터미널(과 로그 파일)에 찍는 문구를 영어로 바꿨다. 한국어 터미널 로그를 영어로 보고 싶다는 요구.

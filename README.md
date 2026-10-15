@@ -36,7 +36,7 @@ From the root of the target repository:
 npx github:iwishash/ticket-loop-kit init
 ```
 
-Pick the backend and install steps with the keyboard (`--yes` skips the questions; `NO_COLOR` disables colors). Pin a version with `npx github:iwishash/ticket-loop-kit#v0.8.7 init`. Without Node:
+Pick the backend and install steps with the keyboard (`--yes` skips the questions; `NO_COLOR` disables colors). Pin a version with `npx github:iwishash/ticket-loop-kit#v0.8.8 init`. Without Node:
 
 ```bash
 bash <(curl -fsSL https://raw.githubusercontent.com/iwishash/ticket-loop-kit/main/install.sh)
@@ -130,10 +130,36 @@ The plugin and `~/.claude/skills` checks run only for `--agent claude`; with `--
 
 A plain clone runs on another computer; reinstall only to upgrade the kit, on one computer, and `git pull` elsewhere.
 
-- Everything the loop needs is committed. The only per-machine files are `.ticket-loop/*.log` and `tickets.jsonl` (ignored).
+- Everything the loop needs is committed. The only per-machine files are `.ticket-loop/*.log` and `tickets.jsonl` (ignored), plus `~/.config/ticket-loop/loop.env` outside the repository (secrets such as the Slack webhook URL; see "Notifications").
 - The backend may differ per computer: `BACKEND=cmux bash scripts/ticket-loop.sh N` overrides the `loop.env` default. cmux and tmux need `WORKTREE_SETUP_CMD` in `loop.env`, worktrees under `~/.cache/ticket-loop/<owner-repo>/worktrees`, and the main checkout trusted by Claude Code (open `claude` there once).
 - Concurrent loops: give explicit ticket numbers, or partition automatic selection with `--parent` or `--label`. Assignee and open-PR checks do not prevent a race seconds apart; a conflicting PR is handled by the repair step.
 - The spec report is drawn from that computer's `tickets.jsonl`, so run one spec on one computer; tickets without records fall back to PR timestamps.
+
+## Notifications: Slack, and stop records on GitHub
+
+So that a loop that breaks while you are away does not go unnoticed, the loop reports in two places.
+
+- **Slack (notification)**: with `SLACK_WEBHOOK_URL` set, the loop posts start, each ticket done, a stop, and finish to a channel. A stop carries the reason and the last 12 log lines (including the worker screen tail), prefixed with `SLACK_MENTION` if set (not for Ctrl-C).
+- **GitHub (record)**: when the loop stops mid-ticket it comments on that issue (reason, machine, PR, worktree, the last 30 of the loop's own log lines) and adds the `loop-stopped` label (`STOPPED_LABEL`). The loop writes as your account, and GitHub does not notify you of your own activity, so this is a record, not an alert. Ticket selection ignores the label; the loop removes it when it merges that ticket. The worker screen is left out of the comment so it never lands in a public repository.
+
+A stop is reported once however the loop ends: a stop condition (no PR, timeout, repairs used up, …), the terminal window closing, Ctrl-C, `kill`, or a command failing under `set -e` (for example `git fetch` or `gh` when the network drops). `kill -9`, power loss and sleep cannot be caught: the script gets no chance to send anything.
+
+Slack setup (once per computer):
+
+1. <https://api.slack.com/apps> → **Create New App** → **Blank app** (formerly From scratch) → a name (e.g. `ticket-loop`) and the workspace.
+2. In the wizard that follows, add only `incoming-webhook` under **Bot scopes** (leave user scopes and events empty) → **Create and Install** → pick the channel for the webhook (e.g. a private `#ticket-loop` created beforehand; you must be a member to see it) → **Allow**. **Go to App Settings** → **Incoming Webhooks** in the sidebar → copy the URL under "Webhook URLs for Your Workspace" (the Slack CLI steps are not needed). On the older screens, **Incoming Webhooks** → **Activate Incoming Webhooks** → **Add New Webhook** gives the same URL. Workspaces that restrict app installs need admin approval.
+3. Put the URL in the per-machine file, which is not committed. Do not use the repository `loop.env`; it is committed, and the loop warns at startup if a webhook URL is there. Anyone with the URL can post to the channel.
+   ```bash
+   mkdir -p ~/.config/ticket-loop
+   cat >> ~/.config/ticket-loop/loop.env <<'EOF'
+   SLACK_WEBHOOK_URL="${SLACK_WEBHOOK_URL:-https://hooks.slack.com/services/T…/B…/…}"
+   SLACK_MENTION="${SLACK_MENTION:-<@U012AB3CD>}"   # optional: Slack profile → ⋮ → Copy member ID
+   EOF
+   chmod 600 ~/.config/ticket-loop/loop.env
+   ```
+   The file applies to every repository on that computer (it follows `XDG_CONFIG_HOME`) and is read before the repository `loop.env`, so it wins.
+4. Phone alerts: set the channel to notify on all new messages, or keep it at mentions only and let `SLACK_MENTION` ring only on stops.
+5. Check: the loop's startup lines show `notifications: desktop + Slack` and "Ticket loop started" appears in the channel. `--dry-run` sends nothing.
 
 ## Working on the kit
 
@@ -162,3 +188,4 @@ Not yet verified:
 - Linux and WSL. The Linux branches have never executed; try the tmux backend inside WSL first. Orca driven from WSL through `orca-ide` is an open question (Windows app vs. Linux AppImage under WSLg, path mapping).
 - Codex as the worker. The preset, prompts, skill layout, `AGENTS.md`, `.codex/rules/ticket-loop.rules`, and `--agent codex` are in place, but nothing has run on a machine with Codex installed: idle detection, `$implement` picking up the skill, repair prompts, and whether the rules file loads under `--dangerously-bypass-approvals-and-sandbox`.
 - The source repository rsrehab/rental-portal still uses its own `scripts/orca-ticket-loop.sh`.
+- Slack notifications and GitHub stop records from a real loop run. In a real Slack workspace only the rendering was checked (the loop's `slack_post` sending the four message kinds: icons, `#N` links, the log code block); the stop paths were checked with fake `gh` and `curl` and a closed pty standing in for a closed terminal.

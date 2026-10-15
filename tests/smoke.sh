@@ -584,6 +584,100 @@ grep -qF 'git ls-remote --heads origin "refs/heads/${b}" "refs/heads/${b}-*"' "$
 grep -qE 'grep -E "/\$\{BRANCH_PREFIX:-issue-\}\$\{n\}\( \|-\|\$\)"' "$KIT/files/scripts/ticket-state.sh" || fail "ticket-state.sh 워크트리 조회 패턴이 바뀜"
 echo "ok  티켓 PR 찾기(issue-N·issue-N-slug 는 잡고 issue-N0 은 안 잡음)·ticket-state 필터"
 
+# 알림·멈춤 보고: 가짜 gh·curl·osascript 로 블록을 그대로 부른다(GitHub·Slack·데스크톱 없이).
+#   멈춤은 어떻게 끝나든 한 번 — die·set -e·HUP·INT·TERM·PIPE(정상 종료는 없음), 종료 코드는 그대로, 잠금은 이 실행이 잡았을 때만 푼다
+#   Slack: 아이콘·이스케이프(&<>)·#N 링크·멘션은 stop 만(Ctrl-C 는 없음)·로그 꼬리(워커 화면 포함), 웹훅이 없거나 잠금을 안 잡은 실행은 안 보낸다
+#   GitHub 기록: 라벨 만들기·코멘트(사유·머신·PR·모델·워크트리 ~·로그는 루프 자신의 줄만)·라벨 붙이기
+M="$(cd "$T" && pwd -P)/stop"; mkdir -p "$M/bin"
+sed -n '/^# ----- 알림 · 멈춤 보고 -----/,/^# ----- 알림 · 멈춤 보고 끝 -----/p' "$KIT/files/scripts/ticket-loop.sh" > "$M/fn.sh"
+grep -q '^stop_report() ' "$M/fn.sh" && grep -q '^on_signal() ' "$M/fn.sh" && grep -q '^on_exit() ' "$M/fn.sh" || fail "알림·멈춤 보고 블록을 찾지 못함"
+for b in gh curl osascript; do   # 인자를 \x1e 로 이어 JSON 한 줄로 남긴다(본문의 줄바꿈·따옴표도 그대로)
+  printf '#!/usr/bin/env bash\nprintf "%%s\\x1e" "$@" | jq -Rsc --arg cmd %s '"'"'{cmd: $cmd, args: (split("\\u001e")[:-1])}'"'"' >> "$CALLS"\n' "$b" > "$M/bin/$b"
+  chmod +x "$M/bin/$b"
+done
+cat > "$M/run.sh" <<'EOF'
+set -euo pipefail
+ROOT="$PWD"; OWNER_REPO=o/r; BACKEND=orca; BACKEND_NAME=Orca; AGENT=claude
+SLACK_WEBHOOK_URL=https://hooks.example/x; SLACK_MENTION="<@U1>"; STOPPED_LABEL=loop-stopped
+LOG_FILE="$PWD/loop.log"; LOCK_DIR="$PWD/lock"
+log() { case "$1" in title|step|ok|warn|err) shift ;; esac; printf '[2026-10-15 10:02:00] %s\n' "$*" >> "$LOG_FILE"; }
+record_ticket() { printf '%s|%s\n' "$1" "$2" >> rec; }
+source fn.sh
+REPO_URL=https://github.com/o/r
+trap on_exit EXIT; trap 'on_signal HUP' HUP; trap 'on_signal INT' INT; trap 'on_signal TERM' TERM; trap 'on_signal PIPE' PIPE
+mkdir "$LOCK_DIR"; LOCK_HELD=1
+CUR_N=12; STOP_ISSUE=12; CUR_PR=34; CUR_STARTED=$(( $(date +%s) - 125 )); CUR_MODEL="Opus 5.5"; WT_PATH="$HOME/wt/issue-12"; mkdir -p "$WT_PATH"
+eval "${2:-}"
+case "$1" in
+  die) die '#12: PR #34 CI failed — "x" <y> & z' ;;
+  errexit) git -C /nonexistent fetch -q origin main 2>/dev/null ;;
+  HUP|INT|TERM|PIPE) kill -"$1" $$; sleep 5 ;;
+  ok) : ;;
+esac
+EOF
+stop_case() {  # $1 어떻게 끝나나(die|errexit|HUP|INT|TERM|ok), $2 덧붙일 설정(bash 문장) → 종료 코드
+  rm -rf "$M/calls.jsonl" "$M/rec" "$M/lock"; : > "$M/calls.jsonl"
+  printf '[2026-10-15 10:00:00] #12: PR #34 opened\n  worker-screen-line\n' > "$M/loop.log"
+  local rc=0
+  (cd "$M" && PATH="$M/bin:$PATH" CALLS="$M/calls.jsonl" HOME="$M/home" bash run.sh "$1" "${2:-}" 2>/dev/null) || rc=$?
+  echo "$rc"
+}
+calls() { jq -s --arg c "$1" '[.[] | select(.cmd == $c)] | length' "$M/calls.jsonl"; }
+slack_text() { jq -rs '[.[] | select(.cmd == "curl")][0].args as $a | $a[($a | index("--data")) + 1] | fromjson | .text' "$M/calls.jsonl"; }
+gh_comment() { jq -rs '[.[] | select(.cmd == "gh" and .args[1] == "comment")][0].args as $a | ($a[2] + "\n" + $a[($a | index("--body")) + 1])' "$M/calls.jsonl"; }
+L='<https://github.com/o/r/issues'
+rc="$(stop_case die)"; [[ "$rc" == 1 ]] || fail "die 종료 코드: $rc"
+[[ "$(cat "$M/rec")" == 'stopped|#12: PR #34 CI failed — "x" <y> & z' ]] || fail "die: 티켓 기록: $(cat "$M/rec")"
+[[ "$(calls curl)" == 1 && "$(calls osascript)" == 1 ]] || fail "die: Slack·데스크톱 알림이 한 번씩이 아님(curl $(calls curl), osascript $(calls osascript))"
+out="$(slack_text)"
+[[ "$out" == ":octagonal_sign: *Ticket loop stopped* · o/r · "* ]] || fail "die: Slack 머리줄: $out"
+grep -qF "<@U1> $L/12|#12>: PR $L/34|#34> CI failed — \"x\" &lt;y&gt; &amp; z" <<<"$out" || fail "die: Slack 본문(멘션·링크·이스케이프): $out"
+grep -qF '```' <<<"$out" && grep -qF 'worker-screen-line' <<<"$out" && grep -qF 'ERROR: #12: PR #34' <<<"$out" || fail "die: Slack 에 로그 꼬리(워커 화면·ERROR 줄)가 없음: $out"
+[[ "$(jq -rs '[.[] | select(.cmd == "osascript")][0].args[-2:] | join("|")' "$M/calls.jsonl")" == 'Ticket loop stopped|#12: PR #34 CI failed — "x" <y> & z' ]] || fail "die: 데스크톱 알림 문구가 인자로 가지 않음"
+[[ "$(jq -rs '[.[] | select(.cmd == "gh") | .args[0:2] | join(" ")] | join(",")' "$M/calls.jsonl")" == "label create,issue comment,issue edit" ]] || fail "die: gh 호출 순서: $(jq -c . "$M/calls.jsonl")"
+jq -e -s '[.[] | select(.cmd == "gh" and .args[1] == "edit")][0].args | . == ["issue","edit","12","--add-label","loop-stopped"]' "$M/calls.jsonl" >/dev/null || fail "die: 라벨 붙이기 인자"
+out="$(gh_comment)"
+for want in $'12\n**ticket-loop 중단** — #12: PR #34 CI failed' '에이전트 claude (Opus 5.5)' '(2분)' '- PR #34' '워크트리 `~/wt/issue-12` — 조사용' '루프 로그 `loop.log`' '<details><summary>루프 로그 마지막 2줄</summary>' 'ERROR: #12: PR #34 CI failed'; do
+  grep -qF -- "$want" <<<"$out" || fail "die: GitHub 코멘트에 '$want' 없음: $out"
+done
+! grep -q 'worker-screen-line' <<<"$out" || fail "die: GitHub 코멘트에 워커 화면 줄이 실림(루프 자신의 줄만이어야 한다)"
+[[ ! -e "$M/lock" ]] || fail "die: 잡은 잠금을 풀지 않음"
+rc="$(stop_case errexit)"; [[ "$rc" == 128 ]] || fail "set -e 종료 코드가 걸린 명령의 것이 아님: $rc"
+[[ "$(cat "$M/rec")" == 'stopped|#12: unexpected exit (status 128) at: git -C /nonexistent fetch -q origin main 2> /dev/null' ]] || fail "set -e: 사유: $(cat "$M/rec")"
+[[ "$(calls curl)" == 1 ]] && grep -qF "<@U1> $L/12|#12>: unexpected exit (status 128)" <<<"$(slack_text)" || fail "set -e: Slack: $(slack_text)"
+[[ ! -e "$M/lock" ]] || fail "set -e: 잠금을 풀지 않음"
+for sig in HUP INT TERM PIPE; do
+  rc="$(stop_case "$sig")"
+  case "$sig" in HUP) want=129; why="terminal closed (SIGHUP)" ;; INT) want=130; why="interrupted (Ctrl-C)" ;; TERM) want=143; why="terminated (SIGTERM)" ;; PIPE) want=141; why="log output closed (SIGPIPE — terminal gone?)" ;; esac
+  [[ "$rc" == "$want" ]] || fail "SIG${sig} 종료 코드: $rc"
+  [[ "$(cat "$M/rec")" == "stopped|#12: ${why}" ]] || fail "SIG${sig}: 사유: $(cat "$M/rec")"
+  [[ "$(calls curl)" == 1 && "$(jq -s '[.[] | select(.cmd == "gh" and .args[1] == "comment")] | length' "$M/calls.jsonl")" == 1 ]] || fail "SIG${sig}: 보고가 한 번이 아님"
+  out="$(slack_text)"
+  if [[ "$sig" == INT ]]; then
+    grep -qF "$L/12|#12>: ${why}" <<<"$out" && ! grep -qF '<@U1>' <<<"$out" || fail "Ctrl-C 는 멘션 없이 알려야 함: $out"
+  else
+    grep -qF "<@U1> $L/12|#12>: ${why}" <<<"$out" || fail "SIG${sig}: Slack: $out"
+  fi
+  [[ ! -e "$M/lock" ]] || fail "SIG${sig}: 잠금을 풀지 않음"
+done
+rc="$(stop_case ok)"; [[ "$rc" == 0 && ! -s "$M/calls.jsonl" && ! -e "$M/rec" && ! -e "$M/lock" ]] || fail "정상 종료인데 보고했거나 잠금이 남음(rc $rc): $(cat "$M/calls.jsonl")"
+rc="$(stop_case die 'LOCK_HELD=0; STOP_ISSUE=; CUR_N=')"   # 이미 도는 루프와 겹친 실행: 시작 전에 멈춘다
+[[ "$rc" == 1 && "$(calls curl)" == 0 && "$(calls gh)" == 0 && "$(calls osascript)" == 1 && -d "$M/lock" ]] || fail "잠금을 못 잡은 실행은 Slack·GitHub 없이 데스크톱만, 남의 잠금은 그대로여야 함(rc $rc): $(cat "$M/calls.jsonl")"
+rc="$(stop_case die 'SLACK_WEBHOOK_URL=')"; [[ "$rc" == 1 && "$(calls curl)" == 0 && "$(calls gh)" == 3 ]] || fail "웹훅이 없으면 Slack 만 빠져야 함: $(cat "$M/calls.jsonl")"
+rc="$(stop_case ok 'notify "Ticket done" "#12 T01 & co — PR #34, 5m" done; STOP_ISSUE=')"
+out="$(slack_text)"; [[ "$rc" == 0 && "$out" == ":white_check_mark: *Ticket done* · o/r · "*$'\n'"$L/12|#12> T01 &amp; co — PR $L/34|#34>, 5m" ]] || fail "완료 알림: $out"
+rc="$(stop_case ok 'REPO_URL=; slack_post "Ticket loop started" "1 ticket"$'"'"'\n'"'"'"#12 T01" start')"
+out="$(slack_text)"; [[ "$out" == ":arrow_forward: *Ticket loop started* · o/r · "*$'\n1 ticket\n#12 T01' ]] || fail "시작 알림(저장소 URL 없으면 링크 없이): $out"
+# 본 스크립트의 연결: 사용자 설정 파일을 저장소 loop.env 보다 먼저 읽고, trap 은 잠금 전에, LOCK_HELD 는 잠금을 잡은 뒤, 티켓마다 STOP_ISSUE,
+# 병합하면 멈춤 라벨을 뗀다. EXIT trap 은 on_exit 하나뿐
+L1="$(grep -n 'source "$USER_LOOP_ENV"' "$KIT/files/scripts/ticket-loop.sh" | cut -d: -f1)"; L2="$(grep -n 'source "$LOOP_ENV"' "$KIT/files/scripts/ticket-loop.sh" | cut -d: -f1)"
+[[ -n "$L1" && -n "$L2" && "$L1" -lt "$L2" ]] || fail "사용자 loop.env 를 저장소 loop.env 보다 먼저 읽지 않음"
+grep -qF 'USER_LOOP_ENV="${XDG_CONFIG_HOME:-$HOME/.config}/ticket-loop/loop.env"' "$KIT/files/scripts/ticket-loop.sh" || fail "사용자 loop.env 경로가 바뀜"
+grep -A3 "trap on_exit EXIT; trap 'on_signal HUP' HUP; trap 'on_signal INT' INT; trap 'on_signal TERM' TERM; trap 'on_signal PIPE' PIPE" "$KIT/files/scripts/ticket-loop.sh" | grep -A1 'mkdir "$LOCK_DIR"' | grep -q '^  LOCK_HELD=1$' || fail "trap(잠금 전)·LOCK_HELD=1(잠금 뒤) 순서가 아님"
+[[ "$(grep -c 'trap .* EXIT' "$KIT/files/scripts/ticket-loop.sh")" == 1 ]] || fail "EXIT trap 이 on_exit 하나가 아님"
+grep -q 'STOP_ISSUE="$n"$' "$KIT/files/scripts/ticket-loop.sh" && grep -qF -- '--remove-label "$STOPPED_LABEL"' "$KIT/files/scripts/ticket-loop.sh" || fail "run_ticket 이 STOP_ISSUE 를 두거나 병합 뒤 멈춤 라벨을 떼지 않음"
+echo "ok  알림·멈춤 보고(Slack·GitHub 기록, die·set -e·신호, 잠금)"
+
 # 템플릿 자리표: 무거운 테스트는 스위트와 파일 하나 실행 명령 두 자리표로, 설정 스킬의 결정 표가 둘 다 묻는다
 for f in .ticket-loop/worker-rules.md .agents/skills/implement/SKILL.md .agents/skills/pr/SKILL.md; do
   grep -q '__HEAVY_TEST_FILE__' "$KIT/templates/$f" || fail "templates/$f 에 __HEAVY_TEST_FILE__ 없음"

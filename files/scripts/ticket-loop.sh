@@ -40,6 +40,8 @@ set -euo pipefail
 # 같은 내용 + 모델을 RECORDS_FILE(JSONL)에도 남기고, 스펙 리포트가 GitHub의 PR과 합쳐 표로 만든다.
 # 저장소별 설정은 .ticket-loop/loop.env에 둔다(있으면 읽는다). 그 파일은 `VAR="${VAR:-값}"` 꼴로 써서
 # 실행할 때 준 환경변수가 이기게 한다. 예: CI_SKIP_REGEX="${CI_SKIP_REGEX:-^docs/}" POST_MERGE_PORT="${POST_MERGE_PORT:-3000}"
+# 기계별 설정과 비밀 값(SLACK_WEBHOOK_URL)은 커밋하지 않는 ~/.config/ticket-loop/loop.env(XDG_CONFIG_HOME을 따른다)에 같은 꼴로 둔다.
+# 저장소 loop.env보다 먼저 읽어 그쪽이 이긴다(실행할 때 준 환경변수는 둘 다 이긴다).
 #
 # 환경변수(선택):
 #   BACKEND             orca | cmux | tmux (기본 orca). 워크트리 생성·에이전트 터미널·idle 판정·상태 표시를 누가 하나. 아래 "백엔드" 절
@@ -88,15 +90,32 @@ set -euo pipefail
 #   REPORT_OPEN         리포트를 쓴 뒤 브라우저로 여는지 (기본 1). 0이면 안 연다. SSH 세션·화면 없는 Linux에서는 값과 무관하게 안 연다
 #   MODEL_REGEX         워커 터미널에서 모델 이름을 뽑는 정규식(ERE) (claude: 상태줄·배너의 "Opus 5.5" 꼴, codex: "gpt-5.1-codex" 꼴).
 #                       못 찾으면 리포트에 not recorded
+#   SLACK_WEBHOOK_URL   Slack Incoming Webhook URL (기본 없음 = Slack 끔). 루프 시작·티켓 완료·멈춤·루프 종료를 그 채널에 올린다.
+#                       잠금을 잡은 실행만 보낸다(--dry-run, 이미 도는 루프와 겹친 실행은 안 보낸다). 비밀 값이다 — 커밋하는 저장소
+#                       loop.env가 아니라 ~/.config/ticket-loop/loop.env나 환경변수에 둔다
+#   SLACK_MENTION       멈춤 알림 앞에 붙일 멘션, 예 "<@U012AB3CD>"(자기 멤버 ID) 또는 "<!channel>" (기본 없음). 채널 알림을 "멘션만"으로
+#                       두고도 멈출 때만 폰이 울린다. Ctrl-C로 멈춘 것(사람이 앞에 있다)에는 붙이지 않는다
+#   STOPPED_LABEL       루프가 멈춘 티켓에 붙이는 라벨 (기본 loop-stopped, 없으면 만든다). 기록용이다 — 대상 선택은 이 라벨을 보지 않고,
+#                       루프가 그 티켓을 병합하면 뗀다
 #
 # 멈추는 조건(루프 종료, 워크트리는 조사용으로 남긴다):
 #   - 워커가 PR 없이 멈춤(질문·실패) / 티켓 타임아웃 / 백엔드 터미널 끊김 / 에이전트 기동 실패
 #   - 수리 REPAIR_ROUNDS회 뒤에도 CI 실패 또는 충돌
 #   - 병합 뒤 POST_MERGE_CMD 실패, 또는 POST_MERGE_PORT가 10분 안에 비지 않음(기다리는 동안은 로그 한 줄 뒤 조용하다 — 멈춤이 아니다)
 # 자동 선택은 선행 이슈가 열렸거나, PR이 이미 있거나, 담당자가 있거나, 하위 이슈를 가진(스펙) 이슈를 건너뛴다.
+#
+# 멈추면 — 위 조건, 그리고 터미널 창 닫힘(HUP·PIPE)·Ctrl-C·kill(TERM)·set -e에 걸린 명령(네트워크가 끊겨 git fetch·gh가 실패하는 등) —
+# 어떻게 끝나든 한 번만 보고한다: 진행 중 티켓을 stopped로 기록하고, 그 이슈에 코멘트(사유·머신·PR·워크트리·루프 로그 끝)와
+# STOPPED_LABEL을 남기고(GitHub 기록 — 루프는 본인 계정으로 쓰므로 GitHub는 본인에게 알리지 않는다. 알림이 아니라 기록이다),
+# 데스크톱과 Slack(SLACK_WEBHOOK_URL)에 알린다. Slack에는 루프 시작·티켓 완료·루프 종료도 간다.
+# kill -9·전원 꺼짐·잠자기처럼 스크립트가 아무것도 보내지 못하는 경우는 잡지 못한다.
 
 ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"   # 저장소 루트. 도구 검사 뒤 git으로 다시 확정한다
 LOOP_ENV="$ROOT/.ticket-loop/loop.env"
+# 기계별 설정·비밀 값은 커밋하지 않는 사용자 파일에 둔다. 저장소 loop.env보다 먼저 읽어 이긴다(둘 다 VAR="${VAR:-값}" 꼴)
+USER_LOOP_ENV="${XDG_CONFIG_HOME:-$HOME/.config}/ticket-loop/loop.env"
+# shellcheck source=/dev/null
+[[ ! -f "$USER_LOOP_ENV" ]] || source "$USER_LOOP_ENV"
 # shellcheck source=/dev/null
 [[ ! -f "$LOOP_ENV" ]] || source "$LOOP_ENV"
 
@@ -138,6 +157,9 @@ REPORT_DIR="${REPORT_DIR:-docs/loop-reports}"
 REPORT_OPEN="${REPORT_OPEN:-1}"
 PROGRESS_SEC="${PROGRESS_SEC:-60}"
 HEARTBEAT_SEC="${HEARTBEAT_SEC:-300}"
+SLACK_WEBHOOK_URL="${SLACK_WEBHOOK_URL:-}"
+SLACK_MENTION="${SLACK_MENTION:-}"
+STOPPED_LABEL="${STOPPED_LABEL:-loop-stopped}"
 # 파일 경로는 시작 때 한 번 저장소 루트 기준 절대 경로로 굳힌다(loop.env나 환경변수로 상대 경로를 줘도 같다). 루프는 저장소
 # 루트에서 돌지만, 병합 뒤 검증처럼 다른 디렉터리로 cd 한 서브셸에서 여는 파일은 그 디렉터리 기준이 된다 — 실측(0.8.3,
 # rental-portal #101)에서 post-merge-N.log가 검증 워크트리 안에 생기고 루프는 저장소 루트에서 꼬리를 찾지 못했다.
@@ -242,16 +264,113 @@ log() {
 }
 # 워커 화면·검증 로그 꼬리처럼 통째로 보여 주는 출력은 흐리게, 들여 써서 루프 로그와 가른다. $1은 줄 앞에 붙일 글자(선택)
 dim_lines() { local l; while IFS= read -r l || [[ -n "$l" ]]; do printf '%s%s%s%s\n' "$C_DIM" "${1:-  }" "$l" "$C_RESET" >&2; done; }
+# ----- 알림 · 멈춤 보고 -----
+# 알림은 데스크톱(자리에 있을 때)과 Slack(SLACK_WEBHOOK_URL — 자리를 비웠을 때) 두 곳으로 간다. 어느 쪽이 실패해도 루프 결과는 바뀌지 않는다.
+# STOP_ISSUE: 멈추면 GitHub 기록을 남길 티켓. CUR_N(티켓 기록)은 병합 기록을 쓰면 비지만, 그 뒤 병합 뒤 검증이 실패해도 그 티켓의 멈춤이다
+REPO_URL=""; STOP_ISSUE=""; STOP_REPORTED=0; LOCK_HELD=0
+fmt_epoch() { date -r "$1" '+%H:%M:%S' 2>/dev/null || date -d "@$1" '+%H:%M:%S'; }   # macOS / Linux
+
+# notify 제목 본문 [종류 [꼬리]] — 종류 start | done | stop | interrupt | finish(Slack 아이콘·멘션), 꼬리는 Slack에만 코드 블록으로 붙는다
 notify() {
   if command -v osascript >/dev/null 2>&1; then
-    osascript -e "display notification \"$2\" with title \"$1\"" >/dev/null 2>&1 || true
+    # 문구를 AppleScript 소스에 끼우지 않고 인자로 넘긴다 — 티켓 제목·멈춤 사유의 따옴표가 스크립트를 깨지 않게
+    osascript -e 'on run argv' -e 'display notification (item 2 of argv) with title (item 1 of argv)' -e 'end run' "$1" "$2" >/dev/null 2>&1 || true
   elif command -v notify-send >/dev/null 2>&1; then
     notify-send "$1" "$2" >/dev/null 2>&1 || true
   fi
+  slack_post "$@"
 }
-# 티켓 처리 중(CUR_N이 있을 때) 멈추면 그 티켓을 "stopped"로 기록해 스펙 리포트에 시도로 남긴다
-die() { log err "ERROR: $*"; [[ -z "${CUR_N:-}" ]] || record_ticket "stopped" "$*"; notify "Ticket loop stopped" "$*"; exit 1; }
-fmt_epoch() { date -r "$1" '+%H:%M:%S' 2>/dev/null || date -d "@$1" '+%H:%M:%S'; }   # macOS / Linux
+
+# Slack Incoming Webhook. 본문의 #N은 이슈·PR 링크가 된다(GitHub의 /issues/N은 PR이면 /pull/N으로 넘긴다). &·<·>는 Slack 규칙대로 이스케이프한다.
+# 멈춤(stop)에만 SLACK_MENTION을 앞에 붙인다. 잠금을 잡은 실행만 보낸다 — --dry-run과, 이미 도는 루프와 겹쳐 시작하자마자 멈춘 실행이
+# "루프가 멈췄다"고 알려 도는 루프를 의심하게 하지 않도록
+slack_post() {
+  [[ -n "$SLACK_WEBHOOK_URL" && $LOCK_HELD -eq 1 ]] || return 0
+  local payload
+  payload="$(jq -cn --arg title "$1" --arg body "${2:-}" --arg kind "${3:-}" --arg tail "${4:-}" --arg mention "$SLACK_MENTION" \
+      --arg repo "${OWNER_REPO:-${ROOT##*/}}" --arg url "$REPO_URL" --arg host "$(hostname -s 2>/dev/null || hostname)" '
+    def esc: gsub("&"; "&amp;") | gsub("<"; "&lt;") | gsub(">"; "&gt;");
+    def link: if $url == "" then . else gsub("#(?<n>[0-9]+)"; "<\($url)/issues/\(.n)|#\(.n)>") end;
+    ({start: ":arrow_forward:", done: ":white_check_mark:", stop: ":octagonal_sign:", interrupt: ":octagonal_sign:"}[$kind] // ":checkered_flag:") as $icon
+    | {text: ("\($icon) *\($title | esc)* · \($repo | esc) · \($host | esc)\n"
+        + (if $kind == "stop" and $mention != "" then "\($mention) " else "" end)
+        + ($body | esc | link)
+        + (if $tail != "" then "\n```\n\($tail | esc)\n```" else "" end))}')" || return 0
+  curl -fsS -m 15 -H 'Content-Type: application/json' --data "$payload" "$SLACK_WEBHOOK_URL" </dev/null >/dev/null 2>&1 \
+    || log warn "Slack notification failed — check SLACK_WEBHOOK_URL"
+}
+
+die() { log err "ERROR: $*"; stop_report "$*"; exit 1; }
+
+# 멈춤 보고는 한 번만 — die, 신호, 예기치 않은 종료가 모두 여기로 온다. 진행 중 티켓을 stopped로 기록하고(스펙 리포트), 그 이슈에
+# GitHub 기록을 남기고, 알린다. Slack에는 로그 끝 12줄을 붙인다 — 워커 화면 꼬리가 들어 있어 "왜 멈췄나"가 폰에서 보인다.
+# $1 사유, $2 stop | interrupt(Ctrl-C — 사람이 앞에 있으니 멘션하지 않는다)
+stop_report() {
+  [[ $STOP_REPORTED -eq 0 ]] || return 0
+  STOP_REPORTED=1
+  local reason="$1" kind="${2:-stop}" tail=""
+  [[ -z "${CUR_N:-}" ]] || record_ticket "stopped" "$reason"
+  if [[ $LOCK_HELD -eq 1 && "$LOG_FILE" != "/dev/null" && -f "$LOG_FILE" ]]; then
+    sleep 1   # 로그 파일은 tee가 비동기로 쓴다 — 방금 찍은 ERROR 줄·워커 화면이 파일에 들어오게
+    tail="$(tail -n 12 "$LOG_FILE" 2>/dev/null || true)"
+  fi
+  [[ -z "$STOP_ISSUE" ]] || github_stop_record "$STOP_ISSUE" "$reason"
+  notify "Ticket loop stopped" "$reason" "$kind" "$tail"
+}
+
+# 멈춘 티켓의 GitHub 기록 — 이슈에 코멘트(사유·머신·PR·워크트리·루프 로그 끝)를 달고 STOPPED_LABEL을 붙인다. 알림이 아니라 기록이다:
+# 루프는 사용자 계정(gh auth)으로 쓰므로 GitHub는 본인에게 알리지 않는다(알림은 Slack). 대상 선택은 이 라벨을 보지 않고, 루프가 그 티켓을
+# 병합하면 뗀다. 코멘트에 싣는 로그는 루프 자신의 줄([시각]으로 시작)뿐이다 — 들여 쓴 워커 화면·검증 로그는 공개 저장소에 올리지 않는다
+github_stop_record() {
+  local n="$1" reason="$2" lines="" now body tilde='~'
+  now="$(date +%s)"
+  [[ "$LOG_FILE" == "/dev/null" || ! -f "$LOG_FILE" ]] || lines="$(grep -E '^\[[0-9]{4}-[0-9]{2}-[0-9]{2} ' "$LOG_FILE" 2>/dev/null | tail -n 30 || true)"
+  body="**ticket-loop 중단** — ${reason}"$'\n\n'
+  body+="- 머신 \`$(hostname -s 2>/dev/null || hostname)\` · 백엔드 ${BACKEND_NAME:-$BACKEND} · 에이전트 ${AGENT}${CUR_MODEL:+ (${CUR_MODEL})}"$'\n'
+  [[ -z "${CUR_STARTED:-}" ]] || body+="- 티켓 시작 $(fmt_epoch "$CUR_STARTED") → 중단 $(fmt_epoch "$now") ($(( (now - CUR_STARTED) / 60 ))분)"$'\n'
+  [[ -z "${CUR_PR:-}" ]] || body+="- PR #${CUR_PR}"$'\n'
+  [[ -z "${WT_PATH:-}" || ! -d "${WT_PATH:-}" ]] || body+="- 워크트리 \`${WT_PATH/#"$HOME"/$tilde}\` — 조사용으로 남겨 둠"$'\n'
+  [[ "$LOG_FILE" == "/dev/null" ]] || body+="- 루프 로그 \`${LOG_FILE#"$ROOT"/}\` (그 머신에만 있다)"$'\n'
+  [[ -z "$lines" ]] || body+=$'\n'"<details><summary>루프 로그 마지막 $(grep -c . <<<"$lines")줄</summary>"$'\n\n```text\n'"${lines}"$'\n```\n\n</details>\n'
+  gh label create "$STOPPED_LABEL" --color B60205 --description "ticket-loop가 이 티켓에서 멈춤(기록용)" </dev/null >/dev/null 2>&1 || true
+  gh issue comment "$n" --body "$body" </dev/null >/dev/null 2>&1 || log warn "#${n}: failed to post the stop record to GitHub"
+  gh issue edit "$n" --add-label "$STOPPED_LABEL" </dev/null >/dev/null 2>&1 || log warn "#${n}: failed to add the ${STOPPED_LABEL} label"
+}
+
+# 모든 종료가 지나는 길(EXIT). die와 정상 종료는 따로 처리했고, 그 밖의 비정상 종료 — set -e에 걸린 명령(네트워크가 끊겨 git fetch·gh가
+# 실패하는 등) — 는 걸린 명령을 사유로 보고한다(trap 안의 BASH_COMMAND는 trap이 걸린 때의 명령이다). 잠금은 이 실행이 잡았을 때만 푼다
+on_exit() {
+  local rc=$? cmd="${BASH_COMMAND//$'\n'/ }"
+  set +e
+  if [[ $rc -ne 0 && $STOP_REPORTED -eq 0 ]]; then
+    trap '' PIPE
+    [[ ${#cmd} -le 200 ]] || cmd="${cmd:0:200}…"
+    log err "ERROR: unexpected exit (status ${rc}) at: ${cmd}"
+    stop_report "${STOP_ISSUE:+#${STOP_ISSUE}: }unexpected exit (status ${rc}) at: ${cmd}"
+  fi
+  [[ $LOCK_HELD -eq 0 ]] || rmdir "$LOCK_DIR" 2>/dev/null
+}
+
+# 신호로 끝날 때 — 터미널 창을 닫음(HUP), Ctrl-C(INT), kill(TERM), 로그를 받던 tee가 죽은 뒤 stderr 쓰기(PIPE). bash는 신호에도 EXIT trap을
+# 돌리지만 그 안의 $?가 0이라 정상 종료와 구별되지 않아 따로 잡는다. PIPE를 잡지 않으면 tee가 먼저 죽은 상태에서 log 한 줄에 루프가
+# 141로 죽고 EXIT trap도 돌지 않아 보고 없이 잠금까지 남는다(실험으로 확인). 보고하는 동안은 PIPE를 무시한다 — 이 줄은 로그 파일에
+# 못 남을 수 있지만 티켓 기록·GitHub·Slack에는 남는다. trap은 자식 프로세스에 이어지지 않아 파이프의 SIGPIPE 동작은 그대로다.
+# kill -9·전원·잠자기는 잡을 수 없다
+on_signal() {
+  local sig="$1" why kind=stop
+  trap '' PIPE; trap - HUP INT TERM
+  set +e
+  case "$sig" in
+    HUP)  why="terminal closed (SIGHUP)" ;;
+    INT)  why="interrupted (Ctrl-C)"; kind=interrupt ;;
+    PIPE) why="log output closed (SIGPIPE — terminal gone?)" ;;
+    *)    why="terminated (SIG${sig})" ;;
+  esac
+  log err "ERROR: ${why}"
+  stop_report "${STOP_ISSUE:+#${STOP_ISSUE}: }${why}" "$kind"
+  case "$sig" in HUP) exit 129 ;; INT) exit 130 ;; PIPE) exit 141 ;; *) exit 143 ;; esac
+}
+# ----- 알림 · 멈춤 보고 끝 -----
 
 for tool in gh jq git; do
   command -v "$tool" >/dev/null 2>&1 || die "${tool} is not installed."
@@ -264,11 +383,14 @@ MAIN_WT="$(git worktree list --porcelain | sed -n '1s/^worktree //p')"
 # 루프는 저장소당 하나만 — 두 루프가 같은 티켓을 집지 않게 한다
 LOCK_DIR="$(cd "$ROOT" && git rev-parse --path-format=absolute --git-common-dir)/ticket-loop.lock"
 if [[ $DRY_RUN -eq 0 ]]; then
+  # 멈춤은 어떻게 끝나든 한 번 보고한다(on_exit·on_signal). 잠금을 못 잡고 멈추면 on_exit는 잠금을 지우지 않는다(다른 루프의 것)
+  trap on_exit EXIT; trap 'on_signal HUP' HUP; trap 'on_signal INT' INT; trap 'on_signal TERM' TERM; trap 'on_signal PIPE' PIPE
   mkdir "$LOCK_DIR" 2>/dev/null || die "Another loop is running (${LOCK_DIR}). If no loop is running (pgrep -fl ticket-loop), remove that directory."
-  trap 'rmdir "$LOCK_DIR" 2>/dev/null || true' EXIT
+  LOCK_HELD=1
 fi
 
 OWNER_REPO="$(gh repo view --json nameWithOwner -q .nameWithOwner)"
+REPO_URL="$(gh repo view --json url -q .url 2>/dev/null || true)"   # Slack 본문의 #N 링크(GitHub Enterprise도 맞게)
 [[ -n "$BASE_BRANCH" ]] || BASE_BRANCH="$(gh repo view --json defaultBranchRef -q .defaultBranchRef.name)"
 
 # ---------- GitHub 조회 ----------
@@ -1102,7 +1224,7 @@ run_ticket() {
   IDLE_FALSE_POSITIVES=0
   POST_MERGE_RESULT="skipped"; POST_MERGE_LOG=""
   log title "=== #${n} ${title} ==="
-  CUR_N="$n"; CUR_TITLE="$title"; CUR_STARTED="$started_at"; CUR_STARTED_ISO="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+  CUR_N="$n"; CUR_TITLE="$title"; CUR_STARTED="$started_at"; CUR_STARTED_ISO="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"; STOP_ISSUE="$n"
   CUR_PR=""; CUR_MODEL=""; CUR_CI_SEC=""; CUR_ROUND=0
 
   git -C "$ROOT" fetch -q origin "$BASE_BRANCH"
@@ -1161,7 +1283,7 @@ run_ticket() {
 
   if [[ $NO_MERGE -eq 1 ]]; then
     log step "#${n}: --no-merge — merge PR #${pr} yourself. The worktree is kept (${wt})."
-    record_ticket "no-merge"; CUR_N=""
+    record_ticket "no-merge"; CUR_N=""; STOP_ISSUE=""
     return 0
   fi
 
@@ -1172,6 +1294,7 @@ run_ticket() {
     gh issue close "${n}" --comment "PR #${pr} 병합으로 완료 (ticket-loop)" || true
   fi
   gh issue edit "${n}" --remove-label "$IN_REVIEW_LABEL" >/dev/null 2>&1 || true
+  gh issue edit "${n}" --remove-label "$STOPPED_LABEL" >/dev/null 2>&1 || true   # 지난 실행이 멈추며 붙인 라벨(코멘트는 기록으로 남는다)
   close_spec_if_done "$(spec_of_ticket "${n}")"
 
   # 병합된 기본 브랜치로 무거운 검증 — CI가 안 붙는 문서 PR은 건너뛴다. 실패하면 기본 브랜치가 깨진 것이므로
@@ -1193,7 +1316,8 @@ run_ticket() {
   log ok "#${n} summary: wall-clock $(( ($(date +%s) - started_at) / 60 ))m, PR #${pr}, CI $([[ $ci_sec -ge 0 ]] && echo "${ci_sec}s" || echo "none (path excluded from CI)"), repairs ${round}, idle false positives ${IDLE_FALSE_POSITIVES}, post-merge check ${POST_MERGE_RESULT}"
   record_ticket "merged"; CUR_N=""
   [[ $post_rc -eq 0 ]] || die "#${n}: post-merge check failed on the merged ${BASE_BRANCH}. Check the log (${POST_MERGE_LOG}) and the check worktree ($(post_merge_worktree_path)), then rerun after a fix PR."
-  notify "Ticket done" "#${n} ${title}"
+  notify "Ticket done" "#${n} ${title} — PR #${pr}, $(( ($(date +%s) - started_at) / 60 ))m" done
+  STOP_ISSUE=""
 }
 
 # ---------- 메인 ----------
@@ -1202,6 +1326,10 @@ backend_check
 targets="$(pick_targets)"
 log "repository ${OWNER_REPO} / backend ${BACKEND_NAME} / base branch ${BASE_BRANCH} / label ${READY_LABEL}${SCOPE_LABEL:+ + ${SCOPE_LABEL}}${PARENT:+ / sub-issues of spec #${PARENT}}"
 log "post-merge check: $([[ $POST_MERGE -eq 1 ]] && echo "on — ${POST_MERGE_CMD}" || echo "off")"
+log "notifications: desktop$([[ -z "$SLACK_WEBHOOK_URL" ]] || echo " + Slack")"
+if [[ -f "$LOOP_ENV" ]] && grep -q 'hooks\.slack\.com' "$LOOP_ENV"; then
+  log warn "note: a Slack webhook URL is in .ticket-loop/loop.env, which is committed — move SLACK_WEBHOOK_URL to ${USER_LOOP_ENV} (anyone with the URL can post to the channel)"
+fi
 if [[ $POST_MERGE -eq 1 && -n "$POST_MERGE_PORT" ]] && port_in_use "$POST_MERGE_PORT"; then
   log warn "note: port ${POST_MERGE_PORT} in use ($(port_holder "$POST_MERGE_PORT" || true)) — keep it free while the loop runs. Otherwise each merge waits up to $((PORT_WAIT_SEC / 60))m for it (or use --skip-post-merge)"
 fi
@@ -1209,6 +1337,9 @@ fi
 [[ -n "$targets" ]] || { log "No tickets to process."; [[ $DRY_RUN -eq 1 ]] || { close_spec_if_done "$PARENT"; write_spec_report; suggest_retro; }; exit 0; }
 log "targets (all blocking issues currently closed):"; printf '%s\n' "$targets" | dim_lines "  #"
 [[ $DRY_RUN -eq 0 ]] || exit 0
+target_count="$(grep -c . <<<"$targets")"
+slack_post "Ticket loop started" "${target_count} ticket$([[ $target_count -eq 1 ]] || echo s) · backend ${BACKEND_NAME} · agent ${AGENT}$([[ $MAX -eq 0 ]] || echo " · max ${MAX}")
+$(head -n 10 <<<"$targets" | awk -F'\t' '{print "#" $1 " " $2}')$([[ $target_count -le 10 ]] || printf '\n+%d more' $((target_count - 10)))" start
 
 # 목록을 stdin으로 물리지 않는다 — 루프 안의 gh·백엔드 CLI·git이 stdin을 읽으면 다음 티켓이 사라진다.
 # 자동 선택이면 티켓 하나가 끝날 때마다 대상을 다시 계산해, 막 풀린 선행 관계를 반영한다.
@@ -1240,4 +1371,4 @@ close_spec_if_done "$PARENT"
 write_spec_report
 suggest_retro
 log ok "done: ${done_count} ticket$([[ $done_count -eq 1 ]] || echo s)"
-notify "Ticket loop finished" "${done_count} done$([[ -z "${CLOSED_SPECS// /}" ]] || echo " · spec${CLOSED_SPECS// / #} complete — consider /retro")"
+notify "Ticket loop finished" "${done_count} done$([[ -z "${CLOSED_SPECS// /}" ]] || echo " · spec${CLOSED_SPECS// / #} complete — consider /retro")" finish
