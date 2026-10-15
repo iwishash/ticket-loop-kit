@@ -2,6 +2,7 @@
 
 무인 루프의 워커만 따르는 프로젝트 규칙이다. 절차(선행 확인·브랜치·seam·ticket-review·PR 본문·라벨)는 `.agents/skills/implement/SKILL.md`가 단일 진실이다(`.claude/skills/implement`는 그 링크).
 
+- 루프가 만든 워크트리는 `issue-N` 브랜치(기본 브랜치의 원격 tip)에서 시작한다. 그 브랜치에 커밋하지 말고, 첫 커밋 전에 implement 스킬대로 `issue-N-<slug>` 브랜치를 만들어 거기서 일한다.
 - 검증은 두 층이다. 수시에는 `__TYPECHECK__`과 `__TEST_FILE__`만 돌린다. 전체 묶음 `__VERIFY__`는 첫 커밋 직전 1회, ticket-review 반영 커밋 직전 1회만 돌린다.
 - 무거운 테스트(__HEAVY_TESTS__)는 전체를 돌리지 않는다 — 루프가 병합 뒤 기본 브랜치에서 돌린다. 이번 티켓에서 추가·수정한 그 파일만 PR을 열기 직전에 `__HEAVY_TEST_FILE__`로 1회 돌리고, 파일과 결과를 PR 본문 "검증"에 적는다. 손대지 않았으면 "없음"이라고 적는다.
 - __MIGRATION_RULE__

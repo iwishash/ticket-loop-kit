@@ -7,7 +7,7 @@ set -euo pipefail
 # 티켓 하나당:
 #   1. 기본 브랜치에서 워크트리를 새로 만들고 에이전트(Claude Code 또는 Codex)에 `/implement N`(Codex는 `$implement N`)을 보낸다
 #      (티켓마다 새 프로세스라 컨텍스트가 비어 있다)
-#   2. 워커가 `<BRANCH_PREFIX>N-<slug>` 브랜치로 PR을 열 때까지 기다린다
+#   2. 워커가 `<BRANCH_PREFIX>N-<slug>`(또는 워크트리 브랜치 `<BRANCH_PREFIX>N` 그대로) 브랜치로 PR을 열 때까지 기다린다
 #   3. CI를 기다리고, 충돌·CI 실패는 같은 워커에 REPAIR_ROUNDS회까지 고치게 한다
 #   4. PR을 병합한다 → 본문의 `Closes #N`으로 이슈가 닫힌다. 그 티켓이 속한 스펙 이슈의 하위 이슈가 모두 닫혔으면 스펙 이슈도 닫는다
 #   5. (선택) 병합된 기본 브랜치로 POST_MERGE_CMD를 한 번 돌린다 — 워커가 못 돌리는 무거운 검증. 실패하면 멈춘다
@@ -31,6 +31,8 @@ set -euo pipefail
 # 전제: 백엔드 준비(Orca: 앱 실행·CLI 등록 / cmux: cmux 터미널 안에서 실행하거나 소켓 모드를 열어 둠 / tmux: tmux 설치), `gh auth status` 로그인,
 # 저장소 안에서 실행.
 # 진행 로그는 기본으로 .ticket-loop/loop-MMDD.log에 덧붙인다(.gitignore에 /.ticket-loop/*.log 권장).
+# PR을 기다리는 동안은 워크트리를 PROGRESS_SEC마다 들여다봐 브랜치 생성·첫 파일 수정·새 커밋을 바로, 그 사이 변경 파일 목록이 달라졌으면
+# HEARTBEAT_SEC마다 "작업 중" 한 줄을 찍는다. 지난번과 같은 내용이면 찍지 않는다.
 # 터미널에는 단계별로 색을 입힌다(티켓 제목·단계·성공·주의·오류). stderr가 터미널이 아니거나 NO_COLOR가 있으면 맨글자고,
 # 로그 파일에는 언제나 색 코드 없이 쓴다.
 # 티켓마다 "#N 요약: …" 한 줄(벽시계·PR·CI 소요·수리·idle 오판·병합 뒤 검증)을 남겨 /retro가 읽는다.
@@ -76,6 +78,10 @@ set -euo pipefail
 #   POST_MERGE_WORKTREE POST_MERGE_CMD를 돌릴 워크트리 (기본 ~/.cache/ticket-loop/<owner-repo>/post-merge, 저장소 밖)
 #   LOG_FILE            진행 로그 파일 (기본 .ticket-loop/loop-MMDD.log, /dev/null이면 끔). 상대 경로는 저장소 루트 기준이고 시작 때
 #                       절대 경로로 굳힌다 — 병합 뒤 검증 로그(post-merge-N.log)도 같은 디렉터리에 둔다
+#   PROGRESS_SEC        PR·수리를 기다리는 동안 워크트리(git)를 들여다보는 간격 (기본 60초). 브랜치 생성·첫 파일 수정·새 커밋(제목 그대로)을
+#                       그때 바로 한 줄씩 찍는다. 0이면 끄고 전처럼 idle 대기 상한(10분)마다만 돌아온다
+#   HEARTBEAT_SEC       커밋은 없지만 변경 파일 목록이 지난 줄과 달라졌을 때 "작업 중 — N분 경과, 커밋 안 된 변경 …" 한 줄을 찍는 최소 간격
+#                       (기본 300초). 목록이 같으면 아무리 지나도 찍지 않는다 — 같은 내용을 되풀이하지 않는다
 #   RECORDS_FILE        티켓별 기록 JSONL (기본 .ticket-loop/tickets.jsonl, 기계별 — 커밋하지 않는다). 상대 경로는 저장소 루트 기준
 #   REPORT_DIR          스펙 리포트 HTML 디렉터리 (기본 docs/loop-reports — 리포트는 사람이 PR로 커밋). 상대 경로는 저장소 루트 기준
 #   REPORT_OPEN         리포트를 쓴 뒤 브라우저로 여는지 (기본 1). 0이면 안 연다. SSH 세션·화면 없는 Linux에서는 값과 무관하게 안 연다
@@ -129,6 +135,8 @@ LOG_FILE="${LOG_FILE:-.ticket-loop/loop-$(date +%m%d).log}"
 RECORDS_FILE="${RECORDS_FILE:-.ticket-loop/tickets.jsonl}"
 REPORT_DIR="${REPORT_DIR:-docs/loop-reports}"
 REPORT_OPEN="${REPORT_OPEN:-1}"
+PROGRESS_SEC="${PROGRESS_SEC:-60}"
+HEARTBEAT_SEC="${HEARTBEAT_SEC:-300}"
 # 파일 경로는 시작 때 한 번 저장소 루트 기준 절대 경로로 굳힌다(loop.env나 환경변수로 상대 경로를 줘도 같다). 루프는 저장소
 # 루트에서 돌지만, 병합 뒤 검증처럼 다른 디렉터리로 cd 한 서브셸에서 여는 파일은 그 디렉터리 기준이 된다 — 실측(0.8.3,
 # rental-portal #101)에서 post-merge-N.log가 검증 워크트리 안에 생기고 루프는 저장소 루트에서 꼬리를 찾지 못했다.
@@ -163,7 +171,7 @@ case "$AGENT" in
     SKILL_PREFIX="${SKILL_PREFIX:-/}" ;;
 esac
 # ----- 에이전트 프리셋 끝 -----
-IDLE_WAIT_MS=600000       # idle 1회 대기 상한(Orca: terminal wait 한 번, cmux: 폴링 한 바퀴)
+IDLE_WAIT_MS=600000       # idle 1회 대기 상한(Orca: terminal wait 한 번, cmux: 폴링 한 바퀴). PR·수리 대기는 PROGRESS_SEC(진행 로그)마다 돌아온다
 IDLE_POLL_SEC=5           # cmux·tmux 백엔드가 에이전트 상태(lifecycle / 훅 파일)를 다시 읽는 간격
 TERMINAL_RETRY=5          # wait가 이상하게 끝났을 때 터미널 읽기를 다시 해 보는 횟수
 TERMINAL_RETRY_SEC=10
@@ -274,9 +282,13 @@ blocked_by() {
 # 하위 이슈 수 — 스펙 이슈(/to-spec이 ready-for-agent를 붙인다)를 티켓처럼 집지 않게 한다
 sub_issue_count() { gh api "repos/${OWNER_REPO}/issues/$1" --jq '.sub_issues_summary.total // 0'; }
 
+# 티켓 N의 열린 PR — head 브랜치가 `<BRANCH_PREFIX>N`과 같거나 `<BRANCH_PREFIX>N-`로 시작하는 것.
+# 워커는 implement 스킬대로 issue-N-<slug>를 만들지만, 루프가 만든 워크트리 브랜치 issue-N에 그대로 커밋해 PR을 연 실측이 있다
+# (rental-portal #102 → PR #120, 0.8.5). 접두 `N-`만 보면 그 PR을 못 찾아 "PR 없이 멈춤"으로 죽었다.
+# `N`만 접두로 보면 issue-1020이 #102에 걸리므로 정확히 같거나 `N-`로 시작할 때만이다
 open_pr_for() {
   gh pr list --state open --json number,headRefName \
-    | jq -r --arg p "${BRANCH_PREFIX}$1-" 'map(select(.headRefName | startswith($p))) | .[0].number // empty'
+    | jq -r --arg b "${BRANCH_PREFIX}$1" 'map(select(.headRefName == $b or (.headRefName | startswith($b + "-")))) | .[0].number // empty'
 }
 
 issue_title() { gh issue view "$1" --json title -q .title; }
@@ -702,21 +714,82 @@ ensure_agent_started() {
   die "#${n}: 에이전트가 터미널 ${handle}에서 뜨지 않습니다"
 }
 
+# ----- 진행 로그 -----
+# 워크트리를 만든 뒤 PR이 열리기까지(보통 수십 분) 루프 터미널에는 아무 줄도 없어 멈춘 것처럼 보였다 — 워커는 다른 창에서 일한다.
+# 그 사이 PROGRESS_SEC마다 워크트리를 git으로만 들여다본다(백엔드·에이전트와 무관하고 네트워크도 안 쓴다):
+#   브랜치가 바뀌면(워커가 issue-N → issue-N-<slug>로 옮김. 옮기지 않고 issue-N에 그대로 커밋해도 PR은 open_pr_for가 잡는다), 처음 파일이 수정되면, 새 커밋이 들어오면(제목 그대로, 오래된 것부터) 바로 한 줄.
+#   그 밖에는 커밋 안 된 변경 파일 목록이 지난 줄과 달라졌을 때만, HEARTBEAT_SEC에 한 번까지 "작업 중" 한 줄에 경과 시간과 파일(이름 셋까지)을
+#   적는다 — 이슈를 읽고 TDD로 도는 첫 수십 분은 커밋이 없어도 무엇을 만지는지 보인다. 같은 내용은 되풀이하지 않는다(변화가 없으면 조용하다).
+#   화면을 읽어 도구 호출을 뽑는 쪽은 에이전트마다 형식이 달라 쓰지 않는다
+# wait_for_pr는 커맨드 치환(서브셸)으로 불려 그 안에서 바뀐 PROG_*가 부모에 남지 않는다 — run_ticket이 전에 progress_reset을,
+# PR이 열린 뒤 progress_sync를 불러 수리 단계의 progress_check가 이미 찍은 커밋을 되풀이하지 않게 한다
+progress_reset() {   # $1 워크트리 경로. 티켓마다 한 번
+  PROG_WT="$1"; PROG_START="$(date +%s)"; PROG_LAST_LOG="$PROG_START"; PROG_DIRTY_SEEN=0
+  progress_sync
+}
+
+progress_sync() {   # 지금 HEAD·브랜치를 기준점으로(경과 시간은 그대로)
+  PROG_HEAD="$(git -C "$PROG_WT" rev-parse HEAD 2>/dev/null || true)"
+  PROG_BRANCH="$(git -C "$PROG_WT" rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
+  PROG_LAST_LOG="$(date +%s)"; PROG_LAST_FILES="$(progress_dirty)"
+  [[ -z "$PROG_LAST_FILES" ]] || PROG_DIRTY_SEEN=1
+}
+
+progress_dirty() {   # 커밋 안 된 변경 파일 경로(한 줄에 하나, 이름 바꿈은 새 이름). 무시 파일은 빠진다
+  git -C "$PROG_WT" status --porcelain --untracked-files=all 2>/dev/null | sed -e 's/^...//' -e 's/.* -> //'
+}
+
+progress_check() {   # $1 티켓 번호. 바뀐 것이 있으면 한 줄씩, 없으면 HEARTBEAT_SEC마다 한 줄
+  local n="$1" now head branch commits line files cnt names noted=0
+  [[ -n "${PROG_WT:-}" && -d "$PROG_WT" ]] || return 0
+  now="$(date +%s)"
+  branch="$(git -C "$PROG_WT" rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
+  if [[ -n "$branch" && "$branch" != "$PROG_BRANCH" ]]; then
+    log step "#${n}: 브랜치 ${branch}"; PROG_BRANCH="$branch"; noted=1
+  fi
+  head="$(git -C "$PROG_WT" rev-parse HEAD 2>/dev/null || true)"
+  if [[ -n "$head" && "$head" != "$PROG_HEAD" ]]; then
+    # 지난 HEAD 이후의 커밋들. HEAD가 뒤로 갔거나(amend·reset) 지난 값이 없으면 지금 커밋 하나만
+    commits="$(git -C "$PROG_WT" log --reverse --format='%h %s' "${PROG_HEAD:-$head}..${head}" 2>/dev/null || true)"
+    [[ -n "$commits" ]] || commits="$(git -C "$PROG_WT" log -1 --format='%h %s' "$head" 2>/dev/null || true)"
+    while IFS= read -r line; do [[ -z "$line" ]] || log step "#${n}: 커밋 ${line}"; done <<<"$commits"
+    PROG_HEAD="$head"; noted=1
+  fi
+  files="$(progress_dirty)"
+  cnt=0; [[ -z "$files" ]] || cnt="$(printf '%s\n' "$files" | grep -c .)"
+  names="$(printf '%s\n' "$files" | head -n 3 | paste -sd ',' - | sed 's/,/, /g')"
+  [[ $cnt -le 3 ]] || names="${names} 외 $((cnt - 3))"
+  if [[ $PROG_DIRTY_SEEN -eq 0 && $cnt -gt 0 ]]; then
+    log step "#${n}: 파일 수정 시작 — ${names}"; PROG_DIRTY_SEEN=1; noted=1
+  fi
+  # 심장박동: 변경 파일 목록이 지난 줄과 다를 때만. 같은 목록(또는 빈 목록)이면 시간이 아무리 지나도 되풀이하지 않는다
+  if [[ $noted -eq 0 && $cnt -gt 0 && "$files" != "$PROG_LAST_FILES" && $(( now - PROG_LAST_LOG )) -ge $HEARTBEAT_SEC ]]; then
+    log "#${n}: 작업 중 — $(( (now - PROG_START) / 60 ))분 경과, 커밋 안 된 변경 ${cnt}개 파일: ${names}"; noted=1
+  fi
+  [[ $noted -eq 0 ]] || { PROG_LAST_LOG="$now"; PROG_LAST_FILES="$files"; }
+}
+
+# idle을 한 번 기다리는 길이. 진행 로그를 켜 두면 PROGRESS_SEC마다 돌아와 워크트리를 본다
+idle_wait_ms() { if [[ "$PROGRESS_SEC" -gt 0 ]]; then echo $(( PROGRESS_SEC * 1000 )); else echo "$IDLE_WAIT_MS"; fi; }
+# ----- 진행 로그 끝 -----
+
 # PR이 생길 때까지(또는 워커가 멈출 때까지) 기다린다. 성공 시 PR 번호를 stdout에 쓴다.
 # 반환: 0 PR 열림, 1 PR 없이 멈춤, 2 타임아웃, 3 백엔드 터미널 끊김
 wait_for_pr() {
-  local n="$1" handle="$2" deadline="$3" strikes=0 pr started idle last_screen="" screen
-  started="$(date +%s)"
+  local n="$1" handle="$2" deadline="$3" strikes=0 pr started idle last_screen="" screen wait_ms
+  started="$(date +%s)"; wait_ms="$(idle_wait_ms)"
   while :; do
     pr="$(open_pr_for "${n}")"
     if [[ -n "${pr}" ]]; then
       # PR 직후 라벨·체크박스 정리까지 끝나도록 한 번 더 idle을 기다린다
       terminal_idle "${handle}" "$IDLE_WAIT_MS" || true
+      [[ "$PROGRESS_SEC" -le 0 ]] || progress_check "${n}"
       echo "${pr}"; return 0
     fi
     [[ "$(date +%s)" -lt "$deadline" ]] || return 2
-    idle=0; terminal_idle "${handle}" "$IDLE_WAIT_MS" || idle=$?
+    idle=0; terminal_idle "${handle}" "$wait_ms" || idle=$?
     [[ $idle -ne 3 ]] || return 3
+    [[ "$PROGRESS_SEC" -le 0 ]] || progress_check "${n}"
     if [[ $idle -eq 0 ]]; then
       if [[ $(( $(date +%s) - started )) -lt $STARTUP_GRACE_SEC ]]; then sleep "$IDLE_RECHECK_SEC"; continue; fi
       # PR을 연 직후에는 idle이 PR 조회보다 먼저 잡힌다(매 티켓 실측) — 잠깐 뒤 PR부터 다시 본다
@@ -735,12 +808,14 @@ wait_for_pr() {
   done
 }
 
-# 수리 프롬프트를 보내고 워커가 다시 idle이 될 때까지 기다린다
+# 수리 프롬프트를 보내고 워커가 다시 idle이 될 때까지 기다린다(그동안의 커밋도 진행 로그에 찍힌다)
 repair() {
-  local handle="$1" text="$2" deadline="$3" idle
+  local handle="$1" text="$2" deadline="$3" idle wait_ms
+  wait_ms="$(idle_wait_ms)"
   send_prompt "${handle}" "$text"
   while :; do
-    idle=0; terminal_idle "${handle}" "$IDLE_WAIT_MS" || idle=$?
+    idle=0; terminal_idle "${handle}" "$wait_ms" || idle=$?
+    [[ $idle -eq 3 ]] || [[ "$PROGRESS_SEC" -le 0 ]] || progress_check "${CUR_N}"
     [[ $idle -ne 0 ]] || return 0
     [[ $idle -ne 3 ]] || die "${BACKEND_NAME} 터미널 ${handle} 에 닿지 못했습니다 (${BACKEND_NAME} 앱 종료?)"
     [[ "$(date +%s)" -lt "$deadline" ]] || return 1
@@ -933,7 +1008,8 @@ def post: if . == "건너뜀" then "skipped"
           | if $m == null then . else "\(if $m.k == "통과" then "passed" else "failed" end) in \($m.s)s" end end;
 ($issues | sort_by(order, .number) | map(. as $i
   | ($recs | map(select(.issue == $i.number)) | sort_by(.finished)) as $rs | ($rs | last) as $r
-  | ($prs | map(select(.headRefName | startswith($prefix + ($i.number | tostring) + "-")))
+  | ($prefix + ($i.number | tostring)) as $b
+  | ($prs | map(select(.headRefName == $b or (.headRefName | startswith($b + "-"))))
      | (map(select(.state == "MERGED")) + .) | (map(select(.number == $r.pr)) + .) | first) as $pr
   | {issue: $i, pr: $pr, rec: $r, attempts: ($rs | length),
      status: (if $pr.state == "MERGED" then "merged" elif $i.state == "closed" then "closed-without-pr"
@@ -1039,6 +1115,7 @@ run_ticket() {
   CUR_MODEL="$(detect_model "${handle}")"
 
   local pr rc=0 model_now
+  progress_reset "${wt_path}"
   pr="$(wait_for_pr "${n}" "${handle}" "$deadline")" || rc=$?
   if [[ $rc -ne 0 ]]; then
     log warn "#${n}: 워커 출력 꼬리 ---"; terminal_tail "${handle}" | dim_lines || true
@@ -1048,6 +1125,7 @@ run_ticket() {
     die "#${n}: 워커가 PR 없이 멈췄습니다 (질문·실패 가능). ${BACKEND_NAME}에서 ${BRANCH_PREFIX}${n} 워크트리를 확인하세요."
   fi
   log step "#${n}: PR #${pr} 열림"
+  progress_sync
   CUR_PR="$pr"; model_now="$(detect_model "${handle}")"; [[ -z "$model_now" ]] || CUR_MODEL="$model_now"
   backend_set_status "${wt}" in-review "${pr}" "PR #${pr} — CI 대기" || true
 

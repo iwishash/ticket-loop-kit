@@ -515,6 +515,75 @@ grep -q '^LOG_FILE="$(abs_path "$LOG_FILE")"$' "$KIT/files/scripts/ticket-loop.s
 [[ "$(cd "$P/repo" && ROOT="$P/repo" FN="$P/fn.sh" bash -c 'source "$FN"; abs_path /dev/null; echo; abs_path /abs/x; echo; abs_path rel/y')" == $'/dev/null\n/abs/x\n'"$P/repo/rel/y" ]] || fail "abs_path 가 /dev/null·절대 경로를 그대로 두고 상대 경로만 ROOT 에 붙이지 않는다"
 echo "ok  병합 뒤 검증 로그 경로(저장소 루트 기준·실패 꼬리)"
 
+# 진행 로그: 실제 git 저장소에서 progress_reset/check 를 그대로 부른다 — 브랜치·첫 수정·커밋은 바로 한 줄, 심장박동은 변경 파일 목록이
+# 지난 줄과 다를 때만(같으면 HEARTBEAT_SEC=0 이어도 조용하다)
+Q="$T/progress"; mkdir -p "$Q"; git -C "$Q" init -q -b main repo; git -C "$Q/repo" -c user.name=t -c user.email=t@t commit -q --allow-empty -m init
+sed -n '/^# ----- 진행 로그 -----/,/^# ----- 진행 로그 끝 -----/p' "$KIT/files/scripts/ticket-loop.sh" > "$Q/fn.sh"
+grep -q '^progress_check() ' "$Q/fn.sh" && grep -q '^idle_wait_ms() ' "$Q/fn.sh" || fail "진행 로그 함수(progress_check·idle_wait_ms)를 찾지 못함"
+out="$(cd "$Q" && FN="$Q/fn.sh" bash -c '
+  set -euo pipefail
+  log() { echo "[$1] ${*:2}"; }; c() { git -C repo -c user.name=t -c user.email=t@t "$@"; }
+  PROGRESS_SEC=60; IDLE_WAIT_MS=600000; HEARTBEAT_SEC=300
+  source "$FN"
+  progress_reset "$PWD/repo"
+  echo "== quiet"; progress_check 7
+  echo "== quiet-heartbeat0"; HEARTBEAT_SEC=0 progress_check 7
+  echo "== branch+edit"; c checkout -q -b issue-7-export; printf a > repo/a.ts; printf b > repo/b.ts; printf c > repo/c.ts; printf d > repo/d.ts; progress_check 7
+  echo "== same"; progress_check 7
+  echo "== commits"; c add a.ts; c commit -q -m "feat: a #7"; c add b.ts; c commit -q -m "test: b #7"; progress_check 7
+  echo "== amend"; c commit -q --amend -m "test: b amended #7"; progress_check 7
+  echo "== heartbeat-after-commit"; HEARTBEAT_SEC=0 progress_check 7
+  echo "== heartbeat-changed"; printf e > repo/e.ts; HEARTBEAT_SEC=0 progress_check 7
+  echo "== sync"; progress_sync; HEARTBEAT_SEC=0 progress_check 7
+  echo "== wait $(idle_wait_ms) $(PROGRESS_SEC=0 idle_wait_ms)"
+  echo "== gone"; PROG_WT=/nonexistent progress_check 7' 2>&1)" || fail "진행 로그 함수 실패: $out"
+want="== quiet
+== quiet-heartbeat0
+== branch+edit
+[step] #7: 브랜치 issue-7-export
+[step] #7: 파일 수정 시작 — a.ts, b.ts, c.ts 외 1
+== same
+== commits
+[step] #7: 커밋 SHA feat: a #7
+[step] #7: 커밋 SHA test: b #7
+== amend
+[step] #7: 커밋 SHA test: b amended #7
+== heartbeat-after-commit
+== heartbeat-changed
+[#7: 작업 중 — 0분 경과, 커밋 안 된 변경 3개 파일: c.ts, d.ts, e.ts] 
+== sync
+== wait 60000 600000
+== gone"
+[[ "$(sed -E 's/커밋 [0-9a-f]{7,} /커밋 SHA /' <<<"$out")" == "$want" ]] || fail "진행 로그 출력이 기대와 다르다:
+$out"
+grep -q 'progress_reset "${wt_path}"' "$KIT/files/scripts/ticket-loop.sh" && grep -q '^  progress_sync$' "$KIT/files/scripts/ticket-loop.sh" || fail "run_ticket 이 progress_reset(PR 대기 전)·progress_sync(PR 열린 뒤)를 부모 셸에서 부르지 않는다"
+[[ "$(grep -c 'progress_check "${n}"\|progress_check "${CUR_N}"' "$KIT/files/scripts/ticket-loop.sh")" -ge 3 ]] || fail "wait_for_pr·repair 가 progress_check 를 부르지 않는다"
+echo "ok  진행 로그(브랜치·첫 수정·커밋·심장박동은 목록이 달라질 때만)"
+
+# 티켓의 PR 찾기: head 브랜치가 issue-N 과 같거나 issue-N- 로 시작하는 것만. issue-1020·issue-1020-x 는 #102 가 아니다
+# (rental-portal #102 실측 — 워커가 워크트리 브랜치 issue-102 에 그대로 커밋해 PR 을 열었고 접두 `N-`만 보던 루프가 못 찾았다)
+P="$T/prfind"; mkdir -p "$P"
+sed -n '/^open_pr_for() {/,/^}/p' "$KIT/files/scripts/ticket-loop.sh" > "$P/fn.sh"
+grep -q '^open_pr_for() ' "$P/fn.sh" || fail "open_pr_for 를 찾지 못함"
+printf '#!/usr/bin/env bash\ncat "$PRS"\n' > "$P/gh"; chmod +x "$P/gh"
+prfind() { (cd "$P" && PATH="$P:$PATH" PRS="$P/prs.json" BRANCH_PREFIX=issue- bash -c 'set -euo pipefail; source fn.sh; open_pr_for 102'); }
+echo '[{"number":130,"headRefName":"issue-1020"},{"number":131,"headRefName":"issue-1020-x"},{"number":120,"headRefName":"issue-102"}]' > "$P/prs.json"
+[[ "$(prfind)" == "120" ]] || fail "open_pr_for: head 가 issue-102 인 PR 을 못 찾음(또는 issue-1020 을 잡음): $(prfind)"
+echo '[{"number":130,"headRefName":"issue-1020"},{"number":121,"headRefName":"issue-102-dispatch-cutoff"}]' > "$P/prs.json"
+[[ "$(prfind)" == "121" ]] || fail "open_pr_for: head 가 issue-102-slug 인 PR 을 못 찾음: $(prfind)"
+echo '[{"number":130,"headRefName":"issue-1020"},{"number":131,"headRefName":"issue-1020-x"},{"number":132,"headRefName":"issue-10"}]' > "$P/prs.json"
+[[ -z "$(prfind)" ]] || fail "open_pr_for: issue-1020·issue-1020-x·issue-10 을 #102 로 잡음: $(prfind)"
+echo '[]' > "$P/prs.json"
+[[ -z "$(prfind)" ]] || fail "open_pr_for: PR 이 없는데 값이 나옴"
+# ticket-state.sh 의 PR 필터도 같은 규칙, 원격 브랜치 조회는 issue-N 과 issue-N-* 둘 다
+TS_JQ="$(grep -o "jq -r --arg b \"\$b\" '[^']*'" "$KIT/files/scripts/ticket-state.sh" | sed "s/^jq -r --arg b \"\$b\" '//; s/'\$//")"
+[[ -n "$TS_JQ" ]] || fail "ticket-state.sh 의 jq 필터를 찾지 못함"
+out="$(jq -r --arg b issue-102 "$TS_JQ" <<<'[{"number":130,"state":"OPEN","headRefName":"issue-1020"},{"number":131,"state":"MERGED","headRefName":"issue-1020-x"},{"number":120,"state":"MERGED","headRefName":"issue-102"},{"number":121,"state":"CLOSED","headRefName":"issue-102-slug"}]')"
+[[ "$out" == $'#120 MERGED issue-102\n#121 CLOSED issue-102-slug' ]] || fail "ticket-state.sh PR 필터: $out"
+grep -qF 'git ls-remote --heads origin "refs/heads/${b}" "refs/heads/${b}-*"' "$KIT/files/scripts/ticket-state.sh" || fail "ticket-state.sh 원격 브랜치 조회가 issue-N 과 issue-N-* 둘 다 보지 않음"
+grep -qE 'grep -E "/\$\{BRANCH_PREFIX:-issue-\}\$\{n\}\( \|-\|\$\)"' "$KIT/files/scripts/ticket-state.sh" || fail "ticket-state.sh 워크트리 조회 패턴이 바뀜"
+echo "ok  티켓 PR 찾기(issue-N·issue-N-slug 는 잡고 issue-N0 은 안 잡음)·ticket-state 필터"
+
 # 템플릿 자리표: 무거운 테스트는 스위트와 파일 하나 실행 명령 두 자리표로, 설정 스킬의 결정 표가 둘 다 묻는다
 for f in .ticket-loop/worker-rules.md .agents/skills/implement/SKILL.md .agents/skills/pr/SKILL.md; do
   grep -q '__HEAVY_TEST_FILE__' "$KIT/templates/$f" || fail "templates/$f 에 __HEAVY_TEST_FILE__ 없음"
@@ -532,16 +601,24 @@ jq -rn --arg prefix issue- --arg now "2026-10-12 09:00" \
   --argjson spec '{"number":40,"title":"스펙","state":"OPEN","url":"https://x/40"}' \
   --argjson issues '[{"number":41,"title":"T01: 하나","state":"closed","url":"https://x/41","assignees":0},
                      {"number":42,"title":"T02: 둘","state":"open","url":"https://x/42","assignees":1},
-                     {"number":43,"title":"T03: 셋","state":"closed","url":"https://x/43","assignees":0}]' \
+                     {"number":43,"title":"T03: 셋","state":"closed","url":"https://x/43","assignees":0},
+                     {"number":44,"title":"T04: 넷","state":"closed","url":"https://x/44","assignees":0},
+                     {"number":4,"title":"T05: 다섯","state":"open","url":"https://x/4","assignees":0}]' \
   --argjson prs '[{"number":50,"title":"T01 PR","body":"- [x] a\n- [ ] b","state":"MERGED","url":"https://x/p50","createdAt":"2026-10-12T00:00:00Z","mergedAt":"2026-10-12T00:30:00Z","headRefName":"issue-41-one"},
-                  {"number":51,"title":"T03 PR","body":"","state":"MERGED","url":"https://x/p51","createdAt":"2026-10-11T00:00:00Z","mergedAt":"2026-10-11T01:00:00Z","headRefName":"issue-43-three"}]' \
+                  {"number":51,"title":"T03 PR","body":"","state":"MERGED","url":"https://x/p51","createdAt":"2026-10-11T00:00:00Z","mergedAt":"2026-10-11T01:00:00Z","headRefName":"issue-43-three"},
+                  {"number":52,"title":"T04 PR","body":"","state":"MERGED","url":"https://x/p52","createdAt":"2026-10-11T02:00:00Z","mergedAt":"2026-10-11T03:00:00Z","headRefName":"issue-44"}]' \
   --argjson recs '[{"spec":40,"issue":41,"title":"T01: 하나","result":"merged","started":"2026-10-12T00:00:00Z","finished":"2026-10-12T00:31:00Z","wall_sec":1860,"repairs":1,"idle_false_positives":0,"agent":"claude","pr":50,"ci_sec":200,"post_merge":"통과 90초","model":"Opus 5.5"},
                    {"spec":40,"issue":42,"title":"T02: 둘","result":"stopped","reason":"워커가 PR 없이 멈췄습니다","started":"2026-10-12T01:00:00Z","finished":"2026-10-12T01:10:00Z","wall_sec":600,"repairs":0,"idle_false_positives":2,"agent":"claude"}]' \
   "$REPORT_JQ" > "$T/report.html" || fail "스펙 리포트 jq 실패"
 for want in '<!doctype html>' '<html lang="en">' 'PR #50' 'Acceptance criteria 1/2' '>Merged<' '>Stopped<' 'Stop reason: 워커가 PR 없이 멈췄습니다' 'Opus 5.5' 'PR created→merged' 'not recorded' '1 repair ·' 'post-merge check passed in 90s' 'T01: 하나'; do
   grep -qF "$want" "$T/report.html" || fail "스펙 리포트에 '$want' 없음"
 done
-echo "ok  스펙 리포트 렌더"
+# head 가 정확히 issue-44 인 PR #52 는 T04 의 PR 이고(Merged 3건), 이슈 4 에는 붙지 않는다(기록도 PR 도 없는 이슈 4 는 Not started)
+[[ "$(grep -o 'PR #52' "$T/report.html" | wc -l | tr -d ' ')" == "1" ]] || fail "스펙 리포트: head 가 issue-44 인 PR #52 가 한 번 나와야 함"
+[[ "$(grep -o 'badge ok">Merged<' "$T/report.html" | wc -l | tr -d ' ')" == "3" ]] || fail "스펙 리포트: Merged 배지가 3건(41·43·44)이어야 함"
+grep -qF '<div class="v">3</div><div class="l">Merged</div>' "$T/report.html" || fail "스펙 리포트: KPI Merged 가 3 이어야 함"
+[[ "$(grep -o 'badge muted">Not started<' "$T/report.html" | wc -l | tr -d ' ')" == "1" ]] || fail "스펙 리포트: 이슈 4 가 Not started 여야 함(issue-44 PR 이 #4 에 붙음?)"
+echo "ok  스펙 리포트 렌더(head 가 issue-N 그대로인 PR 포함)"
 
 # npx 껍질: 새 저장소에 --yes 로 설치하면 install.sh 결과에 더해 loop.env(BACKEND 줄)와 kit.json(커밋·ref)이 생긴다.
 # 두 번째 실행은 loop.env 를 건드리지 않고, cmux 는 아직 거절한다
