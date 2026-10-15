@@ -178,7 +178,7 @@ Slack 설정(컴퓨터마다 한 번):
 | cmux 0.65 | iwishash/boiler-webapp #39 → PR #40 (2026-10-12) | 7분 | 0회 |
 | tmux 3.8 | iwishash/ticket-loop-dummy #1 → PR #2 (2026-10-13) | 4분 | 0회 |
 
-그 밖에 확인한 것: `tests/smoke.sh`, 저장소(당시 비공개)를 실제로 받는 npx 껍질, 0.2 설치본 마이그레이션(스모크 테스트만).
+그 밖에 확인한 것: 멈춤 보고(0.8.8) — iwishash/ticket-loop-dummy #3을 cmux로 두 번 멈추고(SIGHUP·SIGTERM → 이슈 코멘트·`loop-stopped` 라벨·Slack) 세 번째에 PR #4로 병합(3분, 라벨 떼기), `tests/smoke.sh`, 저장소(당시 비공개)를 실제로 받는 npx 껍질, 0.2 설치본 마이그레이션(스모크 테스트만).
 
 아직 확인하지 않은 것:
 
@@ -188,4 +188,4 @@ Slack 설정(컴퓨터마다 한 번):
 - Linux와 WSL. Linux 분기는 한 번도 실행되지 않았다. WSL 안의 tmux 백엔드부터 시도할 것. WSL에서 `orca-ide`로 Orca를 조종하는 건 미해결(Windows 앱이냐 WSLg의 Linux AppImage냐, 경로 대응).
 - Codex 워커. 프리셋·프롬프트·스킬 배치·`AGENTS.md`·`.codex/rules/ticket-loop.rules`·`--agent codex`는 갖춰졌지만 Codex가 설치된 컴퓨터에서 돌린 적이 없다: idle 판정, `$implement`가 스킬을 집는지, 수리 프롬프트, 규칙 파일이 `--dangerously-bypass-approvals-and-sandbox` 아래에서도 로드되는지.
 - 출처 저장소 rsrehab/rental-portal은 아직 자체 `scripts/orca-ticket-loop.sh`를 쓴다.
-- 실제 루프 실행에서의 Slack 알림과 GitHub 멈춤 기록. 실제 Slack 워크스페이스에는 루프의 `slack_post`로 네 종류 메시지를 보내 렌더링(아이콘·`#N` 링크·로그 코드 블록)만 확인했고, 멈춤 경로는 가짜 `gh`·`curl`과 pty를 닫는 터미널 닫힘 흉내로 확인했다.
+- 멈춤 보고 중 실제로는 신호 두 가지(SIGHUP·SIGTERM)만 거쳤다. `die`·`set -e`·Ctrl-C·SIGPIPE 경로는 smoke(가짜 `gh`·`curl`)와 pty·`tee` 실험으로만 확인했다.

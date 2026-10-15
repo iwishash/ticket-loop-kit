@@ -178,7 +178,7 @@ Verified with one real ticket per backend (details in `CHANGELOG.md`):
 | cmux 0.65 | iwishash/boiler-webapp #39 → PR #40 (2026-10-12) | 7 min | 0 |
 | tmux 3.8 | iwishash/ticket-loop-dummy #1 → PR #2 (2026-10-13) | 4 min | 0 |
 
-Also verified: `tests/smoke.sh`, the npx wrapper against a real fetch of the repository (then private), and migration of a 0.2 install (smoke test only).
+Also verified: stop reporting (0.8.8) — iwishash/ticket-loop-dummy #3 on cmux, stopped twice (SIGHUP and SIGTERM → issue comment, `loop-stopped` label, Slack) and merged on the third run as PR #4 (3 min, label removed); `tests/smoke.sh`, the npx wrapper against a real fetch of the repository (then private), and migration of a 0.2 install (smoke test only).
 
 Not yet verified:
 
@@ -188,4 +188,4 @@ Not yet verified:
 - Linux and WSL. The Linux branches have never executed; try the tmux backend inside WSL first. Orca driven from WSL through `orca-ide` is an open question (Windows app vs. Linux AppImage under WSLg, path mapping).
 - Codex as the worker. The preset, prompts, skill layout, `AGENTS.md`, `.codex/rules/ticket-loop.rules`, and `--agent codex` are in place, but nothing has run on a machine with Codex installed: idle detection, `$implement` picking up the skill, repair prompts, and whether the rules file loads under `--dangerously-bypass-approvals-and-sandbox`.
 - The source repository rsrehab/rental-portal still uses its own `scripts/orca-ticket-loop.sh`.
-- Slack notifications and GitHub stop records from a real loop run. In a real Slack workspace only the rendering was checked (the loop's `slack_post` sending the four message kinds: icons, `#N` links, the log code block); the stop paths were checked with fake `gh` and `curl` and a closed pty standing in for a closed terminal.
+- Of the stop paths, only two signals (SIGHUP and SIGTERM) ran for real. `die`, `set -e`, Ctrl-C and SIGPIPE were checked by the smoke test (fake `gh` and `curl`) and by pty and `tee` experiments.

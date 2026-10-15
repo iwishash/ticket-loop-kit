@@ -487,7 +487,8 @@ git clone -q "$P/origin.git" "$P/repo" 2>/dev/null; git -C "$P/repo" -c user.nam
 sed -n '/^# ---------- 병합 뒤 검증 ----------/,/^# ---------- 티켓 기록 · 스펙 리포트 ----------/p' "$KIT/files/scripts/ticket-loop.sh" > "$P/fn.sh"
 grep -q '^run_post_merge() {' "$P/fn.sh" || fail "run_post_merge 를 찾지 못함"
 sed -n '/^abs_path() /p' "$KIT/files/scripts/ticket-loop.sh" >> "$P/fn.sh"
-grep -q '^abs_path() ' "$P/fn.sh" || fail "abs_path 를 찾지 못함"
+sed -n '/^bg_wait() {/,/^}/p' "$KIT/files/scripts/ticket-loop.sh" >> "$P/fn.sh"   # 검증 명령은 bg_wait 로 돈다
+grep -q '^abs_path() ' "$P/fn.sh" && grep -q '^bg_wait() ' "$P/fn.sh" || fail "abs_path·bg_wait 를 찾지 못함"
 postmerge_case() {  # $1 POST_MERGE_CMD, $2 LOG_FILE(상대), $3 기대(pass|fail) → 출력(stderr 포함)
   (cd "$P/repo" && POST_MERGE_CMD="$1" LOG_FILE="$2" POST_MERGE_WORKTREE="$P/wt" EXPECT="$3" FN="$P/fn.sh" bash -c '
     set -euo pipefail
@@ -612,6 +613,8 @@ case "$1" in
   die) die '#12: PR #34 CI failed — "x" <y> & z' ;;
   errexit) git -C /nonexistent fetch -q origin main 2>/dev/null ;;
   HUP|INT|TERM|PIPE) kill -"$1" $$; sleep 5 ;;
+  bgwait) bg_wait sleep 31.7 ;;   # 루프 pid에만 오는 신호를 밖에서 보낸다
+  bgcodes) f() { false; echo after-false; }; out="$(bg_wait f)"; rc3=0; bg_wait sh -c 'exit 3' || rc3=$?; echo "$out|$rc3" > bgcodes ;;
   ok) : ;;
 esac
 EOF
@@ -668,6 +671,20 @@ rc="$(stop_case ok 'notify "Ticket done" "#12 T01 & co — PR #34, 5m" done; STO
 out="$(slack_text)"; [[ "$rc" == 0 && "$out" == ":white_check_mark: *Ticket done* · o/r · "*$'\n'"$L/12|#12> T01 &amp; co — PR $L/34|#34>, 5m" ]] || fail "완료 알림: $out"
 rc="$(stop_case ok 'REPO_URL=; slack_post "Ticket loop started" "1 ticket"$'"'"'\n'"'"'"#12 T01" start')"
 out="$(slack_text)"; [[ "$out" == ":arrow_forward: *Ticket loop started* · o/r · "*$'\n1 ticket\n#12 T01' ]] || fail "시작 알림(저장소 URL 없으면 링크 없이): $out"
+# 오래 기다리는 중(bg_wait)에 루프 pid 에만 온 신호도 바로 처리하고 기다리던 자식을 끝낸다. 포그라운드 자식이면 bash 가 trap 을 미뤄
+# PR 대기 내내 먹히지 않았다(0.8.8 실측: 더미 저장소·cmux 에서 SIGHUP 이 2분 뒤 처리). bg_wait 는 종료 코드를 돌려주고 set +e 로 돈다
+rm -rf "$M/calls.jsonl" "$M/rec" "$M/lock"; : > "$M/calls.jsonl"; : > "$M/loop.log"
+(cd "$M" && PATH="$M/bin:$PATH" CALLS="$M/calls.jsonl" HOME="$M/home" exec bash run.sh bgwait 2>/dev/null) & bp=$!
+for _ in 1 2 3 4 5 6 7 8 9 10; do pgrep -f 'sleep 31.7' >/dev/null && break; sleep 0.3; done
+t0="$(date +%s)"; kill -TERM "$bp"; rc=0; wait "$bp" || rc=$?; t1="$(date +%s)"
+[[ "$rc" == 143 && $((t1 - t0)) -le 8 ]] || fail "bg_wait 중 루프 pid 에만 온 TERM 이 바로 처리되지 않음(rc $rc, $((t1 - t0))초)"
+[[ "$(cat "$M/rec")" == "stopped|#12: terminated (SIGTERM)" && "$(calls curl)" == 1 ]] || fail "bg_wait 중 TERM: 보고가 다름: $(cat "$M/rec")"
+sleep 0.5; ! pgrep -f 'sleep 31.7' >/dev/null || { pkill -f 'sleep 31.7'; fail "bg_wait 로 기다리던 자식이 남음"; }
+rm -f "$M/bgcodes"; rc="$(stop_case bgcodes)"; [[ "$rc" == 0 && "$(cat "$M/bgcodes" 2>/dev/null)" == "after-false|3" ]] || fail "bg_wait 종료 코드·set +e: $(cat "$M/bgcodes" 2>/dev/null) (rc $rc)"
+grep -q 'bg_wait wait_for_pr "${n}"' "$KIT/files/scripts/ticket-loop.sh" && grep -q 'bg_wait gh pr checks "$1" --watch' "$KIT/files/scripts/ticket-loop.sh" \
+  && grep -q 'bg_wait terminal_idle "${handle}"' "$KIT/files/scripts/ticket-loop.sh" && grep -q 'bg_wait bash -c .* "$POST_MERGE_CMD"' "$KIT/files/scripts/ticket-loop.sh" \
+  && grep -q 'bg_wait env LOOP_ROOT_PATH=.* "$WORKTREE_SETUP_CMD"' "$KIT/files/scripts/ticket-loop.sh" || fail "오래 기다리는 다섯 곳(PR·CI·수리 idle·병합 뒤 검증·워크트리 준비)이 bg_wait 를 쓰지 않음"
+! grep -q 'pr="$(wait_for_pr' "$KIT/files/scripts/ticket-loop.sh" || fail "wait_for_pr 를 다시 커맨드 치환(포그라운드)으로 부른다"
 # 본 스크립트의 연결: 사용자 설정 파일을 저장소 loop.env 보다 먼저 읽고, trap 은 잠금 전에, LOCK_HELD 는 잠금을 잡은 뒤, 티켓마다 STOP_ISSUE,
 # 병합하면 멈춤 라벨을 뗀다. EXIT trap 은 on_exit 하나뿐
 L1="$(grep -n 'source "$USER_LOOP_ENV"' "$KIT/files/scripts/ticket-loop.sh" | cut -d: -f1)"; L2="$(grep -n 'source "$LOOP_ENV"' "$KIT/files/scripts/ticket-loop.sh" | cut -d: -f1)"
@@ -676,7 +693,7 @@ grep -qF 'USER_LOOP_ENV="${XDG_CONFIG_HOME:-$HOME/.config}/ticket-loop/loop.env"
 grep -A3 "trap on_exit EXIT; trap 'on_signal HUP' HUP; trap 'on_signal INT' INT; trap 'on_signal TERM' TERM; trap 'on_signal PIPE' PIPE" "$KIT/files/scripts/ticket-loop.sh" | grep -A1 'mkdir "$LOCK_DIR"' | grep -q '^  LOCK_HELD=1$' || fail "trap(잠금 전)·LOCK_HELD=1(잠금 뒤) 순서가 아님"
 [[ "$(grep -c 'trap .* EXIT' "$KIT/files/scripts/ticket-loop.sh")" == 1 ]] || fail "EXIT trap 이 on_exit 하나가 아님"
 grep -q 'STOP_ISSUE="$n"$' "$KIT/files/scripts/ticket-loop.sh" && grep -qF -- '--remove-label "$STOPPED_LABEL"' "$KIT/files/scripts/ticket-loop.sh" || fail "run_ticket 이 STOP_ISSUE 를 두거나 병합 뒤 멈춤 라벨을 떼지 않음"
-echo "ok  알림·멈춤 보고(Slack·GitHub 기록, die·set -e·신호, 잠금)"
+echo "ok  알림·멈춤 보고(Slack·GitHub 기록, die·set -e·신호, 긴 대기 중 신호, 잠금)"
 
 # 템플릿 자리표: 무거운 테스트는 스위트와 파일 하나 실행 명령 두 자리표로, 설정 스킬의 결정 표가 둘 다 묻는다
 for f in .ticket-loop/worker-rules.md .agents/skills/implement/SKILL.md .agents/skills/pr/SKILL.md; do

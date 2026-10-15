@@ -267,7 +267,7 @@ dim_lines() { local l; while IFS= read -r l || [[ -n "$l" ]]; do printf '%s%s%s%
 # ----- 알림 · 멈춤 보고 -----
 # 알림은 데스크톱(자리에 있을 때)과 Slack(SLACK_WEBHOOK_URL — 자리를 비웠을 때) 두 곳으로 간다. 어느 쪽이 실패해도 루프 결과는 바뀌지 않는다.
 # STOP_ISSUE: 멈추면 GitHub 기록을 남길 티켓. CUR_N(티켓 기록)은 병합 기록을 쓰면 비지만, 그 뒤 병합 뒤 검증이 실패해도 그 티켓의 멈춤이다
-REPO_URL=""; STOP_ISSUE=""; STOP_REPORTED=0; LOCK_HELD=0
+REPO_URL=""; STOP_ISSUE=""; STOP_REPORTED=0; LOCK_HELD=0; BG_PID=""
 fmt_epoch() { date -r "$1" '+%H:%M:%S' 2>/dev/null || date -d "@$1" '+%H:%M:%S'; }   # macOS / Linux
 
 # notify 제목 본문 [종류 [꼬리]] — 종류 start | done | stop | interrupt | finish(Slack 아이콘·멘션), 꼬리는 Slack에만 코드 블록으로 붙는다
@@ -360,6 +360,7 @@ on_signal() {
   local sig="$1" why kind=stop
   trap '' PIPE; trap - HUP INT TERM
   set +e
+  [[ -z "$BG_PID" ]] || kill_tree "$BG_PID"   # bg_wait로 기다리던 것(PR·CI 대기, 검증 명령)이 루프 없이 남지 않게
   case "$sig" in
     HUP)  why="terminal closed (SIGHUP)" ;;
     INT)  why="interrupted (Ctrl-C)"; kind=interrupt ;;
@@ -369,6 +370,27 @@ on_signal() {
   log err "ERROR: ${why}"
   stop_report "${STOP_ISSUE:+#${STOP_ISSUE}: }${why}" "$kind"
   case "$sig" in HUP) exit 129 ;; INT) exit 130 ;; PIPE) exit 141 ;; *) exit 143 ;; esac
+}
+
+# 오래 기다리는 일(PR 대기, CI 대기, 병합 뒤 검증·워크트리 준비 명령, 수리 중 idle 대기)은 백그라운드로 돌리고 wait로 기다린다.
+# bash는 포그라운드 자식이 끝날 때까지 trap을 미룬다 — 0.8.8 실측(더미 저장소, cmux)에서 루프 pid에만 보낸 SIGHUP이 PR 대기
+# 서브셸이 끝난 2분 뒤에야 처리됐다. wait는 신호를 받으면 바로 돌아와 on_signal이 돈다(터미널 창 닫힘·Ctrl-C는 프로세스 그룹
+# 전체에 가서 원래도 됐지만, 다른 터미널의 `kill <루프 pid>`는 PR이 열릴 때까지 먹히지 않았다). 자식은 set +e로 돈다 —
+# 전에 커맨드 치환으로 돌던 wait_for_pr와 같다(bash는 커맨드 치환에서 -e를 끈다). 종료 코드는 그대로 돌려준다
+bg_wait() {
+  local rc=0
+  { set +e; "$@"; } &
+  BG_PID=$!
+  wait "$BG_PID" || rc=$?
+  BG_PID=""
+  return $rc
+}
+# 프로세스와 그 자손을 끝낸다(TERM). 자식 목록을 먼저 읽고 부모를 끝내 새 자식이 생기지 않게 한 뒤 자식으로 내려간다
+kill_tree() {
+  local kids k
+  kids="$(pgrep -P "$1" 2>/dev/null || true)"
+  kill "$1" 2>/dev/null || true
+  for k in $kids; do kill_tree "$k"; done
 }
 # ----- 알림 · 멈춤 보고 끝 -----
 
@@ -574,7 +596,7 @@ loop_worktree_add() {
   git -C "$ROOT" worktree add -q -b "${BRANCH_PREFIX}${n}" "$path" "origin/${BASE_BRANCH}" || die "git worktree add failed (${path})"
   if [[ -n "$WORKTREE_SETUP_CMD" ]]; then
     log step "#${n}: worktree setup — ${WORKTREE_SETUP_CMD}"
-    (cd "$path" && LOOP_ROOT_PATH="$MAIN_WT" LOOP_WORKTREE_PATH="$path" bash -c "$WORKTREE_SETUP_CMD") \
+    bg_wait env LOOP_ROOT_PATH="$MAIN_WT" LOOP_WORKTREE_PATH="$path" bash -c 'cd "$1" && exec bash -c "$2"' _ "$path" "$WORKTREE_SETUP_CMD" \
       || die "#${n}: WORKTREE_SETUP_CMD failed (${path})"
   fi
   WT_PATH="$path"
@@ -844,7 +866,7 @@ ensure_agent_started() {
 #   그 밖에는 커밋 안 된 변경 파일 목록이 지난 줄과 달라졌을 때만, HEARTBEAT_SEC에 한 번까지 "작업 중" 한 줄에 경과 시간과 파일(이름 셋까지)을
 #   적는다 — 이슈를 읽고 TDD로 도는 첫 수십 분은 커밋이 없어도 무엇을 만지는지 보인다. 같은 내용은 되풀이하지 않는다(변화가 없으면 조용하다).
 #   화면을 읽어 도구 호출을 뽑는 쪽은 에이전트마다 형식이 달라 쓰지 않는다
-# wait_for_pr는 커맨드 치환(서브셸)으로 불려 그 안에서 바뀐 PROG_*가 부모에 남지 않는다 — run_ticket이 전에 progress_reset을,
+# wait_for_pr는 백그라운드 서브셸(bg_wait)로 불려 그 안에서 바뀐 PROG_*가 부모에 남지 않는다 — run_ticket이 전에 progress_reset을,
 # PR이 열린 뒤 progress_sync를 불러 수리 단계의 progress_check가 이미 찍은 커밋을 되풀이하지 않게 한다
 progress_reset() {   # $1 워크트리 경로. 티켓마다 한 번
   PROG_WT="$1"; PROG_START="$(date +%s)"; PROG_LAST_LOG="$PROG_START"; PROG_DIRTY_SEEN=0
@@ -937,7 +959,7 @@ repair() {
   wait_ms="$(idle_wait_ms)"
   send_prompt "${handle}" "$text"
   while :; do
-    idle=0; terminal_idle "${handle}" "$wait_ms" || idle=$?
+    idle=0; bg_wait terminal_idle "${handle}" "$wait_ms" || idle=$?
     [[ $idle -eq 3 ]] || [[ "$PROGRESS_SEC" -le 0 ]] || progress_check "${CUR_N}"
     [[ $idle -ne 0 ]] || return 0
     [[ $idle -ne 3 ]] || die "Cannot reach ${BACKEND_NAME} terminal ${handle} (${BACKEND_NAME} app closed?)"
@@ -957,7 +979,7 @@ wait_checks_appear() {
 
 ci_passed() {
   wait_checks_appear "$1" || { log warn "PR #$1: no checks were registered"; return 1; }
-  gh pr checks "$1" --watch --fail-fast >/dev/null   # 끝날 때까지 블록, 실패 시 비0
+  bg_wait gh pr checks "$1" --watch --fail-fast >/dev/null   # 끝날 때까지 블록, 실패 시 비0
 }
 
 pr_head_sha() { gh pr view "$1" --json headRefOid -q .headRefOid; }
@@ -1033,7 +1055,7 @@ run_post_merge() {
   mkdir -p "$(dirname "$logfile")"
   started="$(date +%s)"
   log step "#${n}: post-merge check started (${wt}, log ${logfile})"
-  if (cd "$wt" && bash -c "$POST_MERGE_CMD" >"$logfile" 2>&1); then
+  if bg_wait bash -c 'cd "$1" && exec bash -c "$2"' _ "$wt" "$POST_MERGE_CMD" >"$logfile" 2>&1; then
     POST_MERGE_RESULT="passed in $(( $(date +%s) - started ))s"
     log ok "#${n}: post-merge check ${POST_MERGE_RESULT}"
     return 0
@@ -1238,9 +1260,11 @@ run_ticket() {
   ensure_agent_started "${n}" "${handle}"
   CUR_MODEL="$(detect_model "${handle}")"
 
-  local pr rc=0 model_now
+  local pr rc=0 model_now prfile
   progress_reset "${wt_path}"
-  pr="$(wait_for_pr "${n}" "${handle}" "$deadline")" || rc=$?
+  prfile="$(mktemp "${TMPDIR:-/tmp}/ticket-loop-pr-${n}.XXXXXX")"
+  bg_wait wait_for_pr "${n}" "${handle}" "$deadline" > "$prfile" || rc=$?   # 신호에 바로 깨도록(bg_wait)
+  pr="$(cat "$prfile")"; rm -f "$prfile"
   if [[ $rc -ne 0 ]]; then
     log warn "#${n}: worker output tail ---"; terminal_tail "${handle}" | dim_lines || true
     backend_set_status "${wt}" todo "" "루프 중단: PR 없이 멈춤 — 확인 필요" || true
