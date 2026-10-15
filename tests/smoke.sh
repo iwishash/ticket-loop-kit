@@ -462,6 +462,22 @@ open_case ':' opened
 grep -q '^    open_report "\$out"$' "$KIT/files/scripts/ticket-loop.sh" || fail "리포트 생성 성공 분기에서 open_report 를 부르지 않는다"
 echo "ok  리포트 자동 열기"
 
+# 터미널 로그 색: 색을 켜면 단계별로 감싸고 메시지는 맨글자, 색을 끄면 전과 같은 "[시각] 메시지", 파일 쪽 strip_ansi 는 SGR 만 지운다
+G="$T/logcolor"; mkdir -p "$G"
+sed -n '/^# 터미널 색 — /,/^dim_lines() /p' "$KIT/files/scripts/ticket-loop.sh" > "$G/fn.sh"
+grep -q '^strip_ansi() {' "$G/fn.sh" && grep -q '^log() {' "$G/fn.sh" && grep -q '^dim_lines() ' "$G/fn.sh" || fail "색 로그 함수(strip_ansi·log·dim_lines)를 찾지 못함"
+logc() { (cd "$G" && DRY_RUN=1 LOG_FILE=/dev/null bash -c 'set -euo pipefail; source fn.sh; '"$1" 2>&1 | LC_ALL=C sed $'s/\e/<ESC>/g'); }
+out="$(logc 'log ok "x"; log "y"; log warn')" || fail "파이프에서 log 실패"
+[[ "$out" == "[20"*"] x"$'\n'"[20"*"] y"$'\n'"[20"*"] warn" ]] && [[ "$out" != *"<ESC>"* ]] || fail "파이프(색 없음)에서 log 출력이 전과 다르다: $out"
+paint='C_RESET=$'"'"'\e[0m'"'"'; C_DIM=$'"'"'\e[2m'"'"'; C_TITLE=t; C_STEP=s; C_OK=o; C_WARN=w; C_ERR=e; '
+out="$(logc "$paint"'log title "T"; log step "S"; log ok "O"; log warn "W"; log err "E"; log "P"; log ok; printf "a\nb" | dim_lines; printf "1\n" | dim_lines "  #"')" || fail "색을 켠 log 실패"
+[[ "$out" == $'\n'"<ESC>[2m[20"*"]<ESC>[0m tT<ESC>[0m"$'\n'"<ESC>[2m[20"*"]<ESC>[0m sS<ESC>[0m"$'\n'*"]<ESC>[0m oO<ESC>[0m"$'\n'*"]<ESC>[0m wW<ESC>[0m"$'\n'*"]<ESC>[0m eE<ESC>[0m"$'\n'*"]<ESC>[0m P"$'\n'*"]<ESC>[0m ok"$'\n'"<ESC>[2m  a<ESC>[0m"$'\n'"<ESC>[2m  b<ESC>[0m"$'\n'"<ESC>[2m  #1<ESC>[0m" ]] \
+  || fail "색을 켠 log 의 단계별 감싸기가 다르다: $out"
+out="$(cd "$G" && printf '\e[2m[t]\e[0m \e[1;35m=== #1 ===\e[0m\n\e[2J keep \e[m x\e[1;31mY\nno newline' | DRY_RUN=1 LOG_FILE=/dev/null bash -c 'set -euo pipefail; source fn.sh; strip_ansi' | LC_ALL=C sed $'s/\e/<ESC>/g')" || fail "strip_ansi 실패"
+[[ "$out" == "[t] === #1 ==="$'\n'"<ESC>[2J keep  xY"$'\n'"no newline" ]] || fail "strip_ansi 가 SGR 만 지우지 않는다: $out"
+grep -q 'exec 2> >(tee >(strip_ansi >> "$LOG_FILE") >&2)' "$KIT/files/scripts/ticket-loop.sh" || fail "색을 켤 때 로그 파일 쪽에 strip_ansi 가 없음"
+echo "ok  터미널 로그 색"
+
 # 템플릿 자리표: 무거운 테스트는 스위트와 파일 하나 실행 명령 두 자리표로, 설정 스킬의 결정 표가 둘 다 묻는다
 for f in .ticket-loop/worker-rules.md .agents/skills/implement/SKILL.md .agents/skills/pr/SKILL.md; do
   grep -q '__HEAVY_TEST_FILE__' "$KIT/templates/$f" || fail "templates/$f 에 __HEAVY_TEST_FILE__ 없음"
