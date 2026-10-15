@@ -248,8 +248,12 @@ strip_ansi() {
 }
 
 # --dry-run은 로그를 남기지 않는다(목록 확인만). 실행 로그는 다음 /retro가 읽는 1차 자료다.
+# LOG_START_BYTES: 이 실행이 시작할 때의 로그 파일 크기. 로그는 날짜별 한 파일에 이어 쓰므로 멈춤 보고에 싣는 "로그 끝"을 이 실행의
+# 줄로 한정한다(run_log) — 0.8.8 실측에서 같은 날 앞 실행의 ERROR 줄이 다음 실행의 Slack 멈춤 알림에 섞여 나왔다
+LOG_START_BYTES=0
 if [[ $DRY_RUN -eq 0 && "$LOG_FILE" != "/dev/null" ]]; then
   mkdir -p "$(dirname "$LOG_FILE")"
+  [[ ! -f "$LOG_FILE" ]] || LOG_START_BYTES=$(( $(wc -c < "$LOG_FILE") ))
   if [[ -n "$C_RESET" ]]; then exec 2> >(tee >(strip_ansi >> "$LOG_FILE") >&2)
   else exec 2> >(tee -a "$LOG_FILE" >&2); fi
 fi
@@ -302,6 +306,9 @@ slack_post() {
 
 die() { log err "ERROR: $*"; stop_report "$*"; exit 1; }
 
+# 이 실행이 로그 파일에 쓴 부분(LOG_START_BYTES 뒤). 같은 날 앞 실행의 줄은 빠진다
+run_log() { tail -c "+$(( ${LOG_START_BYTES:-0} + 1 ))" "$LOG_FILE" 2>/dev/null || true; }
+
 # 멈춤 보고는 한 번만 — die, 신호, 예기치 않은 종료가 모두 여기로 온다. 진행 중 티켓을 stopped로 기록하고(스펙 리포트), 그 이슈에
 # GitHub 기록을 남기고, 알린다. Slack에는 로그 끝 12줄을 붙인다 — 워커 화면 꼬리가 들어 있어 "왜 멈췄나"가 폰에서 보인다.
 # $1 사유, $2 stop | interrupt(Ctrl-C — 사람이 앞에 있으니 멘션하지 않는다)
@@ -312,7 +319,7 @@ stop_report() {
   [[ -z "${CUR_N:-}" ]] || record_ticket "stopped" "$reason"
   if [[ $LOCK_HELD -eq 1 && "$LOG_FILE" != "/dev/null" && -f "$LOG_FILE" ]]; then
     sleep 1   # 로그 파일은 tee가 비동기로 쓴다 — 방금 찍은 ERROR 줄·워커 화면이 파일에 들어오게
-    tail="$(tail -n 12 "$LOG_FILE" 2>/dev/null || true)"
+    tail="$(run_log | tail -n 12)"
   fi
   [[ -z "$STOP_ISSUE" ]] || github_stop_record "$STOP_ISSUE" "$reason"
   notify "Ticket loop stopped" "$reason" "$kind" "$tail"
@@ -324,7 +331,7 @@ stop_report() {
 github_stop_record() {
   local n="$1" reason="$2" lines="" now body tilde='~'
   now="$(date +%s)"
-  [[ "$LOG_FILE" == "/dev/null" || ! -f "$LOG_FILE" ]] || lines="$(grep -E '^\[[0-9]{4}-[0-9]{2}-[0-9]{2} ' "$LOG_FILE" 2>/dev/null | tail -n 30 || true)"
+  [[ "$LOG_FILE" == "/dev/null" || ! -f "$LOG_FILE" ]] || lines="$(run_log | grep -E '^\[[0-9]{4}-[0-9]{2}-[0-9]{2} ' | tail -n 30 || true)"
   body="**ticket-loop 중단** — ${reason}"$'\n\n'
   body+="- 머신 \`$(hostname -s 2>/dev/null || hostname)\` · 백엔드 ${BACKEND_NAME:-$BACKEND} · 에이전트 ${AGENT}${CUR_MODEL:+ (${CUR_MODEL})}"$'\n'
   [[ -z "${CUR_STARTED:-}" ]] || body+="- 티켓 시작 $(fmt_epoch "$CUR_STARTED") → 중단 $(fmt_epoch "$now") ($(( (now - CUR_STARTED) / 60 ))분)"$'\n'

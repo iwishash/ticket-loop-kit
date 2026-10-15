@@ -511,6 +511,7 @@ out="$(postmerge_case 'exit 0' 'sub/dir/loop.log' pass)" || fail "run_post_merge
 [[ -f "$P/repo/sub/dir/post-merge-7.log" ]] || fail "LOG_FILE 을 다른 상대 디렉터리로 줘도 저장소 루트 기준이어야 한다"
 grep -q 'post-merge check passed in [0-9]*s' <<<"$out" || fail "통과 줄이 없음: $out"
 grep -q 'log (${POST_MERGE_LOG})' "$KIT/files/scripts/ticket-loop.sh" || fail "병합 뒤 검증 실패 die 줄에 로그 경로가 없다"
+grep -q 'LOG_START_BYTES=$(( $(wc -c < "$LOG_FILE") ))' "$KIT/files/scripts/ticket-loop.sh" || fail "시작 때 로그 파일 크기(LOG_START_BYTES)를 기억하지 않음"
 grep -q '^LOG_FILE="$(abs_path "$LOG_FILE")"$' "$KIT/files/scripts/ticket-loop.sh" && grep -q '^RECORDS_FILE="$(abs_path "$RECORDS_FILE")"$' "$KIT/files/scripts/ticket-loop.sh" && grep -q '^REPORT_DIR="$(abs_path "$REPORT_DIR")"$' "$KIT/files/scripts/ticket-loop.sh" \
   || fail "LOG_FILE·RECORDS_FILE·REPORT_DIR 를 시작 때 절대 경로로 굳히지 않는다"
 [[ "$(cd "$P/repo" && ROOT="$P/repo" FN="$P/fn.sh" bash -c 'source "$FN"; abs_path /dev/null; echo; abs_path /abs/x; echo; abs_path rel/y')" == $'/dev/null\n/abs/x\n'"$P/repo/rel/y" ]] || fail "abs_path 가 /dev/null·절대 경로를 그대로 두고 상대 경로만 ROOT 에 붙이지 않는다"
@@ -620,9 +621,11 @@ esac
 EOF
 stop_case() {  # $1 어떻게 끝나나(die|errexit|HUP|INT|TERM|ok), $2 덧붙일 설정(bash 문장) → 종료 코드
   rm -rf "$M/calls.jsonl" "$M/rec" "$M/lock"; : > "$M/calls.jsonl"
-  printf '[2026-10-15 10:00:00] #12: PR #34 opened\n  worker-screen-line\n' > "$M/loop.log"
+  printf '[2026-10-15 09:00:00] ERROR: previous-run-line\n' > "$M/loop.log"   # 같은 날 앞 실행 — 이 실행의 보고에 실리면 안 된다
+  local start; start=$(( $(wc -c < "$M/loop.log") ))
+  printf '[2026-10-15 10:00:00] #12: PR #34 opened\n  worker-screen-line\n' >> "$M/loop.log"
   local rc=0
-  (cd "$M" && PATH="$M/bin:$PATH" CALLS="$M/calls.jsonl" HOME="$M/home" bash run.sh "$1" "${2:-}" 2>/dev/null) || rc=$?
+  (cd "$M" && PATH="$M/bin:$PATH" CALLS="$M/calls.jsonl" HOME="$M/home" LOG_START_BYTES="$start" bash run.sh "$1" "${2:-}" 2>/dev/null) || rc=$?
   echo "$rc"
 }
 calls() { jq -s --arg c "$1" '[.[] | select(.cmd == $c)] | length' "$M/calls.jsonl"; }
@@ -644,6 +647,7 @@ for want in $'12\n**ticket-loop 중단** — #12: PR #34 CI failed' '에이전�
   grep -qF -- "$want" <<<"$out" || fail "die: GitHub 코멘트에 '$want' 없음: $out"
 done
 ! grep -q 'worker-screen-line' <<<"$out" || fail "die: GitHub 코멘트에 워커 화면 줄이 실림(루프 자신의 줄만이어야 한다)"
+! grep -q 'previous-run-line' <<<"$out" && ! grep -q 'previous-run-line' <<<"$(slack_text)" || fail "die: 같은 날 앞 실행의 로그 줄이 GitHub·Slack 보고에 섞임"
 [[ ! -e "$M/lock" ]] || fail "die: 잡은 잠금을 풀지 않음"
 rc="$(stop_case errexit)"; [[ "$rc" == 128 ]] || fail "set -e 종료 코드가 걸린 명령의 것이 아님: $rc"
 [[ "$(cat "$M/rec")" == 'stopped|#12: unexpected exit (status 128) at: git -C /nonexistent fetch -q origin main 2> /dev/null' ]] || fail "set -e: 사유: $(cat "$M/rec")"
