@@ -348,6 +348,32 @@ mkdir -p "$F/home"
 (cd "$F" && PATH="$F:$PATH" bash run-tmux.sh "$F/backend.sh" "$F/home" >/dev/null) || fail "tmux 백엔드 함수 가짜 호출 실패"
 echo "ok  tmux 백엔드 함수·훅 가짜 호출"
 
+# cmux 백엔드: 가짜 cmux 로 wait_idle 의 세 경우 — lifecycle idle → 0, lifecycle 빈 값인데 화면은 읽힘 → 계속 기다림(타임아웃 1)과 안내 로그,
+# 화면도 못 읽음 → 3(닿지 못함). 2026-10-14 rental-portal #100 에서 빈 값 5번(25초)으로 일하던 워커를 두고 루프가 죽은 오판을 고정한다
+cat > "$F/cmux" <<'SH'
+#!/bin/bash
+case "$1" in
+  rpc) [[ "${FAKE_LC:-}" == none ]] || echo "{\"lifecycle\":\"${FAKE_LC:-idle}\"}" ;;
+  read-screen) if [[ "${FAKE_SCREEN:-ok}" == ok ]]; then echo "[Opus 5.5 | Max]"; else echo "Error: not_found: Workspace not found" >&2; exit 1; fi ;;
+  *) exit 0 ;;
+esac
+SH
+chmod +x "$F/cmux"
+cat > "$F/run-cmux.sh" <<'SH'
+set -euo pipefail
+BACKEND=cmux; ORCA_CLI=orca; CMUX_CLI=cmux; TMUX_CLI=tmux; TMUX_SESSION=""; OWNER_REPO=o/r; ROOT=/tmp; MAIN_WT=/tmp; BASE_BRANCH=main; BRANCH_PREFIX=issue-; AGENT=claude; SKILL_PREFIX=/
+AGENT_RESTART_CMD=claude; TERMINAL_RETRY=2; TERMINAL_RETRY_SEC=0; IDLE_POLL_SEC=0; WORKTREE_DIR=""; WORKTREE_SETUP_CMD=""
+LOGGED=""; log() { LOGGED+="$*"$'\n'; }; die() { echo "die: $*" >&2; exit 1; }
+source "$1"
+export FAKE_LC=idle FAKE_SCREEN=ok; cmux_wait_idle s1 1000 || die "idle 인데 wait_idle 이 0 이 아님"
+export FAKE_LC=none FAKE_SCREEN=ok; rc=0; cmux_wait_idle s1 0 || rc=$?; [[ $rc -eq 1 ]] || die "lifecycle 빈 값·화면 읽힘인데 1(계속 기다림)이 아님: $rc"
+[[ "$LOGGED" == *"계속 기다린다"* ]] || die "화면이 읽히는데 안내 로그가 없다"
+export FAKE_LC=none FAKE_SCREEN=gone; rc=0; cmux_wait_idle s1 60000 || rc=$?; [[ $rc -eq 3 ]] || die "lifecycle 빈 값·화면도 못 읽는데 3 이 아님: $rc"
+echo ok
+SH
+(cd "$F" && PATH="$F:$PATH" bash run-cmux.sh "$F/backend.sh" >/dev/null) || fail "cmux 백엔드 wait_idle 가짜 호출 실패"
+echo "ok  cmux 백엔드 wait_idle 세 경우"
+
 # 에이전트 프리셋: AGENT 가 기동 명령·배너·모델 정규식·스킬 접두사의 기본값을 정하고, 준 값이 이긴다. 프롬프트에는 특정 에이전트의 이름·도구가 없다
 A="$T/agent"; mkdir -p "$A"
 sed -n '/^# ----- 에이전트 프리셋 -----/,/^# ----- 에이전트 프리셋 끝 -----/p' "$KIT/files/scripts/ticket-loop.sh" > "$A/preset.sh"

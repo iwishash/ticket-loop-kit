@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.8.3 — 2026-10-15
+
+cmux 백엔드가 일하던 워커를 두고 죽는 오판을 고쳤다. rental-portal v1.9 루프(cmux 0.65, 2026-10-14) 세 번째 티켓 #100에서 워커가 ticket-review 서브에이전트 2개와 Playwright 헤드리스 브라우저를 돌리는 동안 `rpc surface.input_state`의 lifecycle이 빈 값으로 5번(25초) 이어졌고, `cmux_wait_idle`이 그것을 "앱 종료"로 단정해 `die`했다. 앱은 16시부터 켜져 있었고 서피스도 살아 있었으며 워커는 루프가 죽은 뒤 3분 만에 리뷰 반영 커밋과 PR 본문까지 혼자 마쳤다(병합만 사람 몫으로 남았다). Orca가 #72(0.6.x)에서 배운 규칙을 cmux에도 적용했다.
+
+- `ticket-loop.sh`: `cmux_alive`(`read-screen --lines 1`이 성공하면 서피스가 있다). `cmux_wait_idle`은 lifecycle이 빈 값이어도 화면이 읽히면 작업 중으로 보고 계속 기다린다(처음 한 번 "lifecycle 빈 값 — 화면은 읽혀 계속 기다린다"를 로그에 남긴다). `TERMINAL_RETRY`번 연달아 화면도 못 읽을 때만 3(닿지 못함)이고, 그 사이 `TERMINAL_RETRY_SEC`씩 쉰다 — 전에는 빈 값 사이 간격이 `IDLE_POLL_SEC`(5초)뿐이라 25초면 죽었다
+- `tests/smoke.sh`: 가짜 cmux로 `cmux_wait_idle` 세 경우 — idle → 0, 빈 값·화면 읽힘 → 1(계속 기다림)과 안내 로그, 빈 값·화면도 못 읽음 → 3
+
 ## 0.8.2 — 2026-10-14
 
 - 스펙 리포트 자동 열기. `--parent` 실행이 리포트를 쓰면 기본 브라우저로 연다(macOS `open`, Linux `xdg-open`). 리포트는 사람이 보라고 만든 것이라 경로를 찾아 여는 한 단계를 줄였다. SSH 세션(`SSH_CONNECTION`·`SSH_TTY`)이나 `DISPLAY`·`WAYLAND_DISPLAY`가 없는 Linux에서는 열지 않고, 열기 실패는 루프 결과를 바꾸지 않는다. 새 변수 `REPORT_OPEN`(기본 1, `0`이면 끔). `--dry-run`과 `die`로 멈춘 실행은 리포트를 쓰지 않으니 열지도 않는다. `tests/smoke.sh`가 `open_report`의 세 경우(끔 → 안 연다, SSH → 안 연다, 켬 → 연다)를 가짜 `open`으로 본다. `setup-ticket-loop` 결정 표와 `docs/loop-reports/README.md` 템플릿에 한 줄

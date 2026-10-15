@@ -456,14 +456,27 @@ cmux_lifecycle() {   # running | idle | needsInput | unknown, 소켓에 닿지 �
   "$CMUX_CLI" rpc surface.input_state "{\"surface_id\":\"$1\"}" 2>/dev/null | jq -r '.lifecycle // empty' 2>/dev/null || true
 }
 
+cmux_alive() { "$CMUX_CLI" read-screen --surface "$1" --lines 1 >/dev/null 2>&1; }   # 서피스가 없으면 not_found(비0), 소켓이 죽어도 비0
+
 cmux_wait_idle() {
-  local handle="$1" deadline_ms=$(( $(date +%s) * 1000 + $2 )) lc fails=0
+  # lifecycle이 빈 값으로 오는 것(rpc 실패·훅 보고 공백)을 연달아 몇 번 봤다고 "닿지 못함"이라 판정하지 않는다 — 2026-10-14
+  # rental-portal #100(cmux 0.65)에서 워커가 ticket-review 서브에이전트 2개와 헤드리스 브라우저를 돌리는 동안 빈 값이 5번(25초)
+  # 이어져 일하던 워커를 두고 루프가 죽었다. 앱은 켜져 있었고 서피스도 살아 있었으며 워커는 혼자 PR까지 마쳤다. Orca의 #72와
+  # 같은 규칙: 화면을 읽을 수 있으면 아직 작업 중으로 보고, TERMINAL_RETRY번 연달아 화면도 못 읽을 때만 3이다(그 사이 TERMINAL_RETRY_SEC씩 쉰다).
+  local handle="$1" deadline_ms=$(( $(date +%s) * 1000 + $2 )) lc fails=0 warned=0
   while :; do
     lc="$(cmux_lifecycle "$handle")"
     case "$lc" in
       idle|needsInput) return 0 ;;    # needsInput: 질문·권한 대화상자 — 공통부가 PR 유무와 화면으로 "멈춤"을 가른다
-      running|unknown) fails=0 ;;
-      *) fails=$((fails + 1)); [[ $fails -lt $TERMINAL_RETRY ]] || return 3 ;;
+      running|unknown) fails=0; warned=0 ;;
+      *)
+        if cmux_alive "$handle"; then
+          fails=0
+          [[ $warned -eq 1 ]] || { log "터미널 ${handle}: lifecycle 빈 값 — 화면은 읽혀 계속 기다린다"; warned=1; }
+        else
+          fails=$((fails + 1)); [[ $fails -lt $TERMINAL_RETRY ]] || return 3
+          sleep "$TERMINAL_RETRY_SEC"
+        fi ;;
     esac
     [[ $(( $(date +%s) * 1000 )) -lt $deadline_ms ]] || return 1
     sleep "$IDLE_POLL_SEC"
