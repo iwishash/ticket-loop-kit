@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.8.10 — 2026-10-16
+
+티켓 요약 줄의 "idle false positives"와 기록(`RECORDS_FILE`)의 `idle_false_positives`가 처음부터 늘 0이었다. 오판(PR 대기 중 idle이 잡혔지만 잠깐 뒤 다시 보니 PR이 열려 있던 것 — PR을 연 직후 idle이 PR 조회보다 먼저 잡힌다)은 `wait_for_pr` 안에서 셌는데, 이 함수는 서브셸에서 돈다(0.8.7까지 커맨드 치환, 0.8.8부터 `bg_wait`). 서브셸에서 올린 변수는 부모에 돌아오지 않는다. 더미 저장소의 기록 4건도 모두 0이었다. 스펙 리포트는 이 값을 쓰지 않아 영향이 없다.
+
+- `ticket-loop.sh`: 티켓마다 임시 파일(`IDLE_FP_FILE`)을 두고 오판 한 번에 한 줄을 쓴다. 요약 줄과 기록은 `idle_fp_count`(줄 수)를 쓴다. PR 없이 멈춘 티켓의 `stopped` 기록에도 그때까지의 수가 남는다. 변수 `IDLE_FALSE_POSITIVES`는 없앴다
+- `tests/smoke.sh`: 진짜 `wait_for_pr`를 `bg_wait`로 돌려(가짜 `open_pr_for`·`terminal_idle`) 오판 한 번 뒤 PR을 찾은 경우 `0|77|1`, 오판 한 번 뒤 PR 없이 멈춘 경우 `1||1`, 파일이 없으면 0. 변수로 세던 방식으로 되돌린 사본에서 `0|77|0`으로 실패하는 것을 확인했다
+- 가이드북: 부록 D 재생성, 부록 E 한 행. README 버전 고정 `#v0.8.10`. PDF 재빌드
+- 이미 설치된 저장소: `npx github:iwishash/ticket-loop-kit#v0.8.10 init`(또는 `install.sh`). 설정은 없다. 이전 기록의 0은 실제 값이 아니다 — 회고(`/retro`)에서 그 수를 근거로 쓰지 않는다
+
 ## 0.8.9 — 2026-10-16
 
 0.8.8의 멈춤 보고가 같은 날 앞 실행의 로그 줄을 섞어 실었다. 로그는 날짜별 한 파일(`loop-MMDD.log`)에 이어 쓰는데 "로그 끝 N줄"을 파일 끝에서 잘랐기 때문이다. 더미 저장소 실측에서 SIGTERM 멈춤의 Slack 알림 코드 블록에 바로 앞 실행(SIGHUP으로 멈춘 것)의 줄과 그 ERROR가 함께 나왔다 — 지금 멈춘 실행의 사유를 잘못 읽게 한다.

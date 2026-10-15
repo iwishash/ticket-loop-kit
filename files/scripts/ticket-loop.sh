@@ -946,7 +946,7 @@ wait_for_pr() {
       if [[ $(( $(date +%s) - started )) -lt $STARTUP_GRACE_SEC ]]; then sleep "$IDLE_RECHECK_SEC"; continue; fi
       # PR을 연 직후에는 idle이 PR 조회보다 먼저 잡힌다(매 티켓 실측) — 잠깐 뒤 PR부터 다시 본다
       sleep "$IDLE_RECHECK_SEC"
-      [[ -z "$(open_pr_for "${n}")" ]] || { IDLE_FALSE_POSITIVES=$((IDLE_FALSE_POSITIVES + 1)); continue; }
+      [[ -z "$(open_pr_for "${n}")" ]] || { echo >> "${IDLE_FP_FILE:-/dev/null}"; continue; }   # idle 오판 한 번(idle_fp_count)
       # 지난 idle 이후 화면이 바뀌었으면 그사이 일했다는 뜻 — 연속 횟수를 새로 센다
       screen="$(terminal_tail "${handle}" | cksum | cut -d' ' -f1)"
       if [[ "$screen" != "$last_screen" ]]; then strikes=0; last_screen="$screen"; fi
@@ -1121,6 +1121,11 @@ suggest_retro() {
   done
 }
 
+# idle 오판 수 — PR 대기 중 idle이 잡혔지만 잠깐 뒤 다시 보니 PR이 열려 있던 횟수(PR을 연 직후 idle이 PR 조회보다 먼저 잡힌다).
+# wait_for_pr는 서브셸(bg_wait, 0.8.7까지는 커맨드 치환)에서 돌아 변수로 세면 부모에 남지 않는다 — 0.8.9까지 요약 줄과 기록의
+# idle_false_positives가 늘 0이었다. 티켓마다 IDLE_FP_FILE에 한 번에 한 줄씩 쓰고 줄 수를 센다
+idle_fp_count() { if [[ -n "${IDLE_FP_FILE:-}" && -f "$IDLE_FP_FILE" ]]; then echo $(( $(wc -l < "$IDLE_FP_FILE") )); else echo 0; fi; }
+
 record_ticket() {
   local result="$1" reason="${2:-}" file="$RECORDS_FILE" spec   # RECORDS_FILE은 시작 때 절대 경로로 굳혔다
   [[ "$LOG_FILE" != "/dev/null" ]] || return 0
@@ -1129,7 +1134,7 @@ record_ticket() {
   jq -cn --argjson spec "${spec:-0}" --argjson issue "$CUR_N" --arg title "$CUR_TITLE" --arg result "$result" --arg reason "$reason" \
     --arg pr "$CUR_PR" --arg started "$CUR_STARTED_ISO" --arg finished "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" \
     --argjson wall "$(( $(date +%s) - CUR_STARTED ))" --arg ci "$CUR_CI_SEC" --argjson repairs "$CUR_ROUND" \
-    --argjson idle "${IDLE_FALSE_POSITIVES:-0}" --arg post "${POST_MERGE_RESULT:-}" --arg model "$CUR_MODEL" --arg agent "$AGENT" '
+    --argjson idle "$(idle_fp_count)" --arg post "${POST_MERGE_RESULT:-}" --arg model "$CUR_MODEL" --arg agent "$AGENT" '
     {spec: $spec, issue: $issue, title: $title, result: $result, started: $started, finished: $finished, wall_sec: $wall,
      repairs: $repairs, idle_false_positives: $idle, agent: $agent}
     + (if $reason != "" then {reason: $reason} else {} end)
@@ -1250,7 +1255,7 @@ run_ticket() {
   local n="$1" title="$2"
   local deadline=$(( $(date +%s) + TICKET_TIMEOUT_SEC )) started_at ci_sec=0 ci_started
   started_at="$(date +%s)"
-  IDLE_FALSE_POSITIVES=0
+  IDLE_FP_FILE="$(mktemp "${TMPDIR:-/tmp}/ticket-loop-idle-${n}.XXXXXX")"   # idle 오판 한 번에 한 줄(idle_fp_count)
   POST_MERGE_RESULT="skipped"; POST_MERGE_LOG=""
   log title "=== #${n} ${title} ==="
   CUR_N="$n"; CUR_TITLE="$title"; CUR_STARTED="$started_at"; CUR_STARTED_ISO="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"; STOP_ISSUE="$n"
@@ -1314,7 +1319,7 @@ run_ticket() {
 
   if [[ $NO_MERGE -eq 1 ]]; then
     log step "#${n}: --no-merge — merge PR #${pr} yourself. The worktree is kept (${wt})."
-    record_ticket "no-merge"; CUR_N=""; STOP_ISSUE=""
+    record_ticket "no-merge"; CUR_N=""; STOP_ISSUE=""; rm -f "$IDLE_FP_FILE"
     return 0
   fi
 
@@ -1344,8 +1349,8 @@ run_ticket() {
     git -C "$ROOT" branch -D "${orca_branch}" >/dev/null 2>&1 || true
   fi
   git -C "$ROOT" push -q origin --delete "${branch}" >/dev/null 2>&1 || true
-  log ok "#${n} summary: wall-clock $(( ($(date +%s) - started_at) / 60 ))m, PR #${pr}, CI $([[ $ci_sec -ge 0 ]] && echo "${ci_sec}s" || echo "none (path excluded from CI)"), repairs ${round}, idle false positives ${IDLE_FALSE_POSITIVES}, post-merge check ${POST_MERGE_RESULT}"
-  record_ticket "merged"; CUR_N=""
+  log ok "#${n} summary: wall-clock $(( ($(date +%s) - started_at) / 60 ))m, PR #${pr}, CI $([[ $ci_sec -ge 0 ]] && echo "${ci_sec}s" || echo "none (path excluded from CI)"), repairs ${round}, idle false positives $(idle_fp_count), post-merge check ${POST_MERGE_RESULT}"
+  record_ticket "merged"; CUR_N=""; rm -f "$IDLE_FP_FILE"
   [[ $post_rc -eq 0 ]] || die "#${n}: post-merge check failed on the merged ${BASE_BRANCH}. Check the log (${POST_MERGE_LOG}) and the check worktree ($(post_merge_worktree_path)), then rerun after a fix PR."
   notify "Ticket done" "#${n} ${title} — PR #${pr}, $(( ($(date +%s) - started_at) / 60 ))m" done
   STOP_ISSUE=""

@@ -699,6 +699,33 @@ grep -A3 "trap on_exit EXIT; trap 'on_signal HUP' HUP; trap 'on_signal INT' INT;
 grep -q 'STOP_ISSUE="$n"$' "$KIT/files/scripts/ticket-loop.sh" && grep -qF -- '--remove-label "$STOPPED_LABEL"' "$KIT/files/scripts/ticket-loop.sh" || fail "run_ticket 이 STOP_ISSUE 를 두거나 병합 뒤 멈춤 라벨을 떼지 않음"
 echo "ok  알림·멈춤 보고(Slack·GitHub 기록, die·set -e·신호, 긴 대기 중 신호, 잠금)"
 
+# idle 오판 수: wait_for_pr 는 서브셸(bg_wait)에서 돌아 변수로 세면 부모에 남지 않았다(0.8.9 까지 요약·기록이 늘 0).
+# 진짜 wait_for_pr 를 bg_wait 로 돌려, 오판(idle 뒤 다시 보니 PR 이 열려 있음) 한 번이 부모의 idle_fp_count 에 1 로 남는지 —
+# PR 을 찾은 경우와, 그 뒤 PR 없이 멈춘 경우(idle 세 번) 둘 다
+W="$T/idlefp"; mkdir -p "$W"
+sed -n '/^wait_for_pr() {/,/^}/p' "$KIT/files/scripts/ticket-loop.sh" > "$W/fn.sh"
+sed -n '/^idle_fp_count() /p' "$KIT/files/scripts/ticket-loop.sh" >> "$W/fn.sh"
+sed -n '/^bg_wait() {/,/^}/p' "$KIT/files/scripts/ticket-loop.sh" >> "$W/fn.sh"
+grep -q '^wait_for_pr() ' "$W/fn.sh" && grep -q '^idle_fp_count() ' "$W/fn.sh" && grep -q '^bg_wait() ' "$W/fn.sh" || fail "wait_for_pr·idle_fp_count·bg_wait 를 찾지 못함"
+idlefp_case() {  # $1 open_pr_for 가 PR 을 돌려줄 호출 번호들 → "종료 코드|PR|오판 수"
+  (cd "$W" && PR_AT="$1" CNT="$W/cnt" bash -c '
+    set -euo pipefail
+    echo 0 > "$CNT"
+    log() { :; }; terminal_idle() { return 0; }; terminal_tail() { echo same; }; idle_wait_ms() { echo 1; }
+    open_pr_for() { local c; c=$(( $(cat "$CNT") + 1 )); echo "$c" > "$CNT"; [[ " $PR_AT " != *" $c "* ]] || echo 77; }
+    PROGRESS_SEC=0; IDLE_WAIT_MS=1; STARTUP_GRACE_SEC=0; IDLE_RECHECK_SEC=0; IDLE_STRIKES=3
+    source fn.sh
+    IDLE_FP_FILE="$(mktemp)"; rc=0
+    bg_wait wait_for_pr 7 h $(( $(date +%s) + 60 )) > out || rc=$?
+    echo "$rc|$(cat out)|$(idle_fp_count)"; rm -f "$IDLE_FP_FILE"')
+}
+out="$(idlefp_case "2 3")"; [[ "$out" == "0|77|1" ]] || fail "idle 오판 뒤 PR 을 찾은 경우: $out (기대 0|77|1)"
+out="$(idlefp_case "2")"; [[ "$out" == "1||1" ]] || fail "idle 오판 뒤 PR 없이 멈춘 경우: $out (기대 1||1)"
+[[ "$(cd "$W" && bash -c 'source fn.sh; IDLE_FP_FILE=; idle_fp_count; IDLE_FP_FILE=/nonexistent; idle_fp_count')" == $'0\n0' ]] || fail "idle_fp_count: 파일이 없으면 0"
+! grep -q 'IDLE_FALSE_POSITIVES' "$KIT/files/scripts/ticket-loop.sh" || fail "부모에 남지 않는 변수 IDLE_FALSE_POSITIVES 를 아직 쓴다"
+grep -q 'idle false positives $(idle_fp_count)' "$KIT/files/scripts/ticket-loop.sh" && grep -q -- '--argjson idle "$(idle_fp_count)"' "$KIT/files/scripts/ticket-loop.sh" || fail "요약 줄·기록이 idle_fp_count 를 쓰지 않음"
+echo "ok  idle 오판 수가 서브셸(bg_wait)을 넘어 요약·기록에 남음"
+
 # 템플릿 자리표: 무거운 테스트는 스위트와 파일 하나 실행 명령 두 자리표로, 설정 스킬의 결정 표가 둘 다 묻는다
 for f in .ticket-loop/worker-rules.md .agents/skills/implement/SKILL.md .agents/skills/pr/SKILL.md; do
   grep -q '__HEAVY_TEST_FILE__' "$KIT/templates/$f" || fail "templates/$f 에 __HEAVY_TEST_FILE__ 없음"
