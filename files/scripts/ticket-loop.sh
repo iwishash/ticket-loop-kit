@@ -74,9 +74,10 @@ set -euo pipefail
 #   POST_MERGE_COPY     POST_MERGE_CMD 전에 메인 체크아웃에서 복사할 파일들(공백 구분), 예 ".env.local"
 #   POST_MERGE_PORT     POST_MERGE_CMD가 쓰는 포트. 지정하면 비기를 기다린다(기본 없음)
 #   POST_MERGE_WORKTREE POST_MERGE_CMD를 돌릴 워크트리 (기본 ~/.cache/ticket-loop/<owner-repo>/post-merge, 저장소 밖)
-#   LOG_FILE            진행 로그 파일 (기본 .ticket-loop/loop-MMDD.log, /dev/null이면 끔)
-#   RECORDS_FILE        티켓별 기록 JSONL (기본 .ticket-loop/tickets.jsonl, 기계별 — 커밋하지 않는다)
-#   REPORT_DIR          스펙 리포트 HTML 디렉터리 (기본 docs/loop-reports — 리포트는 사람이 PR로 커밋)
+#   LOG_FILE            진행 로그 파일 (기본 .ticket-loop/loop-MMDD.log, /dev/null이면 끔). 상대 경로는 저장소 루트 기준이고 시작 때
+#                       절대 경로로 굳힌다 — 병합 뒤 검증 로그(post-merge-N.log)도 같은 디렉터리에 둔다
+#   RECORDS_FILE        티켓별 기록 JSONL (기본 .ticket-loop/tickets.jsonl, 기계별 — 커밋하지 않는다). 상대 경로는 저장소 루트 기준
+#   REPORT_DIR          스펙 리포트 HTML 디렉터리 (기본 docs/loop-reports — 리포트는 사람이 PR로 커밋). 상대 경로는 저장소 루트 기준
 #   REPORT_OPEN         리포트를 쓴 뒤 브라우저로 여는지 (기본 1). 0이면 안 연다. SSH 세션·화면 없는 Linux에서는 값과 무관하게 안 연다
 #   MODEL_REGEX         워커 터미널에서 모델 이름을 뽑는 정규식(ERE) (claude: 상태줄·배너의 "Opus 5.5" 꼴, codex: "gpt-5.1-codex" 꼴).
 #                       못 찾으면 리포트에 not recorded
@@ -87,7 +88,8 @@ set -euo pipefail
 #   - 병합 뒤 POST_MERGE_CMD 실패, 또는 POST_MERGE_PORT가 10분 안에 비지 않음(기다리는 동안은 로그 한 줄 뒤 조용하다 — 멈춤이 아니다)
 # 자동 선택은 선행 이슈가 열렸거나, PR이 이미 있거나, 담당자가 있거나, 하위 이슈를 가진(스펙) 이슈를 건너뛴다.
 
-LOOP_ENV="$(git rev-parse --show-toplevel 2>/dev/null || pwd)/.ticket-loop/loop.env"
+ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"   # 저장소 루트. 도구 검사 뒤 git으로 다시 확정한다
+LOOP_ENV="$ROOT/.ticket-loop/loop.env"
 # shellcheck source=/dev/null
 [[ ! -f "$LOOP_ENV" ]] || source "$LOOP_ENV"
 
@@ -127,6 +129,14 @@ LOG_FILE="${LOG_FILE:-.ticket-loop/loop-$(date +%m%d).log}"
 RECORDS_FILE="${RECORDS_FILE:-.ticket-loop/tickets.jsonl}"
 REPORT_DIR="${REPORT_DIR:-docs/loop-reports}"
 REPORT_OPEN="${REPORT_OPEN:-1}"
+# 파일 경로는 시작 때 한 번 저장소 루트 기준 절대 경로로 굳힌다(loop.env나 환경변수로 상대 경로를 줘도 같다). 루프는 저장소
+# 루트에서 돌지만, 병합 뒤 검증처럼 다른 디렉터리로 cd 한 서브셸에서 여는 파일은 그 디렉터리 기준이 된다 — 실측(0.8.3,
+# rental-portal #101)에서 post-merge-N.log가 검증 워크트리 안에 생기고 루프는 저장소 루트에서 꼬리를 찾지 못했다.
+# /dev/null(로그 끔)은 절대 경로라 그대로다
+abs_path() { case "$1" in /*) printf '%s' "$1" ;; *) printf '%s/%s' "$ROOT" "$1" ;; esac; }
+LOG_FILE="$(abs_path "$LOG_FILE")"
+RECORDS_FILE="$(abs_path "$RECORDS_FILE")"
+REPORT_DIR="$(abs_path "$REPORT_DIR")"
 # ----- 에이전트 프리셋 -----
 # AGENT가 기동 명령·배너·모델 정규식·스킬 접두사의 기본값을 정한다. loop.env나 환경변수로 준 값이 이긴다.
 #   claude  Claude Code. 스킬은 /이름. 모델명은 상태줄·배너의 "Opus 5.5" 꼴
@@ -818,8 +828,11 @@ run_post_merge() {
       sleep 30
     done
   fi
+  # 검증 로그는 LOG_FILE과 같은 디렉터리(절대 경로 — 아래 리다이렉트는 cd 한 뒤의 서브셸에서 열리므로 상대 경로면 워크트리 안에 생긴다)
   logfile="${TMPDIR:-/tmp}/ticket-loop-post-merge-${n}.log"
   [[ "$LOG_FILE" == "/dev/null" ]] || logfile="$(dirname "$LOG_FILE")/post-merge-${n}.log"
+  POST_MERGE_LOG="$logfile"
+  mkdir -p "$(dirname "$logfile")"
   started="$(date +%s)"
   log step "#${n}: 병합 뒤 검증 시작 (${wt}, 로그 ${logfile})"
   if (cd "$wt" && bash -c "$POST_MERGE_CMD" >"$logfile" 2>&1); then
@@ -882,9 +895,8 @@ suggest_retro() {
 }
 
 record_ticket() {
-  local result="$1" reason="${2:-}" file="$RECORDS_FILE" spec
+  local result="$1" reason="${2:-}" file="$RECORDS_FILE" spec   # RECORDS_FILE은 시작 때 절대 경로로 굳혔다
   [[ "$LOG_FILE" != "/dev/null" ]] || return 0
-  [[ "$file" == /* ]] || file="$ROOT/$file"
   mkdir -p "$(dirname "$file")"
   spec="$(spec_of_ticket "$CUR_N")"
   jq -cn --argjson spec "${spec:-0}" --argjson issue "$CUR_N" --arg title "$CUR_TITLE" --arg result "$result" --arg reason "$reason" \
@@ -987,9 +999,7 @@ open_report() {
 # 리포트는 커밋하지 않는다 — 사람이 보고 PR로 올린다(루프가 도는 동안 기본 브랜치 직접 커밋 금지).
 write_spec_report() {
   [[ -n "$PARENT" ]] || return 0
-  local out="$REPORT_DIR/spec-${PARENT}.html" records="$RECORDS_FILE" spec issues prs recs
-  [[ "$out" == /* ]] || out="$ROOT/$out"
-  [[ "$records" == /* ]] || records="$ROOT/$records"
+  local out="$REPORT_DIR/spec-${PARENT}.html" records="$RECORDS_FILE" spec issues prs recs   # 둘 다 시작 때 절대 경로로 굳혔다
   if spec="$(gh issue view "$PARENT" --json number,title,state,url)" \
     && issues="$(gh api "repos/${OWNER_REPO}/issues/${PARENT}/sub_issues?per_page=100" --paginate \
          --jq '.[] | {number, title, state, url: .html_url, assignees: (.assignees | length)}' | jq -s '.')" \
@@ -1012,7 +1022,7 @@ run_ticket() {
   local deadline=$(( $(date +%s) + TICKET_TIMEOUT_SEC )) started_at ci_sec=0 ci_started
   started_at="$(date +%s)"
   IDLE_FALSE_POSITIVES=0
-  POST_MERGE_RESULT="건너뜀"
+  POST_MERGE_RESULT="건너뜀"; POST_MERGE_LOG=""
   log title "=== #${n} ${title} ==="
   CUR_N="$n"; CUR_TITLE="$title"; CUR_STARTED="$started_at"; CUR_STARTED_ISO="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
   CUR_PR=""; CUR_MODEL=""; CUR_CI_SEC=""; CUR_ROUND=0
@@ -1102,7 +1112,7 @@ run_ticket() {
   git -C "$ROOT" push -q origin --delete "${branch}" >/dev/null 2>&1 || true
   log ok "#${n} 요약: 벽시계 $(( ($(date +%s) - started_at) / 60 ))분, PR #${pr}, CI $([[ $ci_sec -ge 0 ]] && echo "${ci_sec}초" || echo "없음(CI 제외 경로)"), 수리 ${round}회, idle 오판 ${IDLE_FALSE_POSITIVES}회, 병합 뒤 검증 ${POST_MERGE_RESULT}"
   record_ticket "merged"; CUR_N=""
-  [[ $post_rc -eq 0 ]] || die "#${n}: 병합된 ${BASE_BRANCH}에서 병합 뒤 검증이 실패했습니다. 로그와 검증 워크트리($(post_merge_worktree_path))를 확인하고 수정 PR 뒤에 다시 실행하세요."
+  [[ $post_rc -eq 0 ]] || die "#${n}: 병합된 ${BASE_BRANCH}에서 병합 뒤 검증이 실패했습니다. 로그(${POST_MERGE_LOG})와 검증 워크트리($(post_merge_worktree_path))를 확인하고 수정 PR 뒤에 다시 실행하세요."
   notify "티켓 완료" "#${n} ${title}"
 }
 

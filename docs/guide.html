@@ -747,7 +747,7 @@ bash scripts/ticket-loop.sh --parent 40             # 끝난 스펙이면 "처�
   <tr><td><code>POST_MERGE_COPY</code></td><td>(없음)</td><td>그 전에 메인 체크아웃에서 복사할 파일(공백 구분), 예 <code>.env.local</code></td></tr>
   <tr><td><code>POST_MERGE_PORT</code></td><td>(없음)</td><td>그 명령이 쓰는 포트. 지정하면 비기를 최대 10분 기다린다</td></tr>
   <tr><td><code>POST_MERGE_WORKTREE</code></td><td><code>~/.cache/ticket-loop/&lt;owner-repo&gt;/post-merge</code></td><td>병합 뒤 검증을 돌릴 전용 워크트리. 저장소 밖에 두고 재사용한다</td></tr>
-  <tr><td><code>LOG_FILE</code></td><td><code>.ticket-loop/loop-MMDD.log</code></td><td>진행 로그. 복구와 회고의 1차 자료다. <code>/dev/null</code>이면 끈다. 터미널에는 같은 줄을 단계별 색으로 보여 준다(티켓 제목 굵은 자주, 단계 전환 청록, 성공 초록, 되풀이·수리·건너뜀 노랑, 중단 굵은 빨강, 시각과 워커 화면 꼬리는 흐리게) — stderr가 터미널이 아니거나 <code>NO_COLOR</code>가 있으면 맨글자고, 파일에는 언제나 색 코드 없이 쓴다</td></tr>
+  <tr><td><code>LOG_FILE</code></td><td><code>.ticket-loop/loop-MMDD.log</code></td><td>진행 로그. 복구와 회고의 1차 자료다. <code>/dev/null</code>이면 끈다. 상대 경로는 저장소 루트 기준이고 시작 때 절대 경로로 굳힌다(<code>RECORDS_FILE</code>·<code>REPORT_DIR</code>도 같다) — 병합 뒤 검증 로그 <code>post-merge-N.log</code>는 이 파일과 같은 디렉터리에 생긴다. 터미널에는 같은 줄을 단계별 색으로 보여 준다(티켓 제목 굵은 자주, 단계 전환 청록, 성공 초록, 되풀이·수리·건너뜀 노랑, 중단 굵은 빨강, 시각과 워커 화면 꼬리는 흐리게) — stderr가 터미널이 아니거나 <code>NO_COLOR</code>가 있으면 맨글자고, 파일에는 언제나 색 코드 없이 쓴다</td></tr>
   <tr><td><code>RECORDS_FILE</code></td><td><code>.ticket-loop/tickets.jsonl</code></td><td>티켓마다 한 줄씩 남기는 기록(벽시계·CI 소요·수리·병합 뒤 검증·모델). 기계별 원자료라 커밋하지 않는다(<code>.gitignore</code>에 <code>/.ticket-loop/*.jsonl</code>). 스펙 리포트가 읽는다(7장 9단계)</td></tr>
   <tr><td><code>REPORT_DIR</code></td><td><code>docs/loop-reports</code></td><td><code>--parent</code> 실행이 끝나면 <code>spec-&lt;N&gt;.html</code>을 쓰는 디렉터리. 리포트는 사람이 PR로 커밋한다</td></tr>
   <tr><td><code>REPORT_OPEN</code></td><td><code>1</code></td><td>리포트를 쓴 뒤 기본 브라우저로 연다(macOS <code>open</code>, Linux <code>xdg-open</code>). <code>0</code>이면 끔. SSH 세션·화면 없는 Linux에서는 값과 무관하게 열지 않는다</td></tr>
@@ -819,11 +819,11 @@ systemd-inhibit bash scripts/ticket-loop.sh        # Linux (WSL은 Windows 전�
 <p><b>병합.</b> <code>gh pr merge --&lt;MERGE_METHOD&gt;</code>. 5초 뒤에도 이슈가 열려 있으면 직접 닫고 코멘트를 남긴다. <span class="label">in-review</span>를 지운다. 이어서 이 티켓이 속한 스펙 이슈(<code>--parent</code> 값, 없으면 GitHub의 부모 이슈)의 하위 이슈 목록을 세어 모두 닫혔으면 스펙 이슈도 코멘트와 함께 닫는다. 요약 값 <code>sub_issues_summary</code>는 쓰지 않는다(선행 이슈 요약처럼 늦게 바뀔 수 있다). 하위 이슈가 하나라도 열려 있거나 스펙이 이미 닫혔으면 아무것도 하지 않는다 — 같은 검사를 <code>--parent</code> 실행이 끝날 때 한 번 더 하므로, 마지막 티켓을 사람이 닫은 스펙도 다음 실행에서 닫힌다.</p></div></div>
 
 <div class="step"><div class="n">6</div><div class="b">
-<p><b>병합 뒤 검증 (선택).</b> <code>POST_MERGE_CMD</code>가 있으면 병합된 기본 브랜치를 저장소 밖 전용 워크트리에 받아(<code>POST_MERGE_COPY</code> 파일을 복사하고, <code>POST_MERGE_PORT</code>가 비기를 기다린 뒤) 그 명령을 한 번 돌린다. 로그는 <code>.ticket-loop/post-merge-N.log</code>. 실패하면 이 티켓의 정리와 요약까지 마친 뒤 루프를 멈춘다. 기본 브랜치가 깨진 채로 다음 티켓을 쌓지 않기 위해서다(R10).</p>
+<p><b>병합 뒤 검증 (선택).</b> <code>POST_MERGE_CMD</code>가 있으면 병합된 기본 브랜치를 저장소 밖 전용 워크트리에 받아(<code>POST_MERGE_COPY</code> 파일을 복사하고, <code>POST_MERGE_PORT</code>가 비기를 기다린 뒤) 그 명령을 한 번 돌린다. 로그는 <code>LOG_FILE</code>과 같은 디렉터리의 <code>post-merge-N.log</code>(기본 저장소 루트의 <code>.ticket-loop/post-merge-N.log</code>)이고, "병합 뒤 검증 시작" 줄과 실패 ERROR 줄에 그 절대 경로를 적는다. 실패하면 로그 꼬리 40줄을 흐리게 보여 주고, 이 티켓의 정리와 요약까지 마친 뒤 루프를 멈춘다. 기본 브랜치가 깨진 채로 다음 티켓을 쌓지 않기 위해서다(R10).</p>
 <p><b>포트 대기는 멈춤이 아니다.</b> 포트가 차 있으면 루프는 점유 프로세스와 기한을 한 줄 적고, 30초마다 다시 보며 조용히 기다린다. 대개 메인 체크아웃에서 사람이 띄워 둔 개발 서버다(실측: 아침에 띄운 <code>npm run dev</code>가 남아 4분을 기다렸다). 그 서버를 끄면 30초 안에 알아서 검증을 시작한다 — 루프를 다시 실행하지 않는다. 10분이 지나면 "포트 … 이 비지 않았다"로 멈춘다.</p>
 <pre class="out">[2026-10-12 15:36:03] #67: PR #75 병합됨
 [2026-10-12 15:36:04] #67: 포트 3000 사용 중(node pid 48213) — 비기를 15:46:04까지 기다린다. 그 서버를 끄면 바로 이어 간다
-[2026-10-12 15:41:44] #67: 병합 뒤 검증 시작 (…/post-merge, 로그 .ticket-loop/post-merge-67.log)</pre>
+[2026-10-12 15:41:44] #67: 병합 뒤 검증 시작 (…/post-merge, 로그 /Users/me/rental-portal/.ticket-loop/post-merge-67.log)</pre>
 <div class="note"><b>왜 워커가 아니라 루프가 돌리나.</b> 실제 서버·공유 개발 DB·고정 포트를 쓰는 통합·E2E 테스트는 워커가 돌리면 다른 워커나 사람의 개발 서버와 부딪힌다. 그래서 워커 규칙은 "돌리지 말고 미실행이라고 적어라"였다. 그 결과 실제 운영에서 PR 16건이 모두 "로컬에서 확인 필요"로 병합됐고, 어느 단계에서도 통합 테스트가 돌지 않아 기본 브랜치의 통합 스위트가 깨진 채 배포까지 갔다. 루프는 직렬이므로 병합 직후가 부딪힘 없이 돌릴 수 있는 유일한 지점이다. 다만 "전체를 돌리지 마라"가 "한 번도 돌리지 마라"가 되면 안 된다 — 워커가 새로 쓴 통합 테스트가 병합 뒤 검증에서 처음 돌아 깨지면 루프가 그 자리에서 멈춘다(실측). 그래서 워커 규칙은 자기가 추가·수정한 무거운 테스트 파일만 PR 직전에 1회 돌리게 한다(1~2분). 파일 하나는 포트·DB 부딪힘이 거의 없고, 전체 스위트는 여전히 루프 몫이다.</div></div></div>
 
 <div class="step"><div class="n">7</div><div class="b">
@@ -1093,7 +1093,7 @@ bash scripts/ticket-loop.sh N</code></pre></td></tr>
 <p>워크트리는 만들어졌지만 에이전트가 두 번 다 뜨지 않았다. Orca에서 그 워크트리 터미널을 열어 무엇이 찍혔는지 본다. 흔한 원인은 에이전트(Claude Code·Codex) 미설치·로그인 만료, setup 훅 실패(<code>setupAgentStartupPolicy: wait-for-setup</code>이면 setup이 끝나야 에이전트가 뜬다), 에이전트 배너가 <code>AGENT_BANNER_REGEX</code>와 맞지 않는 경우(다른 에이전트나 배너 형식 변경)다. 원인을 고친 뒤 워크트리를 지우고(R2-b) 그 티켓부터 다시 돌린다. cmux·tmux에서 워커는 떠서 일했는데 루프가 티켓 타임아웃으로 멈췄다면 R9가 아니라 훅 상태가 오지 않은 경우다 — cmux는 Settings의 Claude Code 통합, tmux는 워커가 <code>--settings</code> 훅 설정으로 떴는지(<code>~/.cache/ticket-loop/&lt;owner-repo&gt;/tmux/state/issue-N</code>에 값이 쓰이는지) 본다(2.5). <code>WORKTREE_SETUP_CMD</code> 실패는 "WORKTREE_SETUP_CMD 실패"로 따로 멈추며, 메인 체크아웃에서 그 명령을 돌려 재현한다.</p>
 
 <h4><span class="tag r">R10</span>"병합 뒤 검증이 실패했습니다" / "포트 … 이 비지 않았다"</h4>
-<p>PR은 이미 병합돼 이슈가 닫혔고 워커 워크트리도 정리됐다(F 상태와 같다). 기본 브랜치가 무거운 검증을 못 넘긴 것이다. <code>.ticket-loop/post-merge-N.log</code> 꼬리를 읽고, 검증 워크트리(<code>~/.cache/ticket-loop/&lt;owner-repo&gt;/post-merge</code>)에서 실패한 테스트 하나만 다시 돌려 재현한다. 수정은 새 브랜치 + PR로 한다(티켓이면 <code>T00:</code>으로 끼워 넣는다). 병합한 뒤 루프를 다시 실행한다.</p>
+<p>PR은 이미 병합돼 이슈가 닫혔고 워커 워크트리도 정리됐다(F 상태와 같다). 기본 브랜치가 무거운 검증을 못 넘긴 것이다. ERROR 줄에 적힌 로그(<code>LOG_FILE</code>과 같은 디렉터리의 <code>post-merge-N.log</code>, 기본은 저장소 루트의 <code>.ticket-loop/post-merge-N.log</code> — 루프가 이미 꼬리 40줄을 찍어 두었다)를 읽고, 검증 워크트리(<code>~/.cache/ticket-loop/&lt;owner-repo&gt;/post-merge</code>)에서 실패한 테스트 하나만 다시 돌려 재현한다. 수정은 새 브랜치 + PR로 한다(티켓이면 <code>T00:</code>으로 끼워 넣는다). 병합한 뒤 루프를 다시 실행한다.</p>
 <ul>
   <li><b>이번 티켓 탓이 아닐 수 있다.</b> 공유 개발 DB의 데이터가 바뀌어 테스트 전제가 깨졌을 수 있다("X가 없다"를 전제로 0건을 단언하는 테스트 등). 제품 버그로 단정하기 전에 전제부터 확인한다.</li>
   <li><b>"포트 … 이 비지 않았다"</b>면 루프가 도는 동안 그 포트에 띄운 개발 서버를 끄고 다시 실행하거나, 이번에는 <code>--skip-post-merge</code>로 돈다. 재실행하면 그 티켓의 검증은 건너뛰어지고 다음 티켓 병합 뒤 검증이 그 변경까지 함께 본다.</li>
@@ -1440,9 +1440,10 @@ set -euo pipefail
 #   POST_MERGE_COPY     POST_MERGE_CMD 전에 메인 체크아웃에서 복사할 파일들(공백 구분), 예 ".env.local"
 #   POST_MERGE_PORT     POST_MERGE_CMD가 쓰는 포트. 지정하면 비기를 기다린다(기본 없음)
 #   POST_MERGE_WORKTREE POST_MERGE_CMD를 돌릴 워크트리 (기본 ~/.cache/ticket-loop/&lt;owner-repo&gt;/post-merge, 저장소 밖)
-#   LOG_FILE            진행 로그 파일 (기본 .ticket-loop/loop-MMDD.log, /dev/null이면 끔)
-#   RECORDS_FILE        티켓별 기록 JSONL (기본 .ticket-loop/tickets.jsonl, 기계별 — 커밋하지 않는다)
-#   REPORT_DIR          스펙 리포트 HTML 디렉터리 (기본 docs/loop-reports — 리포트는 사람이 PR로 커밋)
+#   LOG_FILE            진행 로그 파일 (기본 .ticket-loop/loop-MMDD.log, /dev/null이면 끔). 상대 경로는 저장소 루트 기준이고 시작 때
+#                       절대 경로로 굳힌다 — 병합 뒤 검증 로그(post-merge-N.log)도 같은 디렉터리에 둔다
+#   RECORDS_FILE        티켓별 기록 JSONL (기본 .ticket-loop/tickets.jsonl, 기계별 — 커밋하지 않는다). 상대 경로는 저장소 루트 기준
+#   REPORT_DIR          스펙 리포트 HTML 디렉터리 (기본 docs/loop-reports — 리포트는 사람이 PR로 커밋). 상대 경로는 저장소 루트 기준
 #   REPORT_OPEN         리포트를 쓴 뒤 브라우저로 여는지 (기본 1). 0이면 안 연다. SSH 세션·화면 없는 Linux에서는 값과 무관하게 안 연다
 #   MODEL_REGEX         워커 터미널에서 모델 이름을 뽑는 정규식(ERE) (claude: 상태줄·배너의 "Opus 5.5" 꼴, codex: "gpt-5.1-codex" 꼴).
 #                       못 찾으면 리포트에 not recorded
@@ -1453,7 +1454,8 @@ set -euo pipefail
 #   - 병합 뒤 POST_MERGE_CMD 실패, 또는 POST_MERGE_PORT가 10분 안에 비지 않음(기다리는 동안은 로그 한 줄 뒤 조용하다 — 멈춤이 아니다)
 # 자동 선택은 선행 이슈가 열렸거나, PR이 이미 있거나, 담당자가 있거나, 하위 이슈를 가진(스펙) 이슈를 건너뛴다.
 
-LOOP_ENV="$(git rev-parse --show-toplevel 2&gt;/dev/null || pwd)/.ticket-loop/loop.env"
+ROOT="$(git rev-parse --show-toplevel 2&gt;/dev/null || pwd)"   # 저장소 루트. 도구 검사 뒤 git으로 다시 확정한다
+LOOP_ENV="$ROOT/.ticket-loop/loop.env"
 # shellcheck source=/dev/null
 [[ ! -f "$LOOP_ENV" ]] || source "$LOOP_ENV"
 
@@ -1493,6 +1495,14 @@ LOG_FILE="${LOG_FILE:-.ticket-loop/loop-$(date +%m%d).log}"
 RECORDS_FILE="${RECORDS_FILE:-.ticket-loop/tickets.jsonl}"
 REPORT_DIR="${REPORT_DIR:-docs/loop-reports}"
 REPORT_OPEN="${REPORT_OPEN:-1}"
+# 파일 경로는 시작 때 한 번 저장소 루트 기준 절대 경로로 굳힌다(loop.env나 환경변수로 상대 경로를 줘도 같다). 루프는 저장소
+# 루트에서 돌지만, 병합 뒤 검증처럼 다른 디렉터리로 cd 한 서브셸에서 여는 파일은 그 디렉터리 기준이 된다 — 실측(0.8.3,
+# rental-portal #101)에서 post-merge-N.log가 검증 워크트리 안에 생기고 루프는 저장소 루트에서 꼬리를 찾지 못했다.
+# /dev/null(로그 끔)은 절대 경로라 그대로다
+abs_path() { case "$1" in /*) printf '%s' "$1" ;; *) printf '%s/%s' "$ROOT" "$1" ;; esac; }
+LOG_FILE="$(abs_path "$LOG_FILE")"
+RECORDS_FILE="$(abs_path "$RECORDS_FILE")"
+REPORT_DIR="$(abs_path "$REPORT_DIR")"
 # ----- 에이전트 프리셋 -----
 # AGENT가 기동 명령·배너·모델 정규식·스킬 접두사의 기본값을 정한다. loop.env나 환경변수로 준 값이 이긴다.
 #   claude  Claude Code. 스킬은 /이름. 모델명은 상태줄·배너의 "Opus 5.5" 꼴
@@ -2184,8 +2194,11 @@ run_post_merge() {
       sleep 30
     done
   fi
+  # 검증 로그는 LOG_FILE과 같은 디렉터리(절대 경로 — 아래 리다이렉트는 cd 한 뒤의 서브셸에서 열리므로 상대 경로면 워크트리 안에 생긴다)
   logfile="${TMPDIR:-/tmp}/ticket-loop-post-merge-${n}.log"
   [[ "$LOG_FILE" == "/dev/null" ]] || logfile="$(dirname "$LOG_FILE")/post-merge-${n}.log"
+  POST_MERGE_LOG="$logfile"
+  mkdir -p "$(dirname "$logfile")"
   started="$(date +%s)"
   log step "#${n}: 병합 뒤 검증 시작 (${wt}, 로그 ${logfile})"
   if (cd "$wt" &amp;&amp; bash -c "$POST_MERGE_CMD" &gt;"$logfile" 2&gt;&amp;1); then
@@ -2248,9 +2261,8 @@ suggest_retro() {
 }
 
 record_ticket() {
-  local result="$1" reason="${2:-}" file="$RECORDS_FILE" spec
+  local result="$1" reason="${2:-}" file="$RECORDS_FILE" spec   # RECORDS_FILE은 시작 때 절대 경로로 굳혔다
   [[ "$LOG_FILE" != "/dev/null" ]] || return 0
-  [[ "$file" == /* ]] || file="$ROOT/$file"
   mkdir -p "$(dirname "$file")"
   spec="$(spec_of_ticket "$CUR_N")"
   jq -cn --argjson spec "${spec:-0}" --argjson issue "$CUR_N" --arg title "$CUR_TITLE" --arg result "$result" --arg reason "$reason" \
@@ -2353,9 +2365,7 @@ open_report() {
 # 리포트는 커밋하지 않는다 — 사람이 보고 PR로 올린다(루프가 도는 동안 기본 브랜치 직접 커밋 금지).
 write_spec_report() {
   [[ -n "$PARENT" ]] || return 0
-  local out="$REPORT_DIR/spec-${PARENT}.html" records="$RECORDS_FILE" spec issues prs recs
-  [[ "$out" == /* ]] || out="$ROOT/$out"
-  [[ "$records" == /* ]] || records="$ROOT/$records"
+  local out="$REPORT_DIR/spec-${PARENT}.html" records="$RECORDS_FILE" spec issues prs recs   # 둘 다 시작 때 절대 경로로 굳혔다
   if spec="$(gh issue view "$PARENT" --json number,title,state,url)" \
     &amp;&amp; issues="$(gh api "repos/${OWNER_REPO}/issues/${PARENT}/sub_issues?per_page=100" --paginate \
          --jq '.[] | {number, title, state, url: .html_url, assignees: (.assignees | length)}' | jq -s '.')" \
@@ -2378,7 +2388,7 @@ run_ticket() {
   local deadline=$(( $(date +%s) + TICKET_TIMEOUT_SEC )) started_at ci_sec=0 ci_started
   started_at="$(date +%s)"
   IDLE_FALSE_POSITIVES=0
-  POST_MERGE_RESULT="건너뜀"
+  POST_MERGE_RESULT="건너뜀"; POST_MERGE_LOG=""
   log title "=== #${n} ${title} ==="
   CUR_N="$n"; CUR_TITLE="$title"; CUR_STARTED="$started_at"; CUR_STARTED_ISO="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
   CUR_PR=""; CUR_MODEL=""; CUR_CI_SEC=""; CUR_ROUND=0
@@ -2468,7 +2478,7 @@ run_ticket() {
   git -C "$ROOT" push -q origin --delete "${branch}" &gt;/dev/null 2&gt;&amp;1 || true
   log ok "#${n} 요약: 벽시계 $(( ($(date +%s) - started_at) / 60 ))분, PR #${pr}, CI $([[ $ci_sec -ge 0 ]] &amp;&amp; echo "${ci_sec}초" || echo "없음(CI 제외 경로)"), 수리 ${round}회, idle 오판 ${IDLE_FALSE_POSITIVES}회, 병합 뒤 검증 ${POST_MERGE_RESULT}"
   record_ticket "merged"; CUR_N=""
-  [[ $post_rc -eq 0 ]] || die "#${n}: 병합된 ${BASE_BRANCH}에서 병합 뒤 검증이 실패했습니다. 로그와 검증 워크트리($(post_merge_worktree_path))를 확인하고 수정 PR 뒤에 다시 실행하세요."
+  [[ $post_rc -eq 0 ]] || die "#${n}: 병합된 ${BASE_BRANCH}에서 병합 뒤 검증이 실패했습니다. 로그(${POST_MERGE_LOG})와 검증 워크트리($(post_merge_worktree_path))를 확인하고 수정 PR 뒤에 다시 실행하세요."
   notify "티켓 완료" "#${n} ${title}"
 }
 
@@ -2522,6 +2532,7 @@ notify "티켓 루프 종료" "${done_count}건 완료$([[ -z "${CLOSED_SPECS// 
 <p class="small muted">3판(2026-10-12)은 두 번째 스펙의 첫 티켓 2건을 돌린 실측에서 나왔다 — 묶음 결과를 한 표로 보고 싶다는 요구와, 포트를 기다리는 루프가 멈춘 것처럼 보인 일.</p>
 <table class="dense">
   <tr><th style="width:22%">바뀐 곳</th><th>내용</th><th style="width:20%">계기</th></tr>
+  <tr><td>병합 뒤 검증 로그 경로 (6장 변수 표, 7장 6단계, R10, 부록 D)</td><td><code>LOG_FILE</code>·<code>RECORDS_FILE</code>·<code>REPORT_DIR</code>를 시작 때 저장소 루트 기준 절대 경로로 굳힌다. 전에는 <code>post-merge-N.log</code>가 <code>cd</code>한 서브셸에서 상대 경로로 열려 검증 워크트리 안에 생겼고, 루프는 저장소 루트에서 꼬리를 찾지 못해 빈 꼬리로 멈췄다. 시작 줄과 ERROR 줄에 실제 로그 경로를 적는다.</td><td>키트 0.8.5 — rental-portal #101 병합 뒤 검증 실패 때 로그가 "No such file"</td></tr>
   <tr><td>터미널 로그 색 (6장 변수 표, 부록 D)</td><td>루프가 터미널에 찍는 로그를 단계별 색으로 가른다 — 티켓 제목(앞에 빈 줄), 단계 전환, 성공, 되풀이·수리·건너뜀, 중단, 흐린 시각과 워커 화면 꼬리. <code>NO_COLOR</code>나 파이프면 맨글자, 로그 파일에는 색 코드가 들어가지 않는다.</td><td>키트 0.8.4 — 긴 로그에서 지금 어느 단계인지 한눈에 안 보임</td></tr>
   <tr><td>cmux·tmux 백엔드와 Windows (표지, 1·2·3·4·6·7·10·12장, 부록 A)</td><td>2.5절에 cmux·tmux 백엔드를 넣었다 — 루프가 백엔드에 시키는 아홉 가지 일의 대응표, 실행 조건(cmux 터미널 안, 메인 체크아웃 신뢰), <code>WORKTREE_SETUP_CMD</code>, 훅 기반 idle의 성질, 실측. 본문의 Orca 전용 표현을 백엔드 기준으로 고치고 3장 상태 표에 cmux lane·tmux 창 이름을 더했다. 4장 끝에 Windows 절(WSL2 + tmux 백엔드, W1~W5)을 넣고 Orca는 선택으로 내렸다.</td><td>키트 0.8.2 — cmux(0.3)·tmux(0.8) 백엔드가 책에는 없었음, Windows 설치 질문</td></tr>
   <tr><td>리포트 자동 열기 (7장 9단계, 6장 변수 표, 부록 D)</td><td>리포트를 쓴 뒤 기본 브라우저로 연다. <code>REPORT_OPEN=0</code>으로 끄고, SSH 세션·화면 없는 Linux에서는 열지 않는다. 열기 실패는 루프 결과를 바꾸지 않는다.</td><td>키트 0.8.2 — 리포트 경로를 찾아 여는 한 단계를 줄임</td></tr>

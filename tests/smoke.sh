@@ -478,6 +478,43 @@ out="$(cd "$G" && printf '\e[2m[t]\e[0m \e[1;35m=== #1 ===\e[0m\n\e[2J keep \e[m
 grep -q 'exec 2> >(tee >(strip_ansi >> "$LOG_FILE") >&2)' "$KIT/files/scripts/ticket-loop.sh" || fail "색을 켤 때 로그 파일 쪽에 strip_ansi 가 없음"
 echo "ok  터미널 로그 색"
 
+# 병합 뒤 검증 로그 경로: LOG_FILE 이 상대 경로여도 post-merge-N.log 는 저장소 루트 쪽 .ticket-loop/ 에 생기고, 실패 꼬리가 비지 않는다.
+# 2026-10-15 rental-portal #101 실측 — 리다이렉트가 cd "$wt" 뒤 서브셸에서 열려 로그가 검증 워크트리 안에 생기고 tail 은 "No such file" 이었다.
+# 실제 git 저장소(origin 역할 bare + 메인 체크아웃)와 검증 워크트리를 만들어 run_post_merge 를 그대로 부른다(GitHub·백엔드 없이)
+P="$(cd "$T" && pwd -P)/postmerge"; mkdir -p "$P"   # git rev-parse 가 돌려주는 실제 경로(macOS 의 /private/var)와 맞춘다
+git -C "$P" init -q --bare origin.git
+git clone -q "$P/origin.git" "$P/repo" 2>/dev/null; git -C "$P/repo" -c user.name=t -c user.email=t@t commit -q --allow-empty -m init; git -C "$P/repo" push -q origin HEAD:main 2>/dev/null
+sed -n '/^# ---------- 병합 뒤 검증 ----------/,/^# ---------- 티켓 기록 · 스펙 리포트 ----------/p' "$KIT/files/scripts/ticket-loop.sh" > "$P/fn.sh"
+grep -q '^run_post_merge() {' "$P/fn.sh" || fail "run_post_merge 를 찾지 못함"
+sed -n '/^abs_path() /p' "$KIT/files/scripts/ticket-loop.sh" >> "$P/fn.sh"
+grep -q '^abs_path() ' "$P/fn.sh" || fail "abs_path 를 찾지 못함"
+postmerge_case() {  # $1 POST_MERGE_CMD, $2 LOG_FILE(상대), $3 기대(pass|fail) → 출력(stderr 포함)
+  (cd "$P/repo" && POST_MERGE_CMD="$1" LOG_FILE="$2" POST_MERGE_WORKTREE="$P/wt" EXPECT="$3" FN="$P/fn.sh" bash -c '
+    set -euo pipefail
+    ROOT="$(git rev-parse --show-toplevel)"; MAIN_WT="$ROOT"; OWNER_REPO=o/r; BASE_BRANCH=main; POST_MERGE_COPY=""; POST_MERGE_PORT=""; PORT_WAIT_SEC=0
+    log() { shift; echo "$*"; }; dim_lines() { local l; while IFS= read -r l; do echo "  $l"; done; }; fmt_epoch() { echo "$1"; }
+    source "$FN"
+    LOG_FILE="$(abs_path "$LOG_FILE")"
+    rc=0; run_post_merge 7 || rc=$?
+    [[ "$EXPECT" == pass && $rc -eq 0 || "$EXPECT" == fail && $rc -eq 1 ]] || { echo "rc=$rc"; exit 9; }
+    echo "POST_MERGE_LOG=$POST_MERGE_LOG"' 2>&1)
+}
+out="$(postmerge_case 'echo hello-from-post-merge; exit 1' '.ticket-loop/loop-0101.log' fail)" || fail "run_post_merge(실패) 가 1 로 끝나지 않음: $out"
+[[ -f "$P/repo/.ticket-loop/post-merge-7.log" ]] || fail "post-merge 로그가 저장소 루트 쪽 .ticket-loop/ 에 없다 (ls: $(ls -R "$P/wt/.ticket-loop" 2>/dev/null))"
+[[ ! -e "$P/wt/.ticket-loop" ]] || fail "post-merge 로그가 검증 워크트리 안에 생겼다(0.8.4 이하의 버그)"
+grep -q '^  hello-from-post-merge$' <<<"$out" || fail "실패 꼬리가 비었다: $out"
+! grep -q 'No such file' <<<"$out" || fail "꼬리 tail 이 파일을 못 찾았다: $out"
+grep -q "병합 뒤 검증 시작 ($P/wt, 로그 $P/repo/.ticket-loop/post-merge-7.log)" <<<"$out" || fail "시작 줄의 로그 경로가 실제 위치(절대 경로)가 아니다: $out"
+grep -q "^POST_MERGE_LOG=$P/repo/.ticket-loop/post-merge-7.log$" <<<"$out" || fail "POST_MERGE_LOG(die 가 찍는 경로)가 절대 경로가 아니다: $out"
+out="$(postmerge_case 'exit 0' 'sub/dir/loop.log' pass)" || fail "run_post_merge(통과) 실패: $out"
+[[ -f "$P/repo/sub/dir/post-merge-7.log" ]] || fail "LOG_FILE 을 다른 상대 디렉터리로 줘도 저장소 루트 기준이어야 한다"
+grep -q '병합 뒤 검증 통과 [0-9]*초' <<<"$out" || fail "통과 줄이 없음: $out"
+grep -q '로그(${POST_MERGE_LOG})' "$KIT/files/scripts/ticket-loop.sh" || fail "병합 뒤 검증 실패 die 줄에 로그 경로가 없다"
+grep -q '^LOG_FILE="$(abs_path "$LOG_FILE")"$' "$KIT/files/scripts/ticket-loop.sh" && grep -q '^RECORDS_FILE="$(abs_path "$RECORDS_FILE")"$' "$KIT/files/scripts/ticket-loop.sh" && grep -q '^REPORT_DIR="$(abs_path "$REPORT_DIR")"$' "$KIT/files/scripts/ticket-loop.sh" \
+  || fail "LOG_FILE·RECORDS_FILE·REPORT_DIR 를 시작 때 절대 경로로 굳히지 않는다"
+[[ "$(cd "$P/repo" && ROOT="$P/repo" FN="$P/fn.sh" bash -c 'source "$FN"; abs_path /dev/null; echo; abs_path /abs/x; echo; abs_path rel/y')" == $'/dev/null\n/abs/x\n'"$P/repo/rel/y" ]] || fail "abs_path 가 /dev/null·절대 경로를 그대로 두고 상대 경로만 ROOT 에 붙이지 않는다"
+echo "ok  병합 뒤 검증 로그 경로(저장소 루트 기준·실패 꼬리)"
+
 # 템플릿 자리표: 무거운 테스트는 스위트와 파일 하나 실행 명령 두 자리표로, 설정 스킬의 결정 표가 둘 다 묻는다
 for f in .ticket-loop/worker-rules.md .agents/skills/implement/SKILL.md .agents/skills/pr/SKILL.md; do
   grep -q '__HEAVY_TEST_FILE__' "$KIT/templates/$f" || fail "templates/$f 에 __HEAVY_TEST_FILE__ 없음"

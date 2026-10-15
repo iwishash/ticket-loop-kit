@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.8.5 — 2026-10-15
+
+병합 뒤 검증이 실패했을 때 루프가 그 로그를 못 찾던 버그를 고쳤다. rsrehab/rental-portal(키트 0.8.3, 2026-10-15) #101에서 통합 테스트가 실패하자 로그에는 "병합 뒤 검증 실패 — 꼬리 ---" 다음 줄로 `tail: .ticket-loop/post-merge-101.log: No such file or directory`가 찍혔고, ERROR 줄이 가리키는 저장소 루트의 `.ticket-loop/`에는 파일이 없었다. 실제 로그는 검증 워크트리 안 `~/.cache/ticket-loop/rsrehab-rental-portal/post-merge/.ticket-loop/post-merge-101.log`에 있었고, 지난 실행의 `post-merge-98.log`·`post-merge-99.log`도 전부 거기 쌓여 있었다. 원인은 `LOG_FILE` 기본값이 상대 경로(`.ticket-loop/loop-MMDD.log`)인 채로 `logfile="$(dirname "$LOG_FILE")/post-merge-N.log"`를 만들고, 그 파일을 `(cd "$wt" && … >"$logfile")`처럼 검증 워크트리로 `cd`한 서브셸에서 열어 워크트리 기준으로 생겼기 때문이다. 꼬리를 읽는 `tail`은 루프 cwd(저장소 루트)에서 돌아 못 찾았다. `LOG_FILE` 자체는 루프 cwd가 늘 저장소 루트라 지금까지 드러나지 않았다.
+
+- `ticket-loop.sh`: `LOG_FILE`·`RECORDS_FILE`·`REPORT_DIR`를 시작 때 한 번 저장소 루트 기준 절대 경로로 굳힌다(`abs_path`. 환경변수나 `loop.env`로 상대 경로를 줘도 같다. `/dev/null`은 그대로). 0.8.4의 `exec 2> >(tee >(strip_ansi >> "$LOG_FILE") >&2)`도 절대 경로를 받는다. `ROOT`는 `loop.env`를 읽기 전에 정하고 도구 검사 뒤 git으로 다시 확정한다. `run_post_merge`는 로그 디렉터리를 `mkdir -p`하고 경로를 `POST_MERGE_LOG`에 둬서 "병합 뒤 검증 시작" 줄과 `die`의 ERROR 줄에 실제 파일 위치(절대 경로)가 찍히고, 실패 꼬리 `tail`도 그 경로를 읽는다. `record_ticket`·`write_spec_report`의 `$ROOT/` 덧붙이기는 필요 없어져 뺐다. 같은 패턴 전수 확인 — `cd`한 서브셸은 `CI_SKIP_CMD`(저장소 루트)·`WORKTREE_SETUP_CMD`(사용자 명령, 루프 파일을 안 씀)·병합 뒤 검증 셋이고, 프롬프트 파일은 `mktemp` 절대 경로, tmux 훅 상태 파일은 `~/.cache` 아래라 이 셋 밖에는 없었다. `WORKER_RULES_FILE`은 워커 프롬프트에 저장소 상대 경로로 들어가는 것이 맞아 그대로다
+- `tests/smoke.sh`: bare 저장소 + 메인 체크아웃 + 검증 워크트리를 실제 git으로 만들어 `run_post_merge`를 상대 `LOG_FILE`로 돌린다 — `post-merge-N.log`가 저장소 루트 쪽 `.ticket-loop/`(다른 상대 디렉터리를 줘도 그쪽)에 생기고 워크트리 안에는 안 생기며, `POST_MERGE_CMD='…; exit 1'`일 때 꼬리에 명령 출력이 있고 "No such file"이 없고, 시작 줄·`POST_MERGE_LOG`가 절대 경로인 것. `abs_path`가 `/dev/null`·절대 경로를 그대로 두는 것. 0.8.4 스크립트로 같은 자리를 돌리면 "No such file"이 난다
+- 가이드북: 6장 변수 표 `LOG_FILE` 행(상대 경로는 저장소 루트 기준, 검증 로그는 같은 디렉터리), 7장 6단계와 예시 로그, R10의 로그 위치, 부록 D 재생성, 부록 E 한 행. `setup-ticket-loop` 6항: 운영 문서에 검증 로그 위치 한 줄. README 버전 고정 `#v0.8.5`. PDF 재빌드
+- 이미 설치된 저장소: `npx github:iwishash/ticket-loop-kit#v0.8.5 init`(또는 `install.sh`)으로 스크립트와 스킬이 바뀐다. 검증 워크트리 안 `.ticket-loop/post-merge-*.log`(`~/.cache/ticket-loop/<owner-repo>/post-merge/.ticket-loop/`)는 지난 실행의 흔적이라 지워도 된다. 운영 문서 `docs/agents/ticket-loop.md`의 R10 항목에 로그 위치를 적어 뒀다면 "저장소 루트의 `.ticket-loop/post-merge-N.log`(ERROR 줄에 절대 경로가 찍힌다)"로 맞춘다
+
 ## 0.8.4 — 2026-10-15
 
 터미널에서 루프를 지켜볼 때 로그가 한 색이라 지금 어느 단계인지(워크트리를 만드는 중인지, CI를 기다리는지, 수리를 돌리는지) 눈으로 찾아야 했다. 단계별로 색을 입혔다.
