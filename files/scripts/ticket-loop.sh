@@ -237,6 +237,7 @@ STARTUP_GRACE_SEC=120     # 기동 직후에는 프롬프트 처리 전에도 id
 AGENT_START_WAIT_SEC=90   # 에이전트 배너가 보이기까지 기다리는 상한(1회), 넘기면 한 번 다시 띄운다
 CI_APPEAR_TIMEOUT_SEC=900
 PORT_WAIT_SEC=600         # POST_MERGE_PORT가 비기를 기다리는 상한. 기다리는 동안은 30초마다 다시 본다(멈춤이 아니다)
+REOPEN_WATCH_SEC=2        # 수습 수정 PR을 병합한 뒤 티켓 이슈가 닫히는지 다시 보는 간격(5번 — triage_keep_issue_open)
 
 DRY_RUN=0
 NO_MERGE=0
@@ -1308,6 +1309,23 @@ triage_merge_fix_pr() {
   git -C "$ROOT" fetch -q origin "$BASE_BRANCH" || true
 }
 
+# 수정 PR의 병합 커밋이 처리 중인 티켓 이슈를 닫았으면 다시 연다 — 병합 뒤 검증 실패가 아니면 그 티켓은 아직 진행 중이다. GitHub는
+# 기본 브랜치에 들어온 커밋 메시지의 닫기 키워드(병합 커밋에는 PR 제목이 들어간다 — `fix: #17 …`)로 이슈를 닫는다. 실측(0.9.0, 더미
+# 저장소): 준비 실패의 수정 PR #18 병합 커밋이 #17을 닫았고, 워커가 알아채 다시 열었다. 스킬이 그런 제목을 막지만 커밋 메시지까지
+# 다 막는다는 보장은 없다. 닫힘은 병합 몇 초 뒤에 일어나므로 REOPEN_WATCH_SEC 간격으로 다섯 번 본다
+triage_keep_issue_open() {
+  local n="$1" pr="$2" i state=""
+  for i in 1 2 3 4 5; do
+    state="$(gh issue view "$n" --json state -q .state </dev/null 2>/dev/null || true)"
+    [[ "$state" != CLOSED && $i -lt 5 ]] || break
+    sleep "$REOPEN_WATCH_SEC"
+  done
+  [[ "$state" == CLOSED ]] || return 0
+  log warn "#${n}: merging fix PR #${pr} closed the issue — reopening it (the ticket is still in progress)"
+  gh issue reopen "$n" --comment "ticket-loop 무인 수습: 수정 PR #${pr}의 병합 커밋이 이 이슈를 닫아 다시 연다. 티켓은 아직 진행 중이다 — 루프가 이어 간다." \
+    </dev/null >/dev/null 2>&1 || log warn "#${n}: failed to reopen the issue — reopen it by hand (gh issue reopen ${n})"
+}
+
 # 메인 체크아웃이 기본 브랜치에 있으면 fast-forward한다 — WORKTREE_SETUP_CMD가 메인 체크아웃의 스크립트를 부르는 저장소에서도 수정 PR이
 # 반영되게(예: "$LOOP_ROOT_PATH/scripts/worktree-setup.sh"). git은 로컬 변경을 덮는 merge를 거부하므로 사람의 미커밋 변경은 그대로다
 sync_main_checkout() {
@@ -1387,6 +1405,7 @@ triage() {
   if [[ "$verdict" == resume && -n "$fix_pr" ]]; then
     if triage_merge_fix_pr "$fix_pr"; then
       TRIAGE_FIX_PR="$fix_pr"
+      [[ "$kind" == post_merge_failed ]] || triage_keep_issue_open "$n" "$fix_pr"
       [[ "$kind" != setup_failed ]] || sync_main_checkout
     else
       verdict=halt

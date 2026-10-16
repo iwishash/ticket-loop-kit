@@ -69,7 +69,7 @@ disable-model-invocation: true
    - 원인 PR과 무관한 실패(다른 영역, 시간 초과)면 → 그 테스트 파일만 두세 번 다시 돌린다. 매번 통과하면 `flake`.
    - 테스트가 돌기 전 단계에서 실패했으면 → 저장소 스크립트 문제면 `project`, 아니면 `environment`.
 3. 고친 뒤 실패했던 테스트 파일만 이 저장소의 방식(`worker-rules.md`의 무거운 테스트 파일 명령)으로 돌려 통과를 확인한다. 전체 스위트는 루프가 병합 뒤 다시 돌린다. 검증 워크트리(`post_merge_worktree`)는 루프의 것이라 쓰지 않는다 — 이 세션의 워크트리에서 돌린다.
-4. 수정 PR: 이 브랜치에 커밋하고 push한 뒤 `gh pr create --base <기본 브랜치>`. 제목은 `fix: #<issue> 병합 뒤 검증 — <요약>`. 본문에 멈춘 이유, 원인(원인 PR의 어떤 변경 때문인지), 고친 것, 돌린 검증과 결과를 적고 `Refs #<issue>`를 단다(그 이슈는 이미 닫혔다 — `Closes`를 쓰지 않는다). 라벨은 루프가 붙인다.
+4. 수정 PR: 이 브랜치에 커밋하고 push한 뒤 `gh pr create --base <기본 브랜치>`. 제목은 `fix: <요약> — #<issue> 병합 뒤 검증`(닫기 키워드 바로 뒤에 `#<issue>`를 두지 않는다 — 5절). 본문에 멈춘 이유, 원인(원인 PR의 어떤 변경 때문인지), 고친 것, 돌린 검증과 결과를 적고 `Refs #<issue>`를 단다(그 이슈는 이미 닫혔다 — `Closes`를 쓰지 않는다). 라벨은 루프가 붙인다.
 5. 판정: `resume`과 `fix_pr`. `flake`면 수정 없이 `resume`(`fix_pr`은 null) — 루프가 검증을 다시 돌린다.
 
 ### `ci_failed` — 수리를 다 쓴 CI 실패·충돌
@@ -92,7 +92,7 @@ disable-model-invocation: true
 ### `setup_failed` — 워크트리 준비(`WORKTREE_SETUP_CMD`) 실패
 
 1. 루프 로그에서 `worktree setup —` 줄 뒤의 출력을 읽는다. 이 세션의 워크트리에서 `LOOP_ROOT_PATH=<main_checkout> LOOP_WORKTREE_PATH=<이 워크트리> bash -c "<commands.worktree_setup>"`으로 재현한다(이 세션의 워크트리도 같은 준비가 실패했을 수 있다).
-2. 저장소의 준비 스크립트·lockfile 문제면 고쳐 수정 PR을 내고 `resume`과 `fix_pr`. 루프는 병합한 뒤 워커 워크트리를 기본 브랜치로 당기고, 메인 체크아웃이 기본 브랜치에 있으면 fast-forward한 뒤 준비를 다시 돌린다.
+2. 저장소의 준비 스크립트·lockfile 문제면 고쳐 수정 PR을 내고 `resume`과 `fix_pr`. 제목은 `fix: <요약> — #<issue> 워크트리 준비`, 본문에 멈춘 이유·원인·고친 것·재현과 검증을 적고 `Refs #<issue>`를 단다. 이 티켓은 아직 구현 전이다 — 제목·커밋 메시지·본문 어디에도 닫기 키워드 바로 뒤에 `#<issue>`를 두지 않는다(5절). 루프는 병합한 뒤 워커 워크트리를 기본 브랜치로 당기고, 메인 체크아웃이 기본 브랜치에 있으면 fast-forward한 뒤 준비를 다시 돌린다.
 3. 일시 장애(레지스트리·네트워크)였고 지금 재현이 통과하면 `environment`, 코드 변경 없이 `resume`.
 4. 메인 체크아웃의 커밋되지 않는 파일(env 파일 등)이 없거나 틀려서면 고치지 않는다. `halt`하고 무엇을 해야 하는지 적는다.
 
@@ -114,6 +114,7 @@ disable-model-invocation: true
 - 키트 관리 파일(`kit.json`의 `managed`, 예 `scripts/ticket-loop.sh`)을 고치지 않는다. 다음 설치 때 덮이고, 무인 모드에서는 루프가 지금 그 파일을 실행하고 있다. 루프 버그는 6절로.
 - 근거 없이 테스트를 약하게 만들지 않는다. 테스트를 지우거나 건너뛰거나(`skip`, `only`), 단정을 느슨하게 하거나, 시간 제한만 늘려 통과시키지 않는다. 기대값을 바꾸면 PR 본문에 원인 PR의 어떤 변경이 의도한 동작인지 인용한다.
 - PR을 병합하지 않는다. 기본 브랜치에 직접 push하지 않는다. 강제 push하지 않는다.
+- 수정 PR의 제목·본문과 커밋 메시지에서 닫기 키워드(close·closes·closed·fix·fixes·fixed·resolve·resolves·resolved) 바로 뒤에 `#<issue>`를 쓰지 않는다 — `fix: #17 …`처럼 콜론이 끼어도 같다. GitHub는 기본 브랜치에 들어온 커밋 메시지(병합 커밋에는 PR 제목이 들어간다)로 이슈를 닫는다. 준비 실패에서 그 티켓은 아직 구현 전이다(실측: 수정 PR 제목 `fix: #17 워크트리 준비 — …`의 병합 커밋이 #17을 닫았다). 이슈는 `Refs #<issue>`로 가리킨다. 티켓 PR 브랜치에 push하는 CI 실패는 그 PR이 어차피 이슈를 닫으므로 상관없다.
 - 운영 환경(운영 DB, 배포)에 연결하지 않는다. 비밀 값을 만들거나 바꾸지 않는다.
 - 이 머신의 프로세스를 끄거나 설정을 바꾸지 않는다(포트를 쥔 서버 같은 것). 필요하면 `halt`하고 적는다.
 - 키트 저장소(공개일 수 있다)에 이슈를 직접 만들지 않는다. 이 저장소의 로그·코드가 밖으로 나가지 않게 보고서는 로컬에 쓴다(6절).
@@ -141,7 +142,7 @@ disable-model-invocation: true
 
 루프가 판정을 받아 하는 일:
 
-- `resume` + `fix_pr`: 수정 PR에 `loop-triage` 라벨을 붙이고 CI 뒤 병합한다. 그다음 `post_merge_failed`면 병합된 기본 브랜치로 검증을 다시 돌리고, `setup_failed`면 워크트리를 당겨 준비를 다시 돌린다. 통과하면 이어 간다.
+- `resume` + `fix_pr`: 수정 PR에 `loop-triage` 라벨을 붙이고 CI 뒤 병합한다. 그다음 `post_merge_failed`면 병합된 기본 브랜치로 검증을 다시 돌리고, `setup_failed`면 워크트리를 당겨 준비를 다시 돌린다. 통과하면 이어 간다. `post_merge_failed`가 아닌데 그 병합이 티켓 이슈를 닫았으면 루프가 다시 연다(5절의 닫기 키워드를 피해도 만일을 위해).
 - `resume` + `pushed_to_pr`: 티켓 PR의 CI 확인부터 이어 간다.
 - `resume`만(코드 변경 없음): 멈춘 단계를 그대로 다시 한다.
 - `halt`: `summary`를 멈춤 사유에 붙여 멈추고 Slack으로 사람을 부른다. 이 세션의 워크트리는 남긴다.

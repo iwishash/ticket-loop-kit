@@ -795,6 +795,7 @@ printf "%s\x1e" "$@" | jq -Rsc '{cmd: "gh", args: (split("\u001e")[:-1])}' >> "$
 case "$1 $2" in
   "pr view") [[ -n "${PR_VIEW_JSON:-}" ]] && printf '%s\n' "$PR_VIEW_JSON" ;;
   "pr merge") exit "${MERGE_RC:-0}" ;;
+  "issue view") echo "${ISSUE_STATE:-OPEN}" ;;
 esac
 EOF
 chmod +x "$TG/bin/gh"
@@ -804,7 +805,7 @@ ROOT="$PWD"; MAIN_WT="$PWD"; OWNER_REPO=o/r; BASE_BRANCH="${BASE:-main}"; BACKEN
 SLACK_WEBHOOK_URL=https://hooks.example/x; SLACK_MENTION="<@U1>"; STOPPED_LABEL=loop-stopped
 LOG_FILE="$PWD/.ticket-loop/loop.log"; mkdir -p .ticket-loop; : > "$LOG_FILE"
 LOOP_TRIAGE="${LOOP_TRIAGE:-1}"; TRIAGE_MAX="${TRIAGE_MAX:-1}"; TRIAGE_TIMEOUT_SEC="${TRIAGE_TIMEOUT_SEC:-60}"; TRIAGE_LABEL=loop-triage; MERGE_METHOD=merge
-PROGRESS_SEC=0; IDLE_WAIT_MS=1; STARTUP_GRACE_SEC=0; IDLE_RECHECK_SEC=0; IDLE_STRIKES=3
+PROGRESS_SEC=0; IDLE_WAIT_MS=1; STARTUP_GRACE_SEC=0; IDLE_RECHECK_SEC=0; IDLE_STRIKES=3; REOPEN_WATCH_SEC=0
 log() { case "$1" in title|step|ok|warn|err) shift ;; esac; printf '[2026-10-16 15:43:17] %s\n' "$*" >> "$LOG_FILE"; }
 dim_lines() { sed 's/^/  /' >> "$LOG_FILE"; }
 record_ticket() { :; }
@@ -901,6 +902,14 @@ tcase KIND=ci_failed PR=34 VERDICT='{"verdict":"resume","category":"flake","summ
 [[ "$(o .rc)" == 0 && "$(o .result)" == "resumed (flake, pushed to PR #34): "* && "$(tcalls)" == "issue comment" ]] || fail "fix_pr 가 티켓 PR 이면 push 로: $(o .result) / $(tcalls)"
 tcase KIND=post_merge_failed VERDICT='{"verdict":"resume","category":"flake","summary":"세 번 다시 돌려 모두 통과"}'
 [[ "$(o .rc)" == 0 && "$(o .result)" == "resumed (flake, no code change): 세 번 다시 돌려 모두 통과" && "$(o .fix)" == "" ]] || fail "코드 변경 없는 resume: $(o .result)"
+# 8b) 준비 실패의 수정 PR 병합이 티켓 이슈를 닫으면(병합 커밋의 닫기 키워드) 다시 연다. 열려 있으면 다섯 번 보고 그대로 둔다.
+#     병합 뒤 검증 실패는 이슈가 원래 닫혀 있으므로 보지 않는다(1번 케이스의 호출 순서에 issue view 가 없다)
+tcase KIND=setup_failed REASON="#12: WORKTREE_SETUP_CMD failed" VERDICT="$V_FIX" PR_VIEW_JSON="$PRV" ISSUE_STATE=CLOSED
+[[ "$(o .rc)" == 0 && "$(tcalls)" == "pr view,label create,pr edit,pr merge,issue view,issue reopen,issue comment" ]] || fail "수정 PR 이 닫은 이슈를 다시 열지 않음: $(o .rc) / $(tcalls)"
+jq -e -s '[.[] | select(.cmd == "gh" and .args[1] == "reopen")][0].args | .[2] == "12" and .[3] == "--comment" and (.[4] | test("수정 PR #131"))' "$TG/calls.jsonl" >/dev/null \
+  && grep -q 'merging fix PR #131 closed the issue — reopening it' "$TG/repo/.ticket-loop/loop.log" || fail "다시 열기 인자·로그: $(cat "$TG/repo/.ticket-loop/loop.log")"
+tcase KIND=setup_failed REASON="#12: WORKTREE_SETUP_CMD failed" VERDICT="$V_FIX" PR_VIEW_JSON="$PRV"
+[[ "$(o .rc)" == 0 && "$(tcalls)" == "pr view,label create,pr edit,pr merge,issue view,issue view,issue view,issue view,issue view,issue comment" ]] || fail "열린 이슈를 다시 열거나 덜 지켜봄: $(tcalls)"
 # 9) 루프 버그: 키트 버그 보고서 경로를 사유에 붙인다
 tcase KIND=post_merge_failed VERDICT='{"verdict":"halt","category":"loop-bug","summary":"로그 경로 계산이 틀렸다","kit_bug_report":"/r/.ticket-loop/stops/1.kit-bug.md"}'
 [[ "$(o .note)" == " — triage (loop-bug): 로그 경로 계산이 틀렸다 · kit bug report /r/.ticket-loop/stops/1.kit-bug.md" ]] || fail "키트 버그 보고서: $(o .note)"
