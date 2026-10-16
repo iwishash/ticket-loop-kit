@@ -49,9 +49,21 @@ disable-model-invocation: true
 | `orca.yaml` setup | 의존성 설치 명령, 복사할 env 파일과 안전 조건 |
 | `POST_MERGE_CMD` 등 | 병합 뒤 검증 명령·복사 파일, 또는 끔 |
 | `POST_MERGE_PORT` | 그 명령이 띄우는 고정 포트(예 `next dev`의 3000). 루프가 병합마다 비기를 기다리고, 시작할 때 차 있으면 알린다. 없으면 비움 |
+| `POST_MERGE_RETRY_CMD` | `POST_MERGE_CMD`가 실패했을 때 딱 한 번 돌릴 재실행 명령. 그 스위트에 병합과 무관한 플레이크(시간 초과 등)가 있을 때만 — 사용자에게 묻는다. 같은 검증 워크트리에서 `POST_MERGE_FAILED_LOG`(첫 실행 로그 절대 경로)를 받아 돌고, 통과하면 루프는 계속 가며 이슈에 플레이크 의심 코멘트를 남긴다. 실패한 테스트만 다시 돌리는 저장소 스크립트(아래)를 만들어 커밋하고 그 스크립트를 건다. 없으면 비움 |
 | `REPORT_DIR` | 스펙 리포트 HTML 디렉터리. 기본 `docs/loop-reports`를 바꿀 이유가 있을 때만 |
 | `REPORT_OPEN` | 리포트를 쓴 뒤 기본 브라우저로 열기. 기본 켬(1). 끌 이유가 있을 때만 `0` — SSH 세션·화면 없는 Linux에서는 값과 무관하게 열지 않는다 |
 | `CI_SKIP_REGEX` / `CI_SKIP_CMD` | 워크플로에 경로 필터(`paths`/`paths-ignore`)가 있을 때만. 루프가 그 필터를 따라 하도록 알려 주는 값이다 — 단순 제외 목록이면 정규식, 순서 규칙이 있으면 파일 목록을 stdin으로 받아 `run`/`skip`을 찍는 저장소 스크립트. 필터가 없으면 둘 다 비움 |
+
+`POST_MERGE_RETRY_CMD`를 쓰면 무엇을 다시 돌릴지는 저장소 스크립트가 정한다(키트는 테스트 도구에 묶이지 않는다). 검증 워크트리는 병합된 기본 브랜치라 스크립트가 커밋돼 있어야 돈다. vitest 예(`scripts/post-merge-retry.sh`, `POST_MERGE_RETRY_CMD="${POST_MERGE_RETRY_CMD:-bash scripts/post-merge-retry.sh}"`) — 다른 도구면 그 도구의 실패 줄 모양에 맞게 고친다:
+
+```bash
+files=$(perl -pe 's/\e\[[0-9;]*m//g' "$POST_MERGE_FAILED_LOG" \
+  | grep -oE 'FAIL +[^ ]+\.test\.ts' | awk '{print $2}' | sort -u)
+[ -n "$files" ] || { echo "no failed test files found — not retrying"; exit 1; }
+pnpm exec vitest run --config vitest.integration.config.ts $files
+```
+
+실패한 파일을 못 찾으면(설치·환경 점검 단계에서 실패) 다시 돌리지 않고 실패로 끝내야 한다 — 진짜 깨진 기본 브랜치가 재실행에 묻히지 않게. 로그에 ANSI 색 코드가 섞여 있고 macOS 기본 `sed`는 `\x1b`를 못 알아들어 `perl`로 지운다.
 
 ## 4. 쓰기
 
@@ -60,9 +72,9 @@ disable-model-invocation: true
 1. **`__VERIFY__` 명령**: 없으면 패키지 스크립트·Makefile 타깃으로 만든다(lint → 전체 테스트 → build 순서, 앞이 실패하면 멈춤).
 2. **템플릿 채우기**: `.agents/skills/implement/SKILL.md`, `.agents/skills/pr/SKILL.md`, `.ticket-loop/worker-rules.md`의 `__PLACEHOLDER__`를 모두 바꾼다. "없음"인 항목은 그 문장·줄을 지운다. `.codex/rules/ticket-loop.rules`(Codex 워커의 병합·강제 push 금지 — `.claude/settings.json`의 `deny`와 같은 내용)는 설치기가 기본 브랜치를 채워 놓는다 — 자리표가 남아 있지 않은지만 본다.
 3. **`orca.yaml`**(`BACKEND=orca`일 때만): `scripts.setup`에 설치 명령, env 파일 복사(`$ORCA_ROOT_PATH` → `$ORCA_WORKTREE_PATH`, 운영 값이 섞이면 복사하지 않는 조건 포함), `setupAgentStartupPolicy: wait-for-setup`. 파일 맨 위 주석에 Orca 앱의 Command Source를 "orca.yaml only"로 바꿔야 쓰인다고 적는다.
-4. **`.ticket-loop/loop.env`**: 루프의 저장소별 기본값을 `VAR="${VAR:-값}"` 꼴로 쓴다(`BACKEND`, `AGENT`, `CI_SKIP_REGEX`, `POST_MERGE_CMD`, `POST_MERGE_COPY`, `POST_MERGE_PORT`, cmux·tmux면 `WORKTREE_SETUP_CMD`, 필요하면 `MERGE_METHOD`). 이미 있는 줄(npx 설치기가 쓴 `BACKEND`·`AGENT`)은 그대로 둔다.
+4. **`.ticket-loop/loop.env`**: 루프의 저장소별 기본값을 `VAR="${VAR:-값}"` 꼴로 쓴다(`BACKEND`, `AGENT`, `CI_SKIP_REGEX`, `POST_MERGE_CMD`, `POST_MERGE_RETRY_CMD`, `POST_MERGE_COPY`, `POST_MERGE_PORT`, cmux·tmux면 `WORKTREE_SETUP_CMD`, 필요하면 `MERGE_METHOD`). 이미 있는 줄(npx 설치기가 쓴 `BACKEND`·`AGENT`)은 그대로 둔다.
 5. **CI**: PR에서 도는 워크플로가 없으면 `__VERIFY__`를 도는 최소 워크플로를 만든다(비밀 값 없이, 경로 필터 없이 — 필터는 저장소가 원할 때 두는 것이다). 이미 경로 필터가 있으면 `CI_SKIP_REGEX` 또는 `CI_SKIP_CMD`를 같은 판정이 나오게 맞추고, 문서만 바꾸는 PR과 코드 PR을 하나씩 떠올려 둘 다 맞는지 확인한다.
-6. **`docs/agents/ticket-loop.md`**: 이 저장소의 운영 문서. 흐름(`/grill-with-docs` → `/to-spec` → `/to-tickets` → `bash scripts/ticket-loop.sh --parent <스펙>` → 스펙 리포트 `docs/loop-reports/spec-<N>.html` 검수 → `/retro`; Codex에서는 `/`를 `$`로), 실행 명령, 위 결정 표, 사람이 할 일(Orca 앱 설정, 병합, 리포트 PR 커밋, Codex면 저장소 `.codex/` 신뢰), 복구는 가이드북 10장과 `bash scripts/ticket-state.sh N`을 가리킨다. `POST_MERGE_PORT`가 있으면 "실행 전 `lsof -nP -iTCP:<포트> -sTCP:LISTEN`으로 비어 있는지 본다"와 "로그가 '포트 … 사용 중'에서 조용하면 멈춤이 아니라 대기다(가이드북 R10)"를 적는다. `POST_MERGE_CMD`가 있으면 "병합 뒤 검증 로그는 `LOG_FILE`과 같은 디렉터리의 `post-merge-N.log`(기본 저장소 루트의 `.ticket-loop/post-merge-N.log`)이고 루프의 '병합 뒤 검증 시작'·ERROR 줄에 절대 경로가 찍힌다. 검증 워크트리 안이 아니다"도 적는다(R10). 키트 버전은 `.ticket-loop/kit.json`을 가리킨다.
+6. **`docs/agents/ticket-loop.md`**: 이 저장소의 운영 문서. 흐름(`/grill-with-docs` → `/to-spec` → `/to-tickets` → `bash scripts/ticket-loop.sh --parent <스펙>` → 스펙 리포트 `docs/loop-reports/spec-<N>.html` 검수 → `/retro`; Codex에서는 `/`를 `$`로), 실행 명령, 위 결정 표, 사람이 할 일(Orca 앱 설정, 병합, 리포트 PR 커밋, Codex면 저장소 `.codex/` 신뢰), 복구는 가이드북 10장과 `bash scripts/ticket-state.sh N`을 가리킨다. `POST_MERGE_PORT`가 있으면 "실행 전 `lsof -nP -iTCP:<포트> -sTCP:LISTEN`으로 비어 있는지 본다"와 "로그가 '포트 … 사용 중'에서 조용하면 멈춤이 아니라 대기다(가이드북 R10)"를 적는다. `POST_MERGE_CMD`가 있으면 "병합 뒤 검증 로그는 `LOG_FILE`과 같은 디렉터리의 `post-merge-N.log`(기본 저장소 루트의 `.ticket-loop/post-merge-N.log`)이고 루프의 '병합 뒤 검증 시작'·ERROR 줄에 절대 경로가 찍힌다. 검증 워크트리 안이 아니다"도 적는다(R10). `POST_MERGE_RETRY_CMD`가 있으면 "실패하면 한 번 재실행하고 출력은 같은 디렉터리의 `post-merge-N-retry.log`다. 재실행에서 통과하면 이슈에 '병합 뒤 검증 재시도 통과 — 플레이크 의심' 코멘트가 달리고 루프는 계속 간다 — 같은 테스트가 되풀이되면 고칠 대상이다. 재실행까지 실패하면 ERROR 줄에 두 로그가 찍힌다"도 적는다. 키트 버전은 `.ticket-loop/kit.json`을 가리킨다.
    `docs/loop-reports/README.md`(키트 템플릿)는 `REPORT_DIR`를 바꿨을 때만 그 경로로 옮긴다.
 7. **`AGENTS.md`**의 `## Agent skills` 블록이 정본이다(Codex는 `AGENTS.md`만 읽고, Claude Code는 `CLAUDE.md`를 읽는다). 없으면 만든다. 블록 안에 `### Issue tracker` 소제목과 "Issues live in GitHub Issues. See `docs/agents/issue-tracker.md`." 한 줄이 있어야 한다 — 벤더링된 스킬은 트래커 설정을 이 블록으로 받는다(없으면 `/setup-ticket-loop`를 실행하라고 사용자에게 되묻는다). 이어서 두 줄을 더한다: 작업 흐름은 `docs/agents/ticket-loop.md`, 티켓 구현 절차는 `.agents/skills/implement/SKILL.md`가 단일 진실. 리뷰는 `ticket-review`. 블록이 이미 있으면 그 안을 고치고 중복 블록을 만들지 않는다. 블록이 `CLAUDE.md`에 있으면(0.6 이하 설치본) `AGENTS.md`로 옮긴다. 그다음 `CLAUDE.md`에 `@AGENTS.md` 한 줄이 있게 한다(없으면 맨 위에 더한다. `CLAUDE.md`가 없으면 그 한 줄로 만든다) — Claude Code가 가져오기 문법으로 `AGENTS.md`를 읽는다.
 

@@ -247,7 +247,7 @@ function writeLoopEnv(root, backend, agent) {
     fs.writeFileSync(file, [
       '# ticket-loop-kit — 이 저장소의 티켓 루프 기본값. ticket-loop.sh가 시작할 때 읽는다.',
       '# VAR="${VAR:-값}" 꼴로 적어 두면 실행할 때 준 환경변수가 이긴다. 나머지 값(CI_SKIP_REGEX, POST_MERGE_CMD,',
-      '# POST_MERGE_PORT …)은 setup-ticket-loop 스킬이 저장소를 읽고 채운다.',
+      '# POST_MERGE_RETRY_CMD, POST_MERGE_PORT …)은 setup-ticket-loop 스킬이 저장소를 읽고 채운다.',
       ...Object.entries(wanted).flatMap(([k, v]) => [ENV_KEYS[k].comment(), envLine(k, v)]),
       ...(backend !== 'orca' ? [
         `# ${backend}는 orca.yaml setup 대신 이 명령으로 새 워크트리를 준비한다(의존성 설치·env 복사). LOOP_ROOT_PATH, LOOP_WORKTREE_PATH 사용 가능`,

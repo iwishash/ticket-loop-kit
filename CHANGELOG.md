@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.8.11 — 2026-10-16
+
+병합 뒤 검증이 그 병합과 무관한 플레이크로 루프를 멈췄다. 2026-10-15 rental-portal 루프(0.8.6)가 #106 병합 뒤 44분짜리 통합 테스트(vitest, 2050건)에서 1건이 `Test timed out in 15000ms`로 실패해 멈췄다. 로그 7회분을 보면 실행마다 아무 테스트나 몇 개가 한 번에 8~13초씩 멈추고, 7회 중 2회(#101, #106)가 이렇게 실패했다. 두 번 모두 실패한 테스트만 다시 돌리면 통과할 성격이었다. 지금까지는 재시도 경로가 없었고, 멈춤 문구도 "수정 PR 뒤 재실행"이라 플레이크에는 맞지 않았다.
+
+- `ticket-loop.sh`: 새 설정 `POST_MERGE_RETRY_CMD`(기본 비움). `POST_MERGE_CMD`가 실패하고 이 값이 있으면 포트 대기를 다시 지나(첫 실행이 띄운 서버가 포트를 늦게 놓을 수 있다) 같은 검증 워크트리에서 그 명령을 딱 한 번 `bg_wait`로 돌린다. 첫 실행 로그의 절대 경로를 `POST_MERGE_FAILED_LOG`로 넘기고, 출력은 같은 디렉터리의 `post-merge-N-retry.log`에 쓴다. 포트 대기는 `wait_post_merge_port`로 빼서 첫 실행과 재실행이 같이 쓴다
+- 재실행이 통과하면 결과는 `passed on retry in Ns (first run failed in Ms)`(요약 줄·기록의 `post_merge`·스펙 리포트에 그대로 나온다 — 기록에 따로 필드를 두지 않고 이 문자열로 가린다), `log warn` 한 줄 뒤 계속 간다. 플레이크가 묻히지 않게 이슈에 한국어 코멘트("**ticket-loop 병합 뒤 검증 재시도 통과** — 플레이크 의심", 소요 시간, PR, 머신, 두 로그 파일 이름)를 달고 데스크톱과 Slack에 멘션 없이 알린다(새 알림 종류 `flaky`, 아이콘 `:warning:`). 로그 본문은 공개 저장소에 올리지 않고, `loop-stopped` 라벨은 붙이지 않는다
+- 재실행도 실패하면 결과는 `failed on retry in Ns (first run failed in Ms)`이고, 멈춤 문구에 두 로그 경로를 적고 "If it looks like a flake, just rerun; otherwise rerun after a fix PR."로 바꿨다. 비워 두면 동작·문구가 전과 같다. 시작 줄에 재실행 설정을 함께 찍는다
+- 키트는 테스트 도구에 묶이지 않는다 — 무엇을 다시 돌릴지는 저장소 스크립트가 정한다. 문서에 vitest 예(첫 실행 로그에서 ANSI 색을 `perl`로 지우고 `FAIL … .test.ts` 파일만 다시 돌림, 못 찾으면 재실행하지 않고 실패)를 넣었다. 실패한 파일을 못 찾을 때(설치·환경 점검 단계 실패) 실패로 끝내야 진짜 깨진 기본 브랜치가 재실행에 묻히지 않는다
+- `tests/smoke.sh`: 실제 git 저장소에서 `run_post_merge`를 그대로 불러 — 재실행 설정 없음+실패는 rc 1·`failed in`·재실행 로그 없음(지금 동작), 실패+재실행 통과는 rc 0·`on retry`·같은 디렉터리의 `post-merge-7-retry.log`·검증 워크트리에서 `$POST_MERGE_FAILED_LOG`(절대 경로)로 첫 실행 출력을 읽음·플레이크 기록 호출, 실패+재실행 실패는 rc 1·기록 없음, 첫 실행 통과면 재실행 안 함, 첫 실행이 포트를 쥔 채 끝나면(`PORT_WAIT_SEC=0`) 재실행 없이 1. 플레이크 기록은 가짜 `gh`·`curl`로 — 코멘트 하나뿐(라벨 없음), 로컬 경로·로그 본문 없음, Slack은 `:warning:`·멘션 없음. 스펙 리포트에 새 결과 문자열이 그대로. 재실행 분기를 뺀 사본과 재실행 전 포트 대기를 뺀 사본에서 새 케이스가 실패하는 것을 확인했다. bash 3.2로도 통과한다
+- 가이드북: 6장 변수 표 한 행, 7장 6단계에 재실행 문단과 vitest 예, R10에 "and again on retry" 대처, 부록 D 재생성, 부록 E 한 행. README 두 벌·`setup-ticket-loop` 스킬(결정 표·`loop.env`·운영 문서 안내·vitest 예)·npx 설치기의 `loop.env` 머리 주석에 새 설정. README 버전 고정 `#v0.8.11`. PDF 재빌드
+- 이미 설치된 저장소: `npx github:iwishash/ticket-loop-kit#v0.8.11 init`(또는 `install.sh`). 설정하지 않으면 동작은 그대로다. 쓰려면 실패한 테스트만 다시 돌리는 스크립트를 커밋하고 `.ticket-loop/loop.env`에 `POST_MERGE_RETRY_CMD="${POST_MERGE_RETRY_CMD:-bash scripts/post-merge-retry.sh}"`
+
 ## 0.8.10 — 2026-10-16
 
 티켓 요약 줄의 "idle false positives"와 기록(`RECORDS_FILE`)의 `idle_false_positives`가 처음부터 늘 0이었다. 오판(PR 대기 중 idle이 잡혔지만 잠깐 뒤 다시 보니 PR이 열려 있던 것 — PR을 연 직후 idle이 PR 조회보다 먼저 잡힌다)은 `wait_for_pr` 안에서 셌는데, 이 함수는 서브셸에서 돈다(0.8.7까지 커맨드 치환, 0.8.8부터 `bg_wait`). 서브셸에서 올린 변수는 부모에 돌아오지 않는다. 더미 저장소의 기록 4건도 모두 0이었다. 스펙 리포트는 이 값을 쓰지 않아 영향이 없다.

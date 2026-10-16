@@ -11,6 +11,7 @@ set -euo pipefail
 #   3. CI를 기다리고, 충돌·CI 실패는 같은 워커에 REPAIR_ROUNDS회까지 고치게 한다
 #   4. PR을 병합한다 → 본문의 `Closes #N`으로 이슈가 닫힌다. 그 티켓이 속한 스펙 이슈의 하위 이슈가 모두 닫혔으면 스펙 이슈도 닫는다
 #   5. (선택) 병합된 기본 브랜치로 POST_MERGE_CMD를 한 번 돌린다 — 워커가 못 돌리는 무거운 검증. 실패하면 멈춘다
+#      (POST_MERGE_RETRY_CMD가 있으면 멈추기 전에 한 번 재실행해 본다 — 통과하면 플레이크 의심으로 기록하고 계속 간다)
 #   6. 워크트리·브랜치를 지우고, 티켓 요약 한 줄을 로그에, 기록 한 줄을 RECORDS_FILE에 남기고, 다음 티켓으로 간다
 #      (자동 선택이면 대상 재계산)
 #   7. `--parent` 실행이 정상 종료하면 하위 이슈가 모두 닫힌 스펙 이슈를 닫고(아직 열려 있으면), 스펙 리포트 HTML(티켓별 결과·경과 시간·
@@ -76,6 +77,10 @@ set -euo pipefail
 #                       (한 줄에 하나) 받아 CI가 돌면 "run", 전부 제외 경로면 "skip"을 출력한다. 저장소 루트에서 실행되고, 있으면
 #                       CI_SKIP_REGEX보다 먼저 본다. 실패하거나 다른 출력이면 체크를 기다리는 쪽으로 간다
 #   POST_MERGE_CMD      병합 뒤 기본 브랜치에서 돌릴 명령, 예 "npm ci && npm run test:e2e" (기본 없음 = 끔)
+#   POST_MERGE_RETRY_CMD POST_MERGE_CMD가 실패했을 때 딱 한 번 돌려 볼 재실행 명령 (기본 없음 = 재실행 없이 멈춤). 같은 검증 워크트리에서
+#                       POST_MERGE_FAILED_LOG(첫 실행 로그의 절대 경로)를 받아 돈다 — 그 로그에서 실패한 테스트만 골라 다시 돌리는 식이다.
+#                       출력은 post-merge-N-retry.log. 통과하면 계속 가고 이슈 코멘트·Slack에 플레이크 의심을 남긴다. 실패한 테스트를
+#                       찾지 못하면(설치·환경 단계에서 실패) 다시 돌리지 말고 비0으로 끝내야 한다 — 진짜 깨진 기본 브랜치를 덮지 않게
 #   POST_MERGE_COPY     POST_MERGE_CMD 전에 메인 체크아웃에서 복사할 파일들(공백 구분), 예 ".env.local"
 #   POST_MERGE_PORT     POST_MERGE_CMD가 쓰는 포트. 지정하면 비기를 기다린다(기본 없음)
 #   POST_MERGE_WORKTREE POST_MERGE_CMD를 돌릴 워크트리 (기본 ~/.cache/ticket-loop/<owner-repo>/post-merge, 저장소 밖)
@@ -101,7 +106,8 @@ set -euo pipefail
 # 멈추는 조건(루프 종료, 워크트리는 조사용으로 남긴다):
 #   - 워커가 PR 없이 멈춤(질문·실패) / 티켓 타임아웃 / 백엔드 터미널 끊김 / 에이전트 기동 실패
 #   - 수리 REPAIR_ROUNDS회 뒤에도 CI 실패 또는 충돌
-#   - 병합 뒤 POST_MERGE_CMD 실패, 또는 POST_MERGE_PORT가 10분 안에 비지 않음(기다리는 동안은 로그 한 줄 뒤 조용하다 — 멈춤이 아니다)
+#   - 병합 뒤 POST_MERGE_CMD 실패(POST_MERGE_RETRY_CMD가 있으면 재실행까지 실패), 또는 POST_MERGE_PORT가 10분 안에 비지 않음
+#     (기다리는 동안은 로그 한 줄 뒤 조용하다 — 멈춤이 아니다)
 # 자동 선택은 선행 이슈가 열렸거나, PR이 이미 있거나, 담당자가 있거나, 하위 이슈를 가진(스펙) 이슈를 건너뛴다.
 #
 # 멈추면 — 위 조건, 그리고 터미널 창 닫힘(HUP·PIPE)·Ctrl-C·kill(TERM)·set -e에 걸린 명령(네트워크가 끊겨 git fetch·gh가 실패하는 등) —
@@ -148,6 +154,7 @@ REPAIR_ROUNDS="${REPAIR_ROUNDS:-1}"
 CI_SKIP_REGEX="${CI_SKIP_REGEX:-}"
 CI_SKIP_CMD="${CI_SKIP_CMD:-}"
 POST_MERGE_CMD="${POST_MERGE_CMD:-}"
+POST_MERGE_RETRY_CMD="${POST_MERGE_RETRY_CMD:-}"
 POST_MERGE_COPY="${POST_MERGE_COPY:-}"
 POST_MERGE_PORT="${POST_MERGE_PORT:-}"
 POST_MERGE_WORKTREE="${POST_MERGE_WORKTREE:-}"
@@ -274,7 +281,7 @@ dim_lines() { local l; while IFS= read -r l || [[ -n "$l" ]]; do printf '%s%s%s%
 REPO_URL=""; STOP_ISSUE=""; STOP_REPORTED=0; LOCK_HELD=0; BG_PID=""
 fmt_epoch() { date -r "$1" '+%H:%M:%S' 2>/dev/null || date -d "@$1" '+%H:%M:%S'; }   # macOS / Linux
 
-# notify 제목 본문 [종류 [꼬리]] — 종류 start | done | stop | interrupt | finish(Slack 아이콘·멘션), 꼬리는 Slack에만 코드 블록으로 붙는다
+# notify 제목 본문 [종류 [꼬리]] — 종류 start | done | flaky | stop | interrupt | finish(Slack 아이콘·멘션), 꼬리는 Slack에만 코드 블록으로 붙는다
 notify() {
   if command -v osascript >/dev/null 2>&1; then
     # 문구를 AppleScript 소스에 끼우지 않고 인자로 넘긴다 — 티켓 제목·멈춤 사유의 따옴표가 스크립트를 깨지 않게
@@ -295,7 +302,7 @@ slack_post() {
       --arg repo "${OWNER_REPO:-${ROOT##*/}}" --arg url "$REPO_URL" --arg host "$(hostname -s 2>/dev/null || hostname)" '
     def esc: gsub("&"; "&amp;") | gsub("<"; "&lt;") | gsub(">"; "&gt;");
     def link: if $url == "" then . else gsub("#(?<n>[0-9]+)"; "<\($url)/issues/\(.n)|#\(.n)>") end;
-    ({start: ":arrow_forward:", done: ":white_check_mark:", stop: ":octagonal_sign:", interrupt: ":octagonal_sign:"}[$kind] // ":checkered_flag:") as $icon
+    ({start: ":arrow_forward:", done: ":white_check_mark:", flaky: ":warning:", stop: ":octagonal_sign:", interrupt: ":octagonal_sign:"}[$kind] // ":checkered_flag:") as $icon
     | {text: ("\($icon) *\($title | esc)* · \($repo | esc) · \($host | esc)\n"
         + (if $kind == "stop" and $mention != "" then "\($mention) " else "" end)
         + ($body | esc | link)
@@ -342,6 +349,19 @@ github_stop_record() {
   gh label create "$STOPPED_LABEL" --color B60205 --description "ticket-loop가 이 티켓에서 멈춤(기록용)" </dev/null >/dev/null 2>&1 || true
   gh issue comment "$n" --body "$body" </dev/null >/dev/null 2>&1 || log warn "#${n}: failed to post the stop record to GitHub"
   gh issue edit "$n" --add-label "$STOPPED_LABEL" </dev/null >/dev/null 2>&1 || log warn "#${n}: failed to add the ${STOPPED_LABEL} label"
+}
+
+# 병합 뒤 검증이 재실행에서 통과했을 때의 기록. 루프는 계속 가지만 같은 플레이크가 되풀이되는지 나중에 볼 수 있게 이슈에 코멘트를 달고
+# 알린다(멘션 없이 — 사람을 부를 일은 아니다). 멈춤이 아니라 STOPPED_LABEL은 붙이지 않는다. github_stop_record처럼 검증 로그 본문은
+# 공개 저장소에 올리지 않고 파일 이름만 적는다. $1 이슈, $2 첫 실행 로그, $3 재실행 로그, $4 첫 실행 초, $5 재실행 초
+post_merge_flaky_record() {
+  local n="$1" first_log="$2" retry_log="$3" first_sec="$4" retry_sec="$5" body
+  body="**ticket-loop 병합 뒤 검증 재시도 통과** — 플레이크 의심"$'\n\n'
+  body+="- 첫 실행 ${first_sec}초 만에 실패 → 재실행(\`POST_MERGE_RETRY_CMD\`) ${retry_sec}초 만에 통과. 루프는 멈추지 않고 계속 갔다"$'\n'
+  [[ -z "${CUR_PR:-}" ]] || body+="- PR #${CUR_PR} 병합 뒤"$'\n'
+  body+="- 머신 \`$(hostname -s 2>/dev/null || hostname)\` · 검증 로그 \`${first_log##*/}\`(첫 실행), \`${retry_log##*/}\`(재실행) — 그 머신에만 있다"$'\n'
+  gh issue comment "$n" --body "$body" </dev/null >/dev/null 2>&1 || log warn "#${n}: failed to post the post-merge retry record to GitHub"
+  notify "Post-merge check passed on retry" "#${n}: first run failed in ${first_sec}s, retry passed in ${retry_sec}s — likely flaky (logs ${first_log##*/}, ${retry_log##*/})" flaky
 }
 
 # 모든 종료가 지나는 길(EXIT). die와 정상 종료는 따로 처리했고, 그 밖의 비정상 종료 — set -e에 걸린 명령(네트워크가 끊겨 git fetch·gh가
@@ -1029,9 +1049,27 @@ post_merge_worktree_path() {
   printf '%s/.cache/ticket-loop/%s/post-merge' "$HOME" "${OWNER_REPO//\//-}"
 }
 
-# 반환 0: 통과, 1: 실패(로그 꼬리를 남긴다)
+# POST_MERGE_PORT가 비기를 기다린다. 반환 0: 비었음(포트 설정이 없으면 바로), 1: PORT_WAIT_SEC 안에 비지 않음.
+# 첫 실행과 재실행이 같이 쓴다 — 첫 실행이 띄운 서버가 명령이 끝난 뒤에도 포트를 늦게 놓을 수 있다
+wait_post_merge_port() {
+  local n="$1" port_deadline holder
+  [[ -n "$POST_MERGE_PORT" ]] || return 0
+  port_deadline=$(( $(date +%s) + PORT_WAIT_SEC ))
+  # 기다리는 동안 아무것도 찍지 않으면 루프가 멈춘 것처럼 보인다(실측: 사람이 띄운 개발 서버가 포트를 쥔 채 4분을
+  # 조용히 기다렸다). 처음 한 번 점유 프로세스와 기한을 적는다 — 그 서버를 끄면 30초 안에 이어 간다
+  if port_in_use "$POST_MERGE_PORT"; then
+    holder="$(port_holder "$POST_MERGE_PORT")"
+    log warn "#${n}: port ${POST_MERGE_PORT} in use (${holder:-?}) — waiting for it to free up until $(fmt_epoch "$port_deadline"). Stop that server and the loop continues right away"
+  fi
+  while port_in_use "$POST_MERGE_PORT"; do
+    [[ "$(date +%s)" -lt "$port_deadline" ]] || { log warn "#${n}: port ${POST_MERGE_PORT} did not free up — keep it free while the loop runs, or use --skip-post-merge"; return 1; }
+    sleep 30
+  done
+}
+
+# 반환 0: 통과(재실행에서 통과한 것 포함), 1: 실패(로그 꼬리를 남긴다)
 run_post_merge() {
-  local n="$1" wt logfile started f port_deadline holder
+  local n="$1" wt logfile retry_log started first_sec retry_sec f
   wt="$(post_merge_worktree_path)"
   if [[ ! -d "$wt/.git" && ! -f "$wt/.git" ]]; then
     mkdir -p "$(dirname "$wt")"
@@ -1042,23 +1080,11 @@ run_post_merge() {
   for f in $POST_MERGE_COPY; do
     [[ ! -f "$MAIN_WT/$f" ]] || cp "$MAIN_WT/$f" "$wt/$f"
   done
-  if [[ -n "$POST_MERGE_PORT" ]]; then
-    port_deadline=$(( $(date +%s) + PORT_WAIT_SEC ))
-    # 기다리는 동안 아무것도 찍지 않으면 루프가 멈춘 것처럼 보인다(실측: 사람이 띄운 개발 서버가 포트를 쥔 채 4분을
-    # 조용히 기다렸다). 처음 한 번 점유 프로세스와 기한을 적는다 — 그 서버를 끄면 30초 안에 이어 간다
-    if port_in_use "$POST_MERGE_PORT"; then
-      holder="$(port_holder "$POST_MERGE_PORT")"
-      log warn "#${n}: port ${POST_MERGE_PORT} in use (${holder:-?}) — waiting for it to free up until $(fmt_epoch "$port_deadline"). Stop that server and the loop continues right away"
-    fi
-    while port_in_use "$POST_MERGE_PORT"; do
-      [[ "$(date +%s)" -lt "$port_deadline" ]] || { log warn "#${n}: port ${POST_MERGE_PORT} did not free up — keep it free while the loop runs, or use --skip-post-merge"; return 1; }
-      sleep 30
-    done
-  fi
+  wait_post_merge_port "$n" || return 1
   # 검증 로그는 LOG_FILE과 같은 디렉터리(절대 경로 — 아래 리다이렉트는 cd 한 뒤의 서브셸에서 열리므로 상대 경로면 워크트리 안에 생긴다)
   logfile="${TMPDIR:-/tmp}/ticket-loop-post-merge-${n}.log"
   [[ "$LOG_FILE" == "/dev/null" ]] || logfile="$(dirname "$LOG_FILE")/post-merge-${n}.log"
-  POST_MERGE_LOG="$logfile"
+  POST_MERGE_LOG="$logfile"; POST_MERGE_RETRY_LOG=""
   mkdir -p "$(dirname "$logfile")"
   started="$(date +%s)"
   log step "#${n}: post-merge check started (${wt}, log ${logfile})"
@@ -1067,8 +1093,27 @@ run_post_merge() {
     log ok "#${n}: post-merge check ${POST_MERGE_RESULT}"
     return 0
   fi
-  POST_MERGE_RESULT="failed in $(( $(date +%s) - started ))s"
+  first_sec=$(( $(date +%s) - started ))
+  POST_MERGE_RESULT="failed in ${first_sec}s"
   log warn "#${n}: post-merge check failed — tail ---"; tail -n 40 "$logfile" | dim_lines || true
+  [[ -n "$POST_MERGE_RETRY_CMD" ]] || return 1
+  # 재실행은 딱 한 번, 같은 워크트리에서. 무거운 스위트는 그 병합과 무관하게 아무 테스트나 가끔 시간 초과로 깨진다(실측: rental-portal
+  # 44분 통합 테스트 7회 중 2회, 매번 다른 테스트 하나 — 그것만 다시 돌리면 통과할 성격이었다). 무엇을 다시 돌릴지는 재실행 명령이
+  # 첫 실행 로그(POST_MERGE_FAILED_LOG)를 보고 정한다. 키트는 테스트 도구를 모르므로 그 판단을 저장소 쪽 명령에 맡긴다
+  wait_post_merge_port "$n" || return 1
+  retry_log="${logfile%.log}-retry.log"
+  POST_MERGE_RETRY_LOG="$retry_log"
+  started="$(date +%s)"
+  log step "#${n}: retrying the post-merge check once (log ${retry_log})"
+  if bg_wait env POST_MERGE_FAILED_LOG="$logfile" bash -c 'cd "$1" && exec bash -c "$2"' _ "$wt" "$POST_MERGE_RETRY_CMD" >"$retry_log" 2>&1; then
+    retry_sec=$(( $(date +%s) - started ))
+    POST_MERGE_RESULT="passed on retry in ${retry_sec}s (first run failed in ${first_sec}s)"
+    log warn "#${n}: post-merge check ${POST_MERGE_RESULT} — likely flaky, continuing"
+    post_merge_flaky_record "$n" "$logfile" "$retry_log" "$first_sec" "$retry_sec"
+    return 0
+  fi
+  POST_MERGE_RESULT="failed on retry in $(( $(date +%s) - started ))s (first run failed in ${first_sec}s)"
+  log warn "#${n}: post-merge retry failed too — tail ---"; tail -n 40 "$retry_log" | dim_lines || true
   return 1
 }
 
@@ -1256,7 +1301,7 @@ run_ticket() {
   local deadline=$(( $(date +%s) + TICKET_TIMEOUT_SEC )) started_at ci_sec=0 ci_started
   started_at="$(date +%s)"
   IDLE_FP_FILE="$(mktemp "${TMPDIR:-/tmp}/ticket-loop-idle-${n}.XXXXXX")"   # idle 오판 한 번에 한 줄(idle_fp_count)
-  POST_MERGE_RESULT="skipped"; POST_MERGE_LOG=""
+  POST_MERGE_RESULT="skipped"; POST_MERGE_LOG=""; POST_MERGE_RETRY_LOG=""
   log title "=== #${n} ${title} ==="
   CUR_N="$n"; CUR_TITLE="$title"; CUR_STARTED="$started_at"; CUR_STARTED_ISO="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"; STOP_ISSUE="$n"
   CUR_PR=""; CUR_MODEL=""; CUR_CI_SEC=""; CUR_ROUND=0
@@ -1351,7 +1396,9 @@ run_ticket() {
   git -C "$ROOT" push -q origin --delete "${branch}" >/dev/null 2>&1 || true
   log ok "#${n} summary: wall-clock $(( ($(date +%s) - started_at) / 60 ))m, PR #${pr}, CI $([[ $ci_sec -ge 0 ]] && echo "${ci_sec}s" || echo "none (path excluded from CI)"), repairs ${round}, idle false positives $(idle_fp_count), post-merge check ${POST_MERGE_RESULT}"
   record_ticket "merged"; CUR_N=""; rm -f "$IDLE_FP_FILE"
-  [[ $post_rc -eq 0 ]] || die "#${n}: post-merge check failed on the merged ${BASE_BRANCH}. Check the log (${POST_MERGE_LOG}) and the check worktree ($(post_merge_worktree_path)), then rerun after a fix PR."
+  # 재실행까지 실패했으면 두 로그를 다 적는다. 재실행이 실패한 테스트를 못 찾아 끝냈을 수도, 같은 플레이크가 또 났을 수도 있어 판단은 사람이 한다
+  [[ $post_rc -eq 0 || -n "$POST_MERGE_RETRY_LOG" ]] || die "#${n}: post-merge check failed on the merged ${BASE_BRANCH}. Check the log (${POST_MERGE_LOG}) and the check worktree ($(post_merge_worktree_path)), then rerun after a fix PR."
+  [[ $post_rc -eq 0 ]] || die "#${n}: post-merge check failed on the merged ${BASE_BRANCH}, and again on retry. Check the logs (first run ${POST_MERGE_LOG}, retry ${POST_MERGE_RETRY_LOG}) and the check worktree ($(post_merge_worktree_path)). If it looks like a flake, just rerun; otherwise rerun after a fix PR."
   notify "Ticket done" "#${n} ${title} — PR #${pr}, $(( ($(date +%s) - started_at) / 60 ))m" done
   STOP_ISSUE=""
 }
@@ -1361,7 +1408,7 @@ run_ticket() {
 backend_check
 targets="$(pick_targets)"
 log "repository ${OWNER_REPO} / backend ${BACKEND_NAME} / base branch ${BASE_BRANCH} / label ${READY_LABEL}${SCOPE_LABEL:+ + ${SCOPE_LABEL}}${PARENT:+ / sub-issues of spec #${PARENT}}"
-log "post-merge check: $([[ $POST_MERGE -eq 1 ]] && echo "on — ${POST_MERGE_CMD}" || echo "off")"
+log "post-merge check: $([[ $POST_MERGE -eq 1 ]] && echo "on — ${POST_MERGE_CMD}${POST_MERGE_RETRY_CMD:+ (retry once on failure: ${POST_MERGE_RETRY_CMD})}" || echo "off")"
 log "notifications: desktop$([[ -z "$SLACK_WEBHOOK_URL" ]] || echo " + Slack")"
 if [[ -f "$LOOP_ENV" ]] && grep -q 'hooks\.slack\.com' "$LOOP_ENV"; then
   log warn "note: a Slack webhook URL is in .ticket-loop/loop.env, which is committed — move SLACK_WEBHOOK_URL to ${USER_LOOP_ENV} (anyone with the URL can post to the channel)"

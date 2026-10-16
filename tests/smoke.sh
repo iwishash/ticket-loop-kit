@@ -489,16 +489,19 @@ grep -q '^run_post_merge() {' "$P/fn.sh" || fail "run_post_merge 를 찾지 못�
 sed -n '/^abs_path() /p' "$KIT/files/scripts/ticket-loop.sh" >> "$P/fn.sh"
 sed -n '/^bg_wait() {/,/^}/p' "$KIT/files/scripts/ticket-loop.sh" >> "$P/fn.sh"   # 검증 명령은 bg_wait 로 돈다
 grep -q '^abs_path() ' "$P/fn.sh" && grep -q '^bg_wait() ' "$P/fn.sh" || fail "abs_path·bg_wait 를 찾지 못함"
-postmerge_case() {  # $1 POST_MERGE_CMD, $2 LOG_FILE(상대), $3 기대(pass|fail) → 출력(stderr 포함)
-  (cd "$P/repo" && POST_MERGE_CMD="$1" LOG_FILE="$2" POST_MERGE_WORKTREE="$P/wt" EXPECT="$3" FN="$P/fn.sh" bash -c '
+postmerge_case() {  # $1 POST_MERGE_CMD, $2 LOG_FILE(상대), $3 기대(pass|fail), [$4 POST_MERGE_RETRY_CMD, $5 source 뒤 덧붙일 설정] → 출력(stderr 포함)
+  rm -f "$P/repo/.ticket-loop/post-merge-7-retry.log"
+  (cd "$P/repo" && POST_MERGE_CMD="$1" LOG_FILE="$2" POST_MERGE_WORKTREE="$P/wt" EXPECT="$3" POST_MERGE_RETRY_CMD="${4:-}" EXTRA="${5:-}" FN="$P/fn.sh" bash -c '
     set -euo pipefail
     ROOT="$(git rev-parse --show-toplevel)"; MAIN_WT="$ROOT"; OWNER_REPO=o/r; BASE_BRANCH=main; POST_MERGE_COPY=""; POST_MERGE_PORT=""; PORT_WAIT_SEC=0
     log() { shift; echo "$*"; }; dim_lines() { local l; while IFS= read -r l; do echo "  $l"; done; }; fmt_epoch() { echo "$1"; }
+    post_merge_flaky_record() { echo "FLAKY_RECORD $*"; }   # 알림 블록의 것 — 아래 알림 검사에서 따로 본다
     source "$FN"
+    eval "$EXTRA"
     LOG_FILE="$(abs_path "$LOG_FILE")"
     rc=0; run_post_merge 7 || rc=$?
     [[ "$EXPECT" == pass && $rc -eq 0 || "$EXPECT" == fail && $rc -eq 1 ]] || { echo "rc=$rc"; exit 9; }
-    echo "POST_MERGE_LOG=$POST_MERGE_LOG"' 2>&1)
+    echo "POST_MERGE_LOG=$POST_MERGE_LOG"; echo "POST_MERGE_RETRY_LOG=$POST_MERGE_RETRY_LOG"; echo "POST_MERGE_RESULT=$POST_MERGE_RESULT"' 2>&1)
 }
 out="$(postmerge_case 'echo hello-from-post-merge; exit 1' '.ticket-loop/loop-0101.log' fail)" || fail "run_post_merge(실패) 가 1 로 끝나지 않음: $out"
 [[ -f "$P/repo/.ticket-loop/post-merge-7.log" ]] || fail "post-merge 로그가 저장소 루트 쪽 .ticket-loop/ 에 없다 (ls: $(ls -R "$P/wt/.ticket-loop" 2>/dev/null))"
@@ -507,15 +510,45 @@ grep -q '^  hello-from-post-merge$' <<<"$out" || fail "실패 꼬리가 비었�
 ! grep -q 'No such file' <<<"$out" || fail "꼬리 tail 이 파일을 못 찾았다: $out"
 grep -q "post-merge check started ($P/wt, log $P/repo/.ticket-loop/post-merge-7.log)" <<<"$out" || fail "시작 줄의 로그 경로가 실제 위치(절대 경로)가 아니다: $out"
 grep -q "^POST_MERGE_LOG=$P/repo/.ticket-loop/post-merge-7.log$" <<<"$out" || fail "POST_MERGE_LOG(die 가 찍는 경로)가 절대 경로가 아니다: $out"
+grep -q '^POST_MERGE_RESULT=failed in [0-9]*s$' <<<"$out" && grep -q '^POST_MERGE_RETRY_LOG=$' <<<"$out" || fail "재실행 설정이 없으면 결과는 전처럼 'failed in Ns' 여야 한다: $out"
+! grep -q 'retrying\|FLAKY_RECORD' <<<"$out" && [[ ! -e "$P/repo/.ticket-loop/post-merge-7-retry.log" ]] || fail "재실행 설정이 없는데 재실행했다: $out"
 out="$(postmerge_case 'exit 0' 'sub/dir/loop.log' pass)" || fail "run_post_merge(통과) 실패: $out"
 [[ -f "$P/repo/sub/dir/post-merge-7.log" ]] || fail "LOG_FILE 을 다른 상대 디렉터리로 줘도 저장소 루트 기준이어야 한다"
 grep -q 'post-merge check passed in [0-9]*s' <<<"$out" || fail "통과 줄이 없음: $out"
 grep -q 'log (${POST_MERGE_LOG})' "$KIT/files/scripts/ticket-loop.sh" || fail "병합 뒤 검증 실패 die 줄에 로그 경로가 없다"
+echo "ok  병합 뒤 검증 로그 경로(저장소 루트 기준·실패 꼬리)"
+
+# 병합 뒤 검증 재실행(POST_MERGE_RETRY_CMD): 첫 실행이 실패하면 포트 대기를 다시 지나 같은 워크트리에서 딱 한 번, 첫 실행 로그 경로
+# (POST_MERGE_FAILED_LOG)를 받아 돈다. 통과하면 0("passed on retry …")과 플레이크 기록, 실패하면 1. 2026-10-15 rental-portal #106 실측 —
+# 44분 통합 테스트에서 병합과 무관한 테스트 하나가 시간 초과로 깨져 루프가 멈췄다
+retry_cmd='grep -q "^first-run-output$" "$POST_MERGE_FAILED_LOG" && case "$POST_MERGE_FAILED_LOG" in /*) ;; *) exit 5 ;; esac && echo "retried in $(pwd -P)"'
+out="$(postmerge_case 'echo first-run-output; exit 1' '.ticket-loop/loop-0101.log' pass "$retry_cmd")" || fail "재실행 통과인데 0 이 아님: $out"
+grep -q '^POST_MERGE_RESULT=passed on retry in [0-9]*s (first run failed in [0-9]*s)$' <<<"$out" || fail "재실행 통과 결과 문자열이 다르다: $out"
+[[ -f "$P/repo/.ticket-loop/post-merge-7-retry.log" ]] && grep -q "^POST_MERGE_RETRY_LOG=$P/repo/.ticket-loop/post-merge-7-retry.log$" <<<"$out" || fail "재실행 로그가 첫 실행 로그와 같은 디렉터리의 post-merge-7-retry.log 가 아니다: $out"
+grep -qx "retried in $P/wt" "$P/repo/.ticket-loop/post-merge-7-retry.log" || fail "재실행이 검증 워크트리에서 첫 실행 로그(절대 경로)를 읽지 못함: $(cat "$P/repo/.ticket-loop/post-merge-7-retry.log")"
+grep -q "^#7: retrying the post-merge check once (log $P/repo/.ticket-loop/post-merge-7-retry.log)$" <<<"$out" && grep -q 'post-merge check passed on retry in .* likely flaky' <<<"$out" || fail "재실행 시작·통과 줄이 없음: $out"
+grep -q "^FLAKY_RECORD 7 $P/repo/.ticket-loop/post-merge-7.log $P/repo/.ticket-loop/post-merge-7-retry.log [0-9]* [0-9]*$" <<<"$out" || fail "재실행 통과인데 플레이크 기록을 부르지 않음: $out"
+out="$(postmerge_case 'echo first-run-output; exit 1' '.ticket-loop/loop-0101.log' fail 'echo retry-output; exit 1')" || fail "재실행도 실패인데 1 이 아님: $out"
+grep -q '^POST_MERGE_RESULT=failed on retry in [0-9]*s (first run failed in [0-9]*s)$' <<<"$out" && grep -q '^  retry-output$' <<<"$out" || fail "재실행 실패 결과·꼬리가 다르다: $out"
+! grep -q 'FLAKY_RECORD' <<<"$out" || fail "재실행이 실패했는데 플레이크 기록을 부름: $out"
+out="$(postmerge_case 'exit 0' '.ticket-loop/loop-0101.log' pass 'echo should-not-run')" || fail "첫 실행 통과(재실행 설정 있음) 실패: $out"
+grep -q '^POST_MERGE_RESULT=passed in [0-9]*s$' <<<"$out" && [[ ! -e "$P/repo/.ticket-loop/post-merge-7-retry.log" ]] || fail "첫 실행이 통과했는데 재실행했다: $out"
+# 재실행 전에도 포트 대기를 지난다: 첫 실행이 포트를 쥔 채 끝나면(가짜 port_in_use 가 busy 파일을 본다) PORT_WAIT_SEC=0 에서 재실행 없이 1
+rm -f "$P/busy"
+out="$(postmerge_case "touch '$P/busy'; exit 1" '.ticket-loop/loop-0101.log' fail 'echo should-not-run' "POST_MERGE_PORT=3999; port_in_use() { echo \"port-check \$1\"; [[ -e '$P/busy' ]]; }")" || fail "재실행 전 포트가 안 비는 경우 1 이 아님: $out"
+[[ "$(grep -c '^port-check 3999$' <<<"$out")" -ge 2 ]] && grep -q 'port 3999 did not free up' <<<"$out" && [[ ! -e "$P/repo/.ticket-loop/post-merge-7-retry.log" ]] \
+  || fail "재실행 전에 포트 대기를 지나지 않았거나, 포트가 안 비었는데 재실행했다: $out"
+grep -q '^POST_MERGE_RETRY_LOG=$' <<<"$out" || fail "재실행을 못 돌렸으면 POST_MERGE_RETRY_LOG 는 비어야 한다(die 가 전 문구를 쓴다): $out"
+rm -f "$P/busy"
+grep -c '^  wait_post_merge_port "$n" || return 1$' "$KIT/files/scripts/ticket-loop.sh" | grep -qx 2 || fail "포트 대기 함수를 첫 실행·재실행 두 곳에서 부르지 않는다"
+grep -qF 'first run ${POST_MERGE_LOG}, retry ${POST_MERGE_RETRY_LOG}' "$KIT/files/scripts/ticket-loop.sh" && grep -q 'If it looks like a flake, just rerun; otherwise rerun after a fix PR' "$KIT/files/scripts/ticket-loop.sh" \
+  || fail "재실행까지 실패한 die 줄에 두 로그 경로·문구가 없다"
+grep -qF '${POST_MERGE_RETRY_CMD:+ (retry once on failure: ${POST_MERGE_RETRY_CMD})}' "$KIT/files/scripts/ticket-loop.sh" || fail "시작 줄에 재실행 설정을 보이지 않는다"
+echo "ok  병합 뒤 검증 재실행(포트 대기·첫 실행 로그·딱 한 번·결과 문자열)"
 grep -q 'LOG_START_BYTES=$(( $(wc -c < "$LOG_FILE") ))' "$KIT/files/scripts/ticket-loop.sh" || fail "시작 때 로그 파일 크기(LOG_START_BYTES)를 기억하지 않음"
 grep -q '^LOG_FILE="$(abs_path "$LOG_FILE")"$' "$KIT/files/scripts/ticket-loop.sh" && grep -q '^RECORDS_FILE="$(abs_path "$RECORDS_FILE")"$' "$KIT/files/scripts/ticket-loop.sh" && grep -q '^REPORT_DIR="$(abs_path "$REPORT_DIR")"$' "$KIT/files/scripts/ticket-loop.sh" \
   || fail "LOG_FILE·RECORDS_FILE·REPORT_DIR 를 시작 때 절대 경로로 굳히지 않는다"
 [[ "$(cd "$P/repo" && ROOT="$P/repo" FN="$P/fn.sh" bash -c 'source "$FN"; abs_path /dev/null; echo; abs_path /abs/x; echo; abs_path rel/y')" == $'/dev/null\n/abs/x\n'"$P/repo/rel/y" ]] || fail "abs_path 가 /dev/null·절대 경로를 그대로 두고 상대 경로만 ROOT 에 붙이지 않는다"
-echo "ok  병합 뒤 검증 로그 경로(저장소 루트 기준·실패 꼬리)"
 
 # 진행 로그: 실제 git 저장소에서 progress_reset/check 를 그대로 부른다 — 브랜치·첫 수정·커밋은 바로 한 줄, 심장박동은 변경 파일 목록이
 # 지난 줄과 다를 때만(같으면 HEARTBEAT_SEC=0 이어도 조용하다)
@@ -673,6 +706,17 @@ rc="$(stop_case die 'LOCK_HELD=0; STOP_ISSUE=; CUR_N=')"   # 이미 도는 루�
 rc="$(stop_case die 'SLACK_WEBHOOK_URL=')"; [[ "$rc" == 1 && "$(calls curl)" == 0 && "$(calls gh)" == 3 ]] || fail "웹훅이 없으면 Slack 만 빠져야 함: $(cat "$M/calls.jsonl")"
 rc="$(stop_case ok 'notify "Ticket done" "#12 T01 & co — PR #34, 5m" done; STOP_ISSUE=')"
 out="$(slack_text)"; [[ "$rc" == 0 && "$out" == ":white_check_mark: *Ticket done* · o/r · "*$'\n'"$L/12|#12> T01 &amp; co — PR $L/34|#34>, 5m" ]] || fail "완료 알림: $out"
+rc="$(stop_case ok 'post_merge_flaky_record 12 /secret/dir/.ticket-loop/post-merge-12.log /secret/dir/.ticket-loop/post-merge-12-retry.log 2640 300')"
+[[ "$rc" == 0 && ! -e "$M/rec" ]] || fail "플레이크 기록이 멈춤으로 처리됨(rc $rc)"
+[[ "$(jq -rs '[.[] | select(.cmd == "gh") | .args[0:2] | join(" ")] | join(",")' "$M/calls.jsonl")" == "issue comment" ]] || fail "플레이크 기록은 코멘트 하나뿐이어야 한다(라벨 없음): $(jq -c . "$M/calls.jsonl")"
+out="$(gh_comment)"
+for want in $'12\n**ticket-loop 병합 뒤 검증 재시도 통과** — 플레이크 의심' '첫 실행 2640초 만에 실패' '300초 만에 통과' '- PR #34 병합 뒤' '- 머신 `' '`post-merge-12.log`(첫 실행), `post-merge-12-retry.log`(재실행)'; do
+  grep -qF -- "$want" <<<"$out" || fail "플레이크 코멘트에 '$want' 없음: $out"
+done
+! grep -q '/secret/dir\|worker-screen-line\|loop-stopped' <<<"$out" || fail "플레이크 코멘트에 로컬 경로·로그 본문·멈춤 라벨이 실림: $out"
+out="$(slack_text)"
+[[ "$(calls curl)" == 1 && "$(calls osascript)" == 1 && "$out" == ":warning: *Post-merge check passed on retry* · o/r · "*$'\n'"$L/12|#12>: first run failed in 2640s, retry passed in 300s — likely flaky (logs post-merge-12.log, post-merge-12-retry.log)" ]] \
+  || fail "플레이크 Slack 알림(아이콘·멘션 없음·로그 꼬리 없음): $out"
 rc="$(stop_case ok 'REPO_URL=; slack_post "Ticket loop started" "1 ticket"$'"'"'\n'"'"'"#12 T01" start')"
 out="$(slack_text)"; [[ "$out" == ":arrow_forward: *Ticket loop started* · o/r · "*$'\n1 ticket\n#12 T01' ]] || fail "시작 알림(저장소 URL 없으면 링크 없이): $out"
 # 오래 기다리는 중(bg_wait)에 루프 pid 에만 온 신호도 바로 처리하고 기다리던 자식을 끝낸다. 포그라운드 자식이면 bash 가 trap 을 미뤄
@@ -751,9 +795,10 @@ jq -rn --arg prefix issue- --arg now "2026-10-12 09:00" \
                   {"number":52,"title":"T04 PR","body":"","state":"MERGED","url":"https://x/p52","createdAt":"2026-10-11T02:00:00Z","mergedAt":"2026-10-11T03:00:00Z","headRefName":"issue-44"}]' \
   --argjson recs '[{"spec":40,"issue":41,"title":"T01: 하나","result":"merged","started":"2026-10-12T00:00:00Z","finished":"2026-10-12T00:31:00Z","wall_sec":1860,"repairs":1,"idle_false_positives":0,"agent":"claude","pr":50,"ci_sec":200,"post_merge":"통과 90초","model":"Opus 5.5"},
                    {"spec":40,"issue":42,"title":"T02: 둘","result":"stopped","reason":"워커가 PR 없이 멈췄습니다","started":"2026-10-12T01:00:00Z","finished":"2026-10-12T01:10:00Z","wall_sec":600,"repairs":0,"idle_false_positives":2,"agent":"claude"},
-                   {"spec":40,"issue":43,"title":"T03: 셋","result":"merged","started":"2026-10-11T00:00:00Z","finished":"2026-10-11T01:01:00Z","wall_sec":3660,"repairs":0,"idle_false_positives":0,"agent":"claude","pr":51,"ci_sec":100,"post_merge":"failed in 12s","model":"Opus 5.5"}]' \
+                   {"spec":40,"issue":43,"title":"T03: 셋","result":"merged","started":"2026-10-11T00:00:00Z","finished":"2026-10-11T01:01:00Z","wall_sec":3660,"repairs":0,"idle_false_positives":0,"agent":"claude","pr":51,"ci_sec":100,"post_merge":"failed in 12s","model":"Opus 5.5"},
+                   {"spec":40,"issue":44,"title":"T04: 넷","result":"merged","started":"2026-10-11T02:00:00Z","finished":"2026-10-11T03:01:00Z","wall_sec":3660,"repairs":0,"idle_false_positives":0,"agent":"claude","pr":52,"ci_sec":100,"post_merge":"passed on retry in 300s (first run failed in 2640s)","model":"Opus 5.5"}]' \
   "$REPORT_JQ" > "$T/report.html" || fail "스펙 리포트 jq 실패"
-for want in '<!doctype html>' '<html lang="en">' 'PR #50' 'Acceptance criteria 1/2' '>Merged<' '>Stopped<' 'Stop reason: 워커가 PR 없이 멈췄습니다' 'Opus 5.5' 'PR created→merged' 'not recorded' '1 repair ·' 'post-merge check passed in 90s' 'post-merge check failed in 12s' 'T01: 하나'; do
+for want in '<!doctype html>' '<html lang="en">' 'PR #50' 'Acceptance criteria 1/2' '>Merged<' '>Stopped<' 'Stop reason: 워커가 PR 없이 멈췄습니다' 'Opus 5.5' 'PR created→merged' 'not recorded' '1 repair ·' 'post-merge check passed in 90s' 'post-merge check failed in 12s' 'post-merge check passed on retry in 300s (first run failed in 2640s)' 'T01: 하나'; do
   grep -qF "$want" "$T/report.html" || fail "스펙 리포트에 '$want' 없음"
 done
 # head 가 정확히 issue-44 인 PR #52 는 T04 의 PR 이고(Merged 3건), 이슈 4 에는 붙지 않는다(기록도 PR 도 없는 이슈 4 는 Not started)
