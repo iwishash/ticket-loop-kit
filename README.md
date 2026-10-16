@@ -36,7 +36,7 @@ From the root of the target repository:
 npx github:iwishash/ticket-loop-kit init
 ```
 
-Pick the backend and install steps with the keyboard (`--yes` skips the questions; `NO_COLOR` disables colors). Pin a version with `npx github:iwishash/ticket-loop-kit#v0.8.11 init`. Without Node:
+Pick the backend and install steps with the keyboard (`--yes` skips the questions; `NO_COLOR` disables colors). Pin a version with `npx github:iwishash/ticket-loop-kit#v0.9.0 init`. Without Node:
 
 ```bash
 bash <(curl -fsSL https://raw.githubusercontent.com/iwishash/ticket-loop-kit/main/install.sh)
@@ -96,12 +96,12 @@ Claude Code decides a new worktree's trust by the main checkout's path, so the c
 | Kit path | Target repository | On install |
 |---|---|---|
 | `files/scripts/ticket-loop.sh`, `ticket-state.sh`, `sync-mattpocock-skills.sh` | `scripts/` | Overwritten every time (kit-owned) |
-| `files/.agents/skills/setup-ticket-loop/` | Same path, plus a `.claude/skills/` link | Overwritten every time |
+| `files/.agents/skills/setup-ticket-loop/`, `loop-triage/` | Same path, plus `.claude/skills/` links | Overwritten every time |
 | `templates/.agents/skills/implement/`, `pr/` | Same path, plus `.claude/skills/` links | Only when absent (project-owned afterwards) |
 | `templates/.codex/rules/ticket-loop.rules` | Same path | Only when absent. Codex counterpart of the `deny` rules; the installer fills in the default branch |
 | `templates/.ticket-loop/worker-rules.md`, `docs/loop-reports/README.md`, `docs/agents/issue-tracker.md` | Same paths | Only when absent |
 | — | `.agents/skills/tdd`, `ticket-review` (+ planning skills), with `.claude/skills/` links | Vendored by `sync-mattpocock-skills.sh` |
-| — | `.gitignore` (`/.ticket-loop/*.log`, `*.jsonl`), `deny` in `.claude/settings.json` | Merged |
+| — | `.gitignore` (`/.ticket-loop/*.log`, `*.jsonl`, `stops/`), `deny` in `.claude/settings.json` | Merged |
 | — | 6 GitHub labels, git credentials (gh), Orca registration | Created when missing |
 | — | `.ticket-loop/kit.json` | Records the installed kit commit |
 
@@ -172,6 +172,23 @@ Slack setup (once per computer):
 4. Phone alerts: set the channel to notify on all new messages, or keep it at mentions only and let `SLACK_MENTION` ring only on stops.
 5. Check: the loop's startup lines show `notifications: desktop + Slack` and "Ticket loop started" appears in the channel. `--dry-run` sends nothing.
 
+## Triage: the loop tries to fix what stopped it
+
+Noticing a stop and getting to it usually takes longer than the fix. On rental-portal spec #96 a post-merge check failed at 15:43; the fix was three lines of test expectations, and the loop ran again at 19:08. So with `LOOP_TRIAGE=1` (the default) the loop does not stop right away in four cases. It writes a stop record, starts a **triage session** (an agent in a fresh worktree `loop-triage-N-<time>`, started the same way as a worker) with `/loop-triage <record>`, and waits, still holding the lock, for a verdict file (`resume` or `halt`). Slack gets "triage started" and then the outcome.
+
+| Stop | Triage session | On `resume` the loop |
+|---|---|---|
+| Post-merge check failed (retry included) | Compares the failure with the merged PR's diff, fixes the test expectation or the code, runs only the failing test files, opens a fix PR into the default branch. An unrelated timeout is rerun and called a flake | Labels the fix PR `loop-triage`, merges it after CI, reruns the post-merge check on the merged branch (`post-merge-N-after-triage.log`), continues if it passes |
+| CI failure or conflict after the repair rounds, or no new commit after a repair | Pushes a fix to the ticket PR's branch. A threshold such as a bundle-size ceiling is raised only when the ticket's own change justifies it, with the reason in a PR comment. A CI infrastructure error gets `gh run rerun --failed` | Continues from that PR's conflict/CI check |
+| `WORKTREE_SETUP_CMD` failed (cmux, tmux) | Reproduces the setup and fixes the repository script or lockfile in a fix PR, or nothing if it was transient | Merges the fix PR, fast-forwards the worker worktree (and the main checkout when it is on the default branch; git refuses a merge that would touch local changes) and reruns the setup |
+| Worker stopped without a PR | Diagnosis only: summarizes what the worker was stuck on. It does not answer the worker's question | (always stops) |
+
+The loop resumes where it stopped instead of starting over, because a fresh run skips a ticket with an open PR or an assignee. On `halt`, no verdict (timeout or idle), a failing fix PR, or the same stop again after resuming, the loop stops with the verdict summary appended to the reason (Slack mention) and keeps the triage worktree. It triages at most `TRIAGE_MAX` times per run (default 1) and each stop once; `TRIAGE_TIMEOUT_SEC` (default 3600) bounds a session.
+
+The session runs the `loop-triage` skill committed on the default branch, so nothing is triaged until the kit install PR is merged (the startup lines say so). It never edits the main checkout or kit-owned files: a loop bug ends in a kit bug report next to the stop record (`<id>.kit-bug.md`) for you to file, so the repository's logs and code never go to the (public) kit repository on their own. It does not weaken tests without a reason quoted from the merged PR, does not merge, and does not touch local processes, production, or secrets. Other stops (ticket timeout, lost terminal, agent start failure, merge failure, signals, `set -e`) are not triaged: they are not points the loop can safely resume from.
+
+Every stop, triaged or not, leaves `.ticket-loop/stops/<id>.json` (reason, issue, PR, log paths, worktrees, the command to rerun) and its id in the issue comment. To pick it up yourself, run `/loop-triage <id>` (`$loop-triage` in Codex) in an agent session in that repository; it reads the record and any earlier verdict, and asks before merging.
+
 ## Working on the kit
 
 - After changing the loop script, regenerate Appendix D and the PDF: `python3 docs/sync-guide.py && bash docs/build-pdf.sh` (`tests/smoke.sh` checks that Appendix D matches).
@@ -197,6 +214,7 @@ Not yet verified:
 - The label creation and Orca registration steps of `install.sh` (turned off in testing).
 - `/setup-ticket-loop` beyond one run on boiler-webapp.
 - Linux and WSL. The Linux branches have never executed; try the tmux backend inside WSL first. Orca driven from WSL through `orca-ide` is an open question (Windows app vs. Linux AppImage under WSLg, path mapping).
+- Triage on a real stop. `tests/smoke.sh` drives `triage` against fake backends and `gh` (verdicts, fix-PR merge, push, limits, no verdict, timeout, a session that fails to start) and the setup retry with real git, but no real agent has run the `loop-triage` skill yet.
 - Codex as the worker. The preset, prompts, skill layout, `AGENTS.md`, `.codex/rules/ticket-loop.rules`, and `--agent codex` are in place, but nothing has run on a machine with Codex installed: idle detection, `$implement` picking up the skill, repair prompts, and whether the rules file loads under `--dangerously-bypass-approvals-and-sandbox`.
 - The source repository rsrehab/rental-portal still uses its own `scripts/orca-ticket-loop.sh`.
 - Of the stop paths, only two signals (SIGHUP and SIGTERM) ran for real. `die`, `set -e`, Ctrl-C and SIGPIPE were checked by the smoke test (fake `gh` and `curl`) and by pty and `tee` experiments.

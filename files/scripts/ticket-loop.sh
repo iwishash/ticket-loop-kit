@@ -18,6 +18,8 @@ set -euo pipefail
 #      모델 표)을 REPORT_DIR/spec-<N>.html에 쓰고 브라우저로 연다(REPORT_OPEN=0이면 열지 않음)
 #   8. 이번 실행에서 끝난 스펙이 있으면 회고를 권하는 안내 한 줄을 남긴다(/retro로 읽을 자료 안내). 권고일 뿐 아무것도 실행하지 않는다 —
 #      회고는 사람이 후보를 보고 고르는 단계라 무인으로 돌리지 않는다
+# 그 사이 멈출 일이 생기면(병합 뒤 검증 실패, 수리를 다 쓴 CI 실패·충돌, 워크트리 준비 실패, PR 없이 멈춘 워커) 멈추기 전에 수습 세션을
+# 띄운다(LOOP_TRIAGE, 아래 "무인 수습" 절). 고쳐지면 멈춘 자리에서 이어 가고, 못 고치면 진단을 실어 멈춘다
 #
 # 사용법:
 #   ticket-loop.sh                     # 준비된 티켓 전부
@@ -102,6 +104,10 @@ set -euo pipefail
 #                       두고도 멈출 때만 폰이 울린다. Ctrl-C로 멈춘 것(사람이 앞에 있다)에는 붙이지 않는다
 #   STOPPED_LABEL       루프가 멈춘 티켓에 붙이는 라벨 (기본 loop-stopped, 없으면 만든다). 기록용이다 — 대상 선택은 이 라벨을 보지 않고,
 #                       루프가 그 티켓을 병합하면 뗀다
+#   LOOP_TRIAGE         멈출 일이 생기면 수습 세션을 띄우는지 (기본 1). 0이면 전처럼 바로 멈춘다. 아래 "무인 수습" 절
+#   TRIAGE_MAX          한 실행에서 수습 세션을 띄우는 최대 횟수 (기본 1). 다 쓰면 그 뒤의 멈춤은 수습 없이 멈춘다
+#   TRIAGE_TIMEOUT_SEC  수습 세션 한 번의 제한 시간 (기본 3600 = 1시간)
+#   TRIAGE_LABEL        수습 세션이 낸 수정 PR에 붙이는 라벨 (기본 loop-triage, 없으면 만든다) — 사람이 나중에 몰아서 본다
 #
 # 멈추는 조건(루프 종료, 워크트리는 조사용으로 남긴다):
 #   - 워커가 PR 없이 멈춤(질문·실패) / 티켓 타임아웃 / 백엔드 터미널 끊김 / 에이전트 기동 실패
@@ -115,6 +121,22 @@ set -euo pipefail
 # STOPPED_LABEL을 남기고(GitHub 기록 — 루프는 본인 계정으로 쓰므로 GitHub는 본인에게 알리지 않는다. 알림이 아니라 기록이다),
 # 데스크톱과 Slack(SLACK_WEBHOOK_URL)에 알린다. Slack에는 루프 시작·티켓 완료·루프 종료도 간다.
 # kill -9·전원 꺼짐·잠자기처럼 스크립트가 아무것도 보내지 못하는 경우는 잡지 못한다.
+# 멈출 때마다 멈춤 기록(.ticket-loop/stops/<id>.json — 사유·이슈·PR·로그 경로·워크트리·다시 실행할 명령, 기계별)을 남긴다.
+# 사람은 그 저장소의 에이전트 세션에서 /loop-triage <id>(Codex는 $loop-triage)로 그 기록부터 이어받는다.
+#
+# 무인 수습(LOOP_TRIAGE=1, 기본): 아래 네 경우에는 멈추기 전에 멈춤 기록을 쓰고, 워커처럼 새 워크트리에 에이전트를 띄워
+# `/loop-triage <기록>`을 시킨 뒤 판정 파일(<id>.verdict.json — resume | halt)을 기다린다. Slack에는 "수습 시작"과 결과가 간다.
+#   - 병합 뒤 검증 실패(재실행까지 실패) → 수습 세션이 수정 PR을 내면 루프가 CI 뒤 병합하고, 병합된 기본 브랜치로 검증을 다시 돌려
+#     통과하면 이어 간다(플레이크로 판정하면 수정 없이 검증만 다시 돌린다)
+#   - 수리를 다 쓴 CI 실패·충돌·수리 뒤 새 커밋 없음 → 수습 세션이 티켓 PR 브랜치에 고쳐 push하면(또는 CI 플레이크면 실패한 job을 다시 돌리면)
+#     CI 대기부터 이어 간다
+#   - WORKTREE_SETUP_CMD 실패(cmux·tmux) → 수정 PR을 병합하면 워크트리를 기본 브랜치로 당기고(메인 체크아웃도 기본 브랜치면 fast-forward)
+#     준비를 다시 돌린다
+#   - 워커가 PR 없이 멈춤 → 진단만 한다. 판단이 필요한 질문이 많아 답하지 않고, 요약을 실어 멈춘다
+# 판정이 halt이거나, 판정 없이 끝나거나(제한 시간·idle), 수정 PR의 CI가 실패하거나, 이어 간 뒤 같은 곳에서 또 실패하면 진단을 사유에 붙여
+# 멈춘다(수습 세션의 워크트리는 남긴다). 한 실행에 TRIAGE_MAX번까지, 같은 멈춤에는 한 번만. 수습 세션은 기본 브랜치에 커밋된
+# loop-triage 스킬을 쓰므로 키트 설치 PR이 병합되기 전에는 띄우지 않는다. 그 밖의 멈춤(타임아웃, 터미널 끊김, 에이전트 기동 실패,
+# 병합 실패, 신호, set -e)은 수습 없이 멈춘다 — 어디서든 안전하게 이어 갈 수 있는 자리가 아니다.
 
 ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"   # 저장소 루트. 도구 검사 뒤 git으로 다시 확정한다
 LOOP_ENV="$ROOT/.ticket-loop/loop.env"
@@ -167,6 +189,10 @@ HEARTBEAT_SEC="${HEARTBEAT_SEC:-300}"
 SLACK_WEBHOOK_URL="${SLACK_WEBHOOK_URL:-}"
 SLACK_MENTION="${SLACK_MENTION:-}"
 STOPPED_LABEL="${STOPPED_LABEL:-loop-stopped}"
+LOOP_TRIAGE="${LOOP_TRIAGE:-1}"
+TRIAGE_MAX="${TRIAGE_MAX:-1}"
+TRIAGE_TIMEOUT_SEC="${TRIAGE_TIMEOUT_SEC:-3600}"
+TRIAGE_LABEL="${TRIAGE_LABEL:-loop-triage}"
 # 파일 경로는 시작 때 한 번 저장소 루트 기준 절대 경로로 굳힌다(loop.env나 환경변수로 상대 경로를 줘도 같다). 루프는 저장소
 # 루트에서 돌지만, 병합 뒤 검증처럼 다른 디렉터리로 cd 한 서브셸에서 여는 파일은 그 디렉터리 기준이 된다 — 실측(0.8.3,
 # rental-portal #101)에서 post-merge-N.log가 검증 워크트리 안에 생기고 루프는 저장소 루트에서 꼬리를 찾지 못했다.
@@ -217,6 +243,7 @@ NO_MERGE=0
 POST_MERGE=1
 MAX=0
 TICKETS=()
+ORIG_ARGS=("$@")   # 멈춤 기록의 "다시 실행할 명령"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -279,9 +306,13 @@ dim_lines() { local l; while IFS= read -r l || [[ -n "$l" ]]; do printf '%s%s%s%
 # 알림은 데스크톱(자리에 있을 때)과 Slack(SLACK_WEBHOOK_URL — 자리를 비웠을 때) 두 곳으로 간다. 어느 쪽이 실패해도 루프 결과는 바뀌지 않는다.
 # STOP_ISSUE: 멈추면 GitHub 기록을 남길 티켓. CUR_N(티켓 기록)은 병합 기록을 쓰면 비지만, 그 뒤 병합 뒤 검증이 실패해도 그 티켓의 멈춤이다
 REPO_URL=""; STOP_ISSUE=""; STOP_REPORTED=0; LOCK_HELD=0; BG_PID=""
+# STOP_KIND: 멈춤 기록의 종류(post_merge_failed·ci_failed·setup_failed·worker_no_pr·signal·unexpected_exit, 그 밖은 비워 other).
+# STOP_RECORD: 이번 멈춤에 이미 쓴 멈춤 기록(무인 수습이 쓴 것) — stop_report가 같은 멈춤을 두 번 기록하지 않게
+STOP_KIND=""; STOP_RECORD=""
 fmt_epoch() { date -r "$1" '+%H:%M:%S' 2>/dev/null || date -d "@$1" '+%H:%M:%S'; }   # macOS / Linux
 
-# notify 제목 본문 [종류 [꼬리]] — 종류 start | done | flaky | stop | interrupt | finish(Slack 아이콘·멘션), 꼬리는 Slack에만 코드 블록으로 붙는다
+# notify 제목 본문 [종류 [꼬리]] — 종류 start | done | flaky | triage | resumed | stop | interrupt | finish(Slack 아이콘·멘션),
+# 꼬리는 Slack에만 코드 블록으로 붙는다
 notify() {
   if command -v osascript >/dev/null 2>&1; then
     # 문구를 AppleScript 소스에 끼우지 않고 인자로 넘긴다 — 티켓 제목·멈춤 사유의 따옴표가 스크립트를 깨지 않게
@@ -302,7 +333,8 @@ slack_post() {
       --arg repo "${OWNER_REPO:-${ROOT##*/}}" --arg url "$REPO_URL" --arg host "$(hostname -s 2>/dev/null || hostname)" '
     def esc: gsub("&"; "&amp;") | gsub("<"; "&lt;") | gsub(">"; "&gt;");
     def link: if $url == "" then . else gsub("#(?<n>[0-9]+)"; "<\($url)/issues/\(.n)|#\(.n)>") end;
-    ({start: ":arrow_forward:", done: ":white_check_mark:", flaky: ":warning:", stop: ":octagonal_sign:", interrupt: ":octagonal_sign:"}[$kind] // ":checkered_flag:") as $icon
+    ({start: ":arrow_forward:", done: ":white_check_mark:", flaky: ":warning:", triage: ":hammer_and_wrench:", resumed: ":recycle:",
+      stop: ":octagonal_sign:", interrupt: ":octagonal_sign:"}[$kind] // ":checkered_flag:") as $icon
     | {text: ("\($icon) *\($title | esc)* · \($repo | esc) · \($host | esc)\n"
         + (if $kind == "stop" and $mention != "" then "\($mention) " else "" end)
         + ($body | esc | link)
@@ -316,14 +348,51 @@ die() { log err "ERROR: $*"; stop_report "$*"; exit 1; }
 # 이 실행이 로그 파일에 쓴 부분(LOG_START_BYTES 뒤). 같은 날 앞 실행의 줄은 빠진다
 run_log() { tail -c "+$(( ${LOG_START_BYTES:-0} + 1 ))" "$LOG_FILE" 2>/dev/null || true; }
 
-# 멈춤 보고는 한 번만 — die, 신호, 예기치 않은 종료가 모두 여기로 온다. 진행 중 티켓을 stopped로 기록하고(스펙 리포트), 그 이슈에
-# GitHub 기록을 남기고, 알린다. Slack에는 로그 끝 12줄을 붙인다 — 워커 화면 꼬리가 들어 있어 "왜 멈췄나"가 폰에서 보인다.
-# $1 사유, $2 stop | interrupt(Ctrl-C — 사람이 앞에 있으니 멘션하지 않는다)
+# 멈춤 기록 — /loop-triage가 읽는 JSON 한 파일(ROOT/.ticket-loop/stops/<id>.json, 기계별 — 커밋하지 않는다). 무인 수습을 띄울 때 한 번,
+# 수습 없이 멈출 때는 stop_report가 한 번 쓴다 — 사람이 나중에 /loop-triage로 이어받을 자리다. 경로를 stdout에 쓴다.
+# 로그는 경로와 이 실행이 쓰기 시작한 바이트(loop_from_byte)만 적는다 — 내용은 수습 세션이 그 머신에서 직접 읽는다.
+# $1 종류(STOP_KIND), $2 사유, $3 unattended(루프가 수습 세션을 띄운다) | manual(아무도 수습하지 않았다)
+write_stop_record() {
+  local kind="$1" reason="$2" mode="$3" dir="${ROOT}/.ticket-loop/stops" id file a
+  local kitjson="${ROOT}/.ticket-loop/kit.json" rerun="bash scripts/ticket-loop.sh" wt="" log=""
+  id="$(date '+%Y%m%d-%H%M%S')-${STOP_ISSUE:-0}"
+  file="${dir}/${id}.json"
+  for a in ${ORIG_ARGS[@]+"${ORIG_ARGS[@]}"}; do rerun+=" $(printf '%q' "$a")"; done
+  [[ -z "${WT_PATH:-}" || ! -d "${WT_PATH:-}" ]] || wt="$WT_PATH"
+  [[ "${LOG_FILE:-/dev/null}" == /dev/null ]] || log="$LOG_FILE"
+  mkdir -p "$dir" || return 1
+  jq -n --arg id "$id" --arg kind "${kind:-other}" --arg mode "$mode" --arg reason "$reason" --arg created "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" \
+    --arg repo "${OWNER_REPO:-}" --arg base "${BASE_BRANCH:-}" --arg issue "${STOP_ISSUE:-}" --arg title "${CUR_TITLE:-}" \
+    --arg spec "${PARENT:-}" --arg pr "${CUR_PR:-}" --arg wt "$wt" --arg main "${MAIN_WT:-$ROOT}" \
+    --arg log "$log" --argjson from "${LOG_START_BYTES:-0}" --arg pm_log "${POST_MERGE_LOG:-}" --arg pm_retry_log "${POST_MERGE_RETRY_LOG:-}" \
+    --arg pm_wt "${POST_MERGE_WT:-}" --arg pm_cmd "${POST_MERGE_CMD:-}" --arg pm_retry_cmd "${POST_MERGE_RETRY_CMD:-}" \
+    --arg setup_cmd "${WORKTREE_SETUP_CMD:-}" --arg rerun "$rerun" --arg verdict "${dir}/${id}.verdict.json" \
+    --arg agent "${AGENT:-}" --arg backend "${BACKEND:-}" \
+    --arg kit_version "$(jq -r '.version // empty' "$kitjson" 2>/dev/null || true)" --arg kit_repo "$(jq -r '.kit // empty' "$kitjson" 2>/dev/null || true)" '
+    def num: if . == "" then null else tonumber end;
+    def str: if . == "" then null else . end;
+    {id: $id, kind: $kind, mode: $mode, created_at: $created, reason: $reason,
+     repo: ($repo | str), base_branch: ($base | str), issue: ($issue | num), title: ($title | str), spec: ($spec | num), pr: ($pr | num),
+     worker_worktree: ($wt | str), main_checkout: $main,
+     logs: {loop: ($log | str), loop_from_byte: $from, post_merge: ($pm_log | str), post_merge_retry: ($pm_retry_log | str)},
+     post_merge_worktree: ($pm_wt | str),
+     commands: {post_merge: ($pm_cmd | str), post_merge_retry: ($pm_retry_cmd | str), worktree_setup: ($setup_cmd | str)},
+     rerun: $rerun, verdict_file: $verdict, agent: ($agent | str), backend: ($backend | str),
+     kit: {version: ($kit_version | str), repo: ($kit_repo | str)}}' > "$file" || return 1
+  printf '%s' "$file"
+}
+
+# 멈춤 보고는 한 번만 — die, 신호, 예기치 않은 종료가 모두 여기로 온다. 진행 중 티켓을 stopped로 기록하고(스펙 리포트), 멈춤 기록을
+# 남기고(무인 수습이 이미 남겼으면 그것), 그 이슈에 GitHub 기록을 남기고, 알린다. Slack에는 로그 끝 12줄을 붙인다 — 워커 화면 꼬리가
+# 들어 있어 "왜 멈췄나"가 폰에서 보인다. $1 사유, $2 stop | interrupt(Ctrl-C — 사람이 앞에 있으니 멘션하지 않는다)
 stop_report() {
   [[ $STOP_REPORTED -eq 0 ]] || return 0
   STOP_REPORTED=1
   local reason="$1" kind="${2:-stop}" tail=""
   [[ -z "${CUR_N:-}" ]] || record_ticket "stopped" "$reason"
+  if [[ $LOCK_HELD -eq 1 && -z "$STOP_RECORD" ]]; then
+    STOP_RECORD="$(write_stop_record "$STOP_KIND" "$reason" manual 2>/dev/null)" || STOP_RECORD=""
+  fi
   if [[ $LOCK_HELD -eq 1 && "$LOG_FILE" != "/dev/null" && -f "$LOG_FILE" ]]; then
     sleep 1   # 로그 파일은 tee가 비동기로 쓴다 — 방금 찍은 ERROR 줄·워커 화면이 파일에 들어오게
     tail="$(run_log | tail -n 12)"
@@ -345,6 +414,7 @@ github_stop_record() {
   [[ -z "${CUR_PR:-}" ]] || body+="- PR #${CUR_PR}"$'\n'
   [[ -z "${WT_PATH:-}" || ! -d "${WT_PATH:-}" ]] || body+="- 워크트리 \`${WT_PATH/#"$HOME"/$tilde}\` — 조사용으로 남겨 둠"$'\n'
   [[ "$LOG_FILE" == "/dev/null" ]] || body+="- 루프 로그 \`${LOG_FILE#"$ROOT"/}\` (그 머신에만 있다)"$'\n'
+  [[ -z "$STOP_RECORD" ]] || body+="- 멈춤 기록 \`${STOP_RECORD#"$ROOT"/}\` (그 머신에만 있다) — 이어받으려면 그 저장소의 에이전트 세션에서 \`${SKILL_PREFIX:-/}loop-triage $(basename "$STOP_RECORD" .json)\`"$'\n'
   [[ -z "$lines" ]] || body+=$'\n'"<details><summary>루프 로그 마지막 $(grep -c . <<<"$lines")줄</summary>"$'\n\n```text\n'"${lines}"$'\n```\n\n</details>\n'
   gh label create "$STOPPED_LABEL" --color B60205 --description "ticket-loop가 이 티켓에서 멈춤(기록용)" </dev/null >/dev/null 2>&1 || true
   gh issue comment "$n" --body "$body" </dev/null >/dev/null 2>&1 || log warn "#${n}: failed to post the stop record to GitHub"
@@ -364,6 +434,23 @@ post_merge_flaky_record() {
   notify "Post-merge check passed on retry" "#${n}: first run failed in ${first_sec}s, retry passed in ${retry_sec}s — likely flaky (logs ${first_log##*/}, ${retry_log##*/})" flaky
 }
 
+# 무인 수습이 고쳐 이어 갈 때의 기록 — 그 이슈에 코멘트(멈춘 이유·분류·요약·조치)를 달고 멘션 없이 알린다. 멈춤이 아니라 STOPPED_LABEL은
+# 붙이지 않는다. 멈춘 이유는 루프 자신의 문구라 로컬 경로가 섞일 수 있어 홈을 ~로 줄인다.
+# $1 이슈(0이면 코멘트 없음) $2 멈춘 이유 $3 분류 $4 요약 $5 조치(영어 — 알림) $6 조치(한국어 — 코멘트)
+triage_resume_record() {
+  local n="$1" body tilde='~' prefix=""
+  if [[ "$n" != 0 ]]; then
+    prefix="#${n}: "
+    body="**ticket-loop 무인 수습 — 이어 감**"$'\n\n'
+    body+="- 멈춘 이유: ${2//"$HOME"/$tilde}"$'\n'
+    body+="- 분류 \`$3\` — $4"$'\n'
+    body+="- 조치: $6. 루프는 멈춘 자리에서 이어 갔다"$'\n'
+    body+="- 머신 \`$(hostname -s 2>/dev/null || hostname)\`${STOP_RECORD:+ · 멈춤 기록 \`${STOP_RECORD#"$ROOT"/}\` (그 머신에만 있다)}"$'\n'
+    gh issue comment "$n" --body "$body" </dev/null >/dev/null 2>&1 || log warn "#${n}: failed to post the triage record to GitHub"
+  fi
+  notify "Triage fixed it — loop continues" "${prefix}$4 ($5)" resumed
+}
+
 # 모든 종료가 지나는 길(EXIT). die와 정상 종료는 따로 처리했고, 그 밖의 비정상 종료 — set -e에 걸린 명령(네트워크가 끊겨 git fetch·gh가
 # 실패하는 등) — 는 걸린 명령을 사유로 보고한다(trap 안의 BASH_COMMAND는 trap이 걸린 때의 명령이다). 잠금은 이 실행이 잡았을 때만 푼다
 on_exit() {
@@ -373,6 +460,7 @@ on_exit() {
     trap '' PIPE
     [[ ${#cmd} -le 200 ]] || cmd="${cmd:0:200}…"
     log err "ERROR: unexpected exit (status ${rc}) at: ${cmd}"
+    STOP_KIND=unexpected_exit
     stop_report "${STOP_ISSUE:+#${STOP_ISSUE}: }unexpected exit (status ${rc}) at: ${cmd}"
   fi
   [[ $LOCK_HELD -eq 0 ]] || rmdir "$LOCK_DIR" 2>/dev/null
@@ -395,6 +483,7 @@ on_signal() {
     *)    why="terminated (SIG${sig})" ;;
   esac
   log err "ERROR: ${why}"
+  STOP_KIND=signal
   stop_report "${STOP_ISSUE:+#${STOP_ISSUE}: }${why}" "$kind"
   case "$sig" in HUP) exit 129 ;; INT) exit 130 ;; PIPE) exit 141 ;; *) exit 143 ;; esac
 }
@@ -502,8 +591,9 @@ pick_targets() {
 # 루프가 워크트리·에이전트 터미널에 대해 하는 일은 아래 아홉 가지뿐이다. 백엔드마다 같은 이름의 함수(<backend>_*)를 구현하고
 # BACKEND로 고른다. 티켓 선택·PR·CI·수리·병합·병합 뒤 검증·기록·리포트는 백엔드와 무관하게 한 벌이다.
 #   _check                       시작 때 한 번: CLI가 있고 앱에 닿는지, 저장소가 등록돼 있는지
-#   _worktree_create N PROMPT    기본 브랜치에서 워크트리를 만들고 에이전트를 띄운다. 전역 WT(백엔드의 워크트리/워크스페이스 id),
-#                                WT_PATH, WT_BRANCH(백엔드가 만든 브랜치 — 워커가 바꾸기 전 이름), HANDLE(에이전트 터미널)을 채운다
+#   _worktree_create N PROMPT [NAME]  기본 브랜치에서 워크트리를 만들고 에이전트를 띄운다. 전역 WT(백엔드의 워크트리/워크스페이스 id),
+#                                WT_PATH, WT_BRANCH(백엔드가 만든 브랜치 — 워커가 바꾸기 전 이름), HANDLE(에이전트 터미널)을 채운다.
+#                                NAME(워크트리·브랜치 이름)은 기본 <BRANCH_PREFIX>N — 무인 수습 세션은 loop-triage-N-<시각>을 준다
 #   _worktree_remove WT WT_PATH  워크트리를 지운다(브랜치 정리는 공통부가 한다)
 #   _send HANDLE TEXT            프롬프트 한 줄을 에이전트 입력에 넣고 제출한다. 수락되지 않으면 비0
 #   _type HANDLE TEXT            셸 명령 한 줄을 입력하고 Enter(에이전트 재기동용 — 에이전트 입력 검사 없이)
@@ -541,10 +631,12 @@ orca_check() {
 }
 
 orca_worktree_create() {
-  local n="$1" prompt="$2" created
-  created="$(orca_json worktree create --repo "id:$REPO_ID" --name "${BRANCH_PREFIX}${n}" --no-parent \
+  local n="$1" prompt="$2" name="${3:-${BRANCH_PREFIX}${1}}" comment created
+  comment="티켓 루프: ${SKILL_PREFIX}implement ${n} 진행 중"
+  [[ "$name" == "${BRANCH_PREFIX}${n}" ]] || comment="티켓 루프: 무인 수습 (#${n})"
+  created="$(orca_json worktree create --repo "id:$REPO_ID" --name "$name" --no-parent \
     --base-branch "origin/${BASE_BRANCH}" --issue "${n}" --agent "$AGENT" \
-    --prompt "$prompt" --comment "티켓 루프: ${SKILL_PREFIX}implement ${n} 진행 중")"
+    --prompt "$prompt" --comment "$comment")"
   jq -e '.ok == true' <<<"$created" >/dev/null || die "Worktree creation failed: $(jq -c '.error' <<<"$created")"
   WT="$(jq -r '.result.worktree.id' <<<"$created")"
   WT_PATH="${WT#*::}"
@@ -613,21 +705,30 @@ claude_trust_check() {
 }
 
 # 워크트리는 루프가 git으로 만든다 (Orca는 orca worktree create가 한다)
-# WT_PATH·WT_BRANCH를 채운다. 백엔드는 그 위에 에이전트 터미널을 연다
+# WT_PATH·WT_BRANCH를 채운다. 백엔드는 그 위에 에이전트 터미널을 연다. $2 이름(기본 <BRANCH_PREFIX>N)
+# 워커 워크트리의 준비(WORKTREE_SETUP_CMD)가 실패하면 수습 세션을 띄워 본다 — 고쳐지면 워크트리를 기본 브랜치로 당겨 준비를 다시 돌리고,
+# 아니면 멈춘다. 수습 세션 자신의 워크트리는 준비가 실패해도 띄운다(그 실패를 수습 세션이 직접 본다)
 loop_worktree_add() {
-  local n="$1" path
-  path="${WORKTREE_DIR}/${BRANCH_PREFIX}${n}"
+  local n="$1" name="${2:-${BRANCH_PREFIX}${1}}" path reason
+  path="${WORKTREE_DIR}/${name}"
   [[ ! -e "$path" ]] || die "Worktree path already exists: ${path} (if left over from a previous run, 'git worktree remove --force' it and retry)"
   mkdir -p "$WORKTREE_DIR"
-  git -C "$ROOT" branch -D "${BRANCH_PREFIX}${n}" >/dev/null 2>&1 || true
-  git -C "$ROOT" worktree add -q -b "${BRANCH_PREFIX}${n}" "$path" "origin/${BASE_BRANCH}" || die "git worktree add failed (${path})"
+  git -C "$ROOT" branch -D "$name" >/dev/null 2>&1 || true
+  git -C "$ROOT" worktree add -q -b "$name" "$path" "origin/${BASE_BRANCH}" || die "git worktree add failed (${path})"
   if [[ -n "$WORKTREE_SETUP_CMD" ]]; then
     log step "#${n}: worktree setup — ${WORKTREE_SETUP_CMD}"
-    bg_wait env LOOP_ROOT_PATH="$MAIN_WT" LOOP_WORKTREE_PATH="$path" bash -c 'cd "$1" && exec bash -c "$2"' _ "$path" "$WORKTREE_SETUP_CMD" \
-      || die "#${n}: WORKTREE_SETUP_CMD failed (${path})"
+    while ! bg_wait env LOOP_ROOT_PATH="$MAIN_WT" LOOP_WORKTREE_PATH="$path" bash -c 'cd "$1" && exec bash -c "$2"' _ "$path" "$WORKTREE_SETUP_CMD"; do
+      reason="#${n}: WORKTREE_SETUP_CMD failed (${path})"
+      if [[ "$name" != "${BRANCH_PREFIX}${n}" ]]; then log warn "${reason} — starting the session anyway"; break; fi
+      STOP_KIND=setup_failed
+      triage setup_failed "$reason" || die "${reason}${TRIAGE_NOTE}"
+      git -C "$path" merge --ff-only -q "origin/${BASE_BRANCH}" \
+        || die "#${n}: could not fast-forward the worktree to origin/${BASE_BRANCH} after the triage fix (${path})"
+      log step "#${n}: worktree setup again after triage — ${WORKTREE_SETUP_CMD}"
+    done
   fi
   WT_PATH="$path"
-  WT_BRANCH="${BRANCH_PREFIX}${n}"
+  WT_BRANCH="$name"
 }
 
 # ----- cmux: 워크트리는 루프가 git으로 만들고, 터미널은 cmux 워크스페이스다 (cmux 0.65 실측) -----
@@ -654,10 +755,10 @@ cmux_check() {
 }
 
 cmux_worktree_create() {
-  local n="$1" prompt="$2" out pf
-  loop_worktree_add "$n"
+  local n="$1" prompt="$2" name="${3:-${BRANCH_PREFIX}${1}}" out pf
+  loop_worktree_add "$n" "$name"
   pf="$(prompt_file "$n" "$prompt")"
-  out="$(cmux_j workspace create --name "${BRANCH_PREFIX}${n}" --cwd "$WT_PATH" --focus false --id-format uuids \
+  out="$(cmux_j workspace create --name "$name" --cwd "$WT_PATH" --focus false --id-format uuids \
            --command "$(agent_launch_cmd "$pf")" 2>/dev/null)" || die "cmux workspace create failed"
   WT="$(jq -r '.workspace_id // empty' <<<"$out" 2>/dev/null || true)"
   HANDLE="$(jq -r '.surface_id // empty' <<<"$out" 2>/dev/null || true)"
@@ -785,15 +886,15 @@ tmux_state() { cat "$TMUX_STATE_FILE" 2>/dev/null || true; }
 tmux_alive() { "$TMUX_CLI" display -p -t "$1" '#{pane_id}' >/dev/null 2>&1; }
 
 tmux_worktree_create() {
-  local n="$1" prompt="$2" out pf
-  loop_worktree_add "$n"
+  local n="$1" prompt="$2" name="${3:-${BRANCH_PREFIX}${1}}" out pf
+  loop_worktree_add "$n" "$name"
   TMUX_STATE_FILE="$TMUX_DIR/state/$(basename "$WT_PATH")"
   printf 'running\n' > "$TMUX_STATE_FILE"   # 지난 실행의 idle이 남아 있으면 기동 직후를 idle로 오판한다
   if "$TMUX_CLI" has-session -t "=${TMUX_SESSION}" 2>/dev/null; then
-    out="$("$TMUX_CLI" new-window -d -t "=${TMUX_SESSION}:" -n "${BRANCH_PREFIX}${n}" -c "$WT_PATH" -P -F '#{window_id} #{pane_id}')" \
+    out="$("$TMUX_CLI" new-window -d -t "=${TMUX_SESSION}:" -n "$name" -c "$WT_PATH" -P -F '#{window_id} #{pane_id}')" \
       || die "tmux new-window failed"
   else
-    out="$("$TMUX_CLI" new-session -d -s "$TMUX_SESSION" -n "${BRANCH_PREFIX}${n}" -c "$WT_PATH" -x 200 -y 50 -P -F '#{window_id} #{pane_id}')" \
+    out="$("$TMUX_CLI" new-session -d -s "$TMUX_SESSION" -n "$name" -c "$WT_PATH" -x 200 -y 50 -P -F '#{window_id} #{pane_id}')" \
       || die "tmux new-session failed"
   fi
   WT="${out%% *}"; HANDLE="${out##* }"
@@ -869,8 +970,10 @@ worker_prompt() {
 # (`laude …`) 셸 프롬프트에 멈춘 실측이 있다(4연속). 배너가 안 보이면 입력 줄을 지우고 한 번 다시 띄운다.
 agent_banner_seen() { terminal_tail "$1" 2>/dev/null | grep -Eq "$AGENT_BANNER_REGEX"; }
 
+# $3 다시 띄울 때 줄 프롬프트(기본 워커 프롬프트 — 무인 수습 세션은 자기 프롬프트를 준다)
 ensure_agent_started() {
-  local n="$1" handle="$2" i attempt promptfile
+  local n="$1" handle="$2" prompt="${3:-}" i attempt promptfile
+  [[ -n "$prompt" ]] || prompt="$(worker_prompt "${n}")"
   for attempt in 1 2; do
     for i in $(seq 1 $(( AGENT_START_WAIT_SEC / 3 ))); do
       agent_banner_seen "${handle}" && return 0
@@ -878,7 +981,7 @@ ensure_agent_started() {
     done
     [[ $attempt -eq 1 ]] || break
     log warn "#${n}: agent did not start — relaunching in the terminal"
-    promptfile="$(prompt_file "${n}" "$(worker_prompt "${n}")")"
+    promptfile="$(prompt_file "${n}" "$prompt")"
     backend_interrupt "${handle}" || true   # Ctrl-C로 입력 줄 비움
     sleep 1
     backend_type "${handle}" "$(agent_launch_cmd "${promptfile}")" || die "#${n}: failed to send the relaunch command"
@@ -1067,10 +1170,12 @@ wait_post_merge_port() {
   done
 }
 
-# 반환 0: 통과(재실행에서 통과한 것 포함), 1: 실패(로그 꼬리를 남긴다)
+# 반환 0: 통과(재실행에서 통과한 것 포함), 1: 실패(로그 꼬리를 남긴다). $2 로그 이름에 붙일 꼬리표 — 무인 수습 뒤 다시 돌릴 때
+# (post-merge-N-after-triage.log) 앞 실행의 로그를 덮지 않게
 run_post_merge() {
-  local n="$1" wt logfile retry_log started first_sec retry_sec f
+  local n="$1" tag="${2:-}" wt logfile retry_log started first_sec retry_sec f
   wt="$(post_merge_worktree_path)"
+  POST_MERGE_WT="$wt"
   if [[ ! -d "$wt/.git" && ! -f "$wt/.git" ]]; then
     mkdir -p "$(dirname "$wt")"
     git -C "$ROOT" worktree add -q --detach "$wt" "origin/${BASE_BRANCH}" || { log warn "#${n}: failed to create the post-merge check worktree (${wt})"; return 1; }
@@ -1082,8 +1187,8 @@ run_post_merge() {
   done
   wait_post_merge_port "$n" || return 1
   # 검증 로그는 LOG_FILE과 같은 디렉터리(절대 경로 — 아래 리다이렉트는 cd 한 뒤의 서브셸에서 열리므로 상대 경로면 워크트리 안에 생긴다)
-  logfile="${TMPDIR:-/tmp}/ticket-loop-post-merge-${n}.log"
-  [[ "$LOG_FILE" == "/dev/null" ]] || logfile="$(dirname "$LOG_FILE")/post-merge-${n}.log"
+  logfile="${TMPDIR:-/tmp}/ticket-loop-post-merge-${n}${tag}.log"
+  [[ "$LOG_FILE" == "/dev/null" ]] || logfile="$(dirname "$LOG_FILE")/post-merge-${n}${tag}.log"
   POST_MERGE_LOG="$logfile"; POST_MERGE_RETRY_LOG=""
   mkdir -p "$(dirname "$logfile")"
   started="$(date +%s)"
@@ -1115,6 +1220,197 @@ run_post_merge() {
   POST_MERGE_RESULT="failed on retry in $(( $(date +%s) - started ))s (first run failed in ${first_sec}s)"
   log warn "#${n}: post-merge retry failed too — tail ---"; tail -n 40 "$retry_log" | dim_lines || true
   return 1
+}
+
+# ---------- 무인 수습 ----------
+# 멈출 일이 생긴 자리 네 곳(머리 주석 "무인 수습" 절)에서 바로 die하지 않고 triage를 부른다. 수습 세션은 워커와 같은 길
+# (backend_worktree_create)로 새 워크트리에 띄운 에이전트이고, 할 일은 기본 브랜치에 커밋된 loop-triage 스킬이 정한다(멈춤 기록을 읽고
+# 분류 → 고치거나 진단 → 판정 파일). 루프는 판정 파일만 보고, 수정 PR은 티켓 PR처럼 CI 뒤에 병합한다 — 수습 세션은 병합하지 않는다.
+# 이어 가는 곳은 멈춘 그 자리다. 처음부터 다시 실행하면 진행 중인 티켓(PR이 열렸거나 담당자가 붙은)을 자동 선택이 건너뛰어 버린다.
+# 루프 스크립트 자체(키트 관리 파일)는 수습 세션이 고치지 않는다 — 루프 버그는 진단과 키트 버그 보고서까지만 하고 멈춘다
+
+TRIAGE_USED=0; TRIAGE_KEYS=""; TRIAGE_NOTE=""; TRIAGE_RESULT=""; TRIAGE_FIX_PR=""
+
+triage_skill_on_base() { git -C "$ROOT" cat-file -e "origin/${BASE_BRANCH}:.agents/skills/loop-triage/SKILL.md" 2>/dev/null; }
+
+# 한 줄로 보낸다(워커 프롬프트와 같은 이유). 무인 실행에서만 참인 것 — 질문 금지, 병합 금지, 판정 파일 — 만 둔다. 절차는 스킬이 단일 진실이다
+triage_prompt() {
+  printf '%s' "${SKILL_PREFIX}loop-triage $1 — 무인 루프(ticket-loop.sh)가 멈춘 지점에서 띄운 수습 세션이다. 사람이 답할 수 없으니 사람에게 묻거나 확인을 구하지 말고(질문 도구도 쓰지 말고) 스스로 판단해 끝까지 진행해라. PR은 병합하지 마라 — 루프가 CI 뒤에 병합한다. 마지막에 판정을 $2 에 써라."
+}
+
+# 수습 세션의 워크트리와 에이전트를 띄운다. bg_wait로(백그라운드 서브셸에서) 부른다 — 백엔드 함수는 실패하면 die하는데, 여기서의 실패가
+# 원래 멈춤 사유를 덮으면 안 되므로 die를 "이 서브셸만 끝냄"으로 바꾼다(EXIT trap은 서브셸에 이어지지 않는다).
+# 결과(WT, WT_PATH, WT_BRANCH, HANDLE)를 $4 파일에 탭으로 쓴다
+triage_spawn() {
+  local n="$1" prompt="$2" name="$3" out="$4"
+  set -e
+  die() { log warn "#${n}: triage session did not start — $*"; exit 1; }
+  WT=""; WT_PATH=""; WT_BRANCH=""; HANDLE=""
+  backend_worktree_create "$n" "$prompt" "$name"
+  ensure_agent_started "$n" "$HANDLE" "$prompt"
+  printf '%s\t%s\t%s\t%s\n' "$WT" "$WT_PATH" "$WT_BRANCH" "$HANDLE" > "$out"
+}
+
+verdict_written() { jq -e '.verdict == "resume" or .verdict == "halt"' "$1" >/dev/null 2>&1; }
+
+# 수습 세션이 판정 파일을 쓸 때까지 기다린다 — wait_for_pr와 같은 틀(idle 연속 IDLE_STRIKES번이면 판정 없이 멈춘 것, 그사이 화면이 바뀌면
+# 새로 센다). bg_wait로 부른다. 진행 로그는 수습 워크트리를 본다("#N triage: commit …").
+# 반환: 0 판정 있음, 1 판정 없이 멈춤, 2 시간 초과, 3 터미널 끊김
+wait_for_verdict() {
+  local n="$1" handle="$2" vfile="$3" deadline="$4" wt_path="$5" strikes=0 started idle last_screen="" screen wait_ms
+  started="$(date +%s)"; wait_ms="$(idle_wait_ms)"
+  [[ "$PROGRESS_SEC" -le 0 ]] || progress_reset "$wt_path"
+  while :; do
+    if verdict_written "$vfile"; then
+      terminal_idle "$handle" 120000 || true   # 판정을 쓴 뒤 마무리(코멘트 등)가 끝나도록 잠깐
+      return 0
+    fi
+    [[ "$(date +%s)" -lt "$deadline" ]] || return 2
+    idle=0; terminal_idle "$handle" "$wait_ms" || idle=$?
+    [[ $idle -ne 3 ]] || return 3
+    [[ "$PROGRESS_SEC" -le 0 ]] || progress_check "${n} triage"
+    if [[ $idle -eq 0 ]]; then
+      if [[ $(( $(date +%s) - started )) -lt $STARTUP_GRACE_SEC ]]; then sleep "$IDLE_RECHECK_SEC"; continue; fi
+      sleep "$IDLE_RECHECK_SEC"
+      ! verdict_written "$vfile" || continue
+      screen="$(terminal_tail "$handle" | cksum | cut -d' ' -f1)"
+      if [[ "$screen" != "$last_screen" ]]; then strikes=0; last_screen="$screen"; fi
+      strikes=$((strikes + 1))
+      log warn "#${n}: triage session idle, no verdict (${strikes}/${IDLE_STRIKES})"
+      [[ ${strikes} -lt $IDLE_STRIKES ]] || return 1
+      sleep "$IDLE_RECHECK_SEC"
+    else
+      strikes=0
+    fi
+  done
+}
+
+# 수습 세션이 낸 수정 PR을 티켓 PR처럼 병합한다 — 기본 브랜치로 가는 열린 PR인지 보고, TRIAGE_LABEL을 붙이고, CI를 기다려 병합한다.
+# 반환 1이면 TRIAGE_NOTE에 이유를 남긴다
+triage_merge_fix_pr() {
+  local pr="$1" info state base head
+  info="$(gh pr view "$pr" --json state,baseRefName,headRefName 2>/dev/null)" || { TRIAGE_NOTE=" (fix PR #${pr} not found)"; return 1; }
+  state="$(jq -r .state <<<"$info")"; base="$(jq -r .baseRefName <<<"$info")"; head="$(jq -r .headRefName <<<"$info")"
+  [[ "$state" == OPEN && "$base" == "$BASE_BRANCH" ]] \
+    || { TRIAGE_NOTE=" (fix PR #${pr} is not an open PR into ${BASE_BRANCH}: ${state}, base ${base})"; return 1; }
+  gh label create "$TRIAGE_LABEL" --color 1D76DB --description "ticket-loop 무인 수습이 낸 수정 PR" </dev/null >/dev/null 2>&1 || true
+  gh pr edit "$pr" --add-label "$TRIAGE_LABEL" </dev/null >/dev/null 2>&1 || log warn "fix PR #${pr}: failed to add the ${TRIAGE_LABEL} label"
+  if ci_expected "$pr"; then
+    log step "triage: waiting for CI (fix PR #${pr})"
+    ci_passed "$pr" || { TRIAGE_NOTE=" (fix PR #${pr}: CI failed — gh pr checks ${pr})"; return 1; }
+    log ok "triage: fix PR #${pr} CI passed"
+  else
+    log step "triage: fix PR #${pr} excluded by the repository CI path filter — merging without checks"
+  fi
+  gh pr merge "$pr" "--$MERGE_METHOD" || { TRIAGE_NOTE=" (fix PR #${pr}: merge failed)"; return 1; }
+  log ok "triage: fix PR #${pr} merged"
+  git -C "$ROOT" push -q origin --delete "$head" >/dev/null 2>&1 || true
+  git -C "$ROOT" fetch -q origin "$BASE_BRANCH" || true
+}
+
+# 메인 체크아웃이 기본 브랜치에 있으면 fast-forward한다 — WORKTREE_SETUP_CMD가 메인 체크아웃의 스크립트를 부르는 저장소에서도 수정 PR이
+# 반영되게(예: "$LOOP_ROOT_PATH/scripts/worktree-setup.sh"). git은 로컬 변경을 덮는 merge를 거부하므로 사람의 미커밋 변경은 그대로다
+sync_main_checkout() {
+  local cur
+  cur="$(git -C "$MAIN_WT" rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
+  if [[ "$cur" != "$BASE_BRANCH" ]]; then
+    log warn "main checkout is on ${cur:-?}, not ${BASE_BRANCH} — left as is (files the setup reads from it are not updated)"
+  elif git -C "$MAIN_WT" merge --ff-only -q "origin/${BASE_BRANCH}" 2>/dev/null; then
+    log step "main checkout fast-forwarded to origin/${BASE_BRANCH}"
+  else
+    log warn "main checkout could not fast-forward to origin/${BASE_BRANCH} (local changes in the way, or diverged) — left as is"
+  fi
+}
+
+# triage 종류 사유 — 멈출 자리에서 수습 세션을 띄우고 판정을 기다린다. 반환 0: 고쳐졌으니 멈춘 자리에서 이어 간다(이어 갈 수 있는 종류의
+# resume만), 1: 멈춘다 — 부른 쪽이 사유 뒤에 TRIAGE_NOTE(판정 요약, 또는 띄우지 않은 이유)를 붙여 die한다.
+# 띄우지 않는 경우: LOOP_TRIAGE=0, 잠금을 안 잡은 실행, 이 실행에서 TRIAGE_MAX번을 다 씀, 같은 멈춤(종류·이슈)에 이미 띄움, 기본 브랜치에
+# loop-triage 스킬이 아직 없음. TRIAGE_RESULT(티켓 기록·스펙 리포트), TRIAGE_FIX_PR(병합한 수정 PR)을 남긴다
+triage() {
+  local kind="$1" reason="$2" n="${STOP_ISSUE:-0}" resumable=0 key stopfile vfile prompt name tmp deadline rc=0 why
+  local t_wt="" t_path="" t_branch="" t_handle="" saved_state="${TMUX_STATE_FILE:-}"
+  local verdict category summary fix_pr pushed kit_bug action action_ko
+  TRIAGE_NOTE=""; TRIAGE_FIX_PR=""
+  case "$kind" in post_merge_failed|ci_failed|setup_failed) resumable=1 ;; worker_no_pr) ;; *) return 1 ;; esac
+  [[ "$LOOP_TRIAGE" == 1 && $LOCK_HELD -eq 1 ]] || return 1
+  key="${kind}#${n}"
+  if [[ " ${TRIAGE_KEYS} " == *" ${key} "* ]]; then TRIAGE_NOTE=" (triage already ran for this stop)"; return 1; fi
+  if [[ $TRIAGE_USED -ge $TRIAGE_MAX ]]; then TRIAGE_NOTE=" (no triage: ${TRIAGE_USED}/${TRIAGE_MAX} used in this run)"; return 1; fi
+  git -C "$ROOT" fetch -q origin "$BASE_BRANCH" 2>/dev/null || true
+  if ! triage_skill_on_base; then
+    log warn "#${n}: no triage — the loop-triage skill is not on origin/${BASE_BRANCH} yet (merge the kit install PR)"
+    TRIAGE_NOTE=" (no triage: loop-triage skill not on origin/${BASE_BRANCH})"; return 1
+  fi
+  TRIAGE_USED=$((TRIAGE_USED + 1)); TRIAGE_KEYS="${TRIAGE_KEYS} ${key}"
+  STOP_KIND="$kind"
+  stopfile="$(write_stop_record "$kind" "$reason" unattended)" \
+    || { log warn "#${n}: no triage — could not write the stop record"; TRIAGE_NOTE=" (no triage: stop record not written)"; return 1; }
+  STOP_RECORD="$stopfile"; vfile="${stopfile%.json}.verdict.json"
+  log warn "#${n}: stopping — ${reason}"
+  log step "#${n}: triage — starting a session (stop record ${stopfile#"$ROOT"/})"
+  sleep 1   # 로그 파일은 tee가 비동기로 쓴다 — 위 줄이 Slack 꼬리에 들어가게
+  notify "Ticket loop stopped — triage started" "$reason" triage "$(run_log | tail -n 12)"
+
+  name="loop-triage-${n}-$(date +%H%M%S)"
+  prompt="$(triage_prompt "$stopfile" "$vfile")"
+  tmp="$(mktemp "${TMPDIR:-/tmp}/ticket-loop-triage-${n}.XXXXXX")"
+  if ! bg_wait triage_spawn "$n" "$prompt" "$name" "$tmp" || [[ ! -s "$tmp" ]]; then
+    rm -f "$tmp"
+    TRIAGE_NOTE=" (triage session did not start — see the loop log)"; TRIAGE_RESULT="no session"
+    return 1
+  fi
+  IFS=$'\t' read -r t_wt t_path t_branch t_handle < "$tmp"; rm -f "$tmp"
+  [[ "$BACKEND" != tmux ]] || TMUX_STATE_FILE="$TMUX_DIR/state/$(basename "$t_path")"   # tmux_* 가 보는 훅 상태 파일 — 끝나면 되돌린다
+  backend_set_status "$t_wt" in-progress || true
+  log step "#${n}: triage session ${t_wt} (${t_path}) / terminal ${t_handle} — waiting for a verdict (up to $((TRIAGE_TIMEOUT_SEC / 60))m)"
+  deadline=$(( $(date +%s) + TRIAGE_TIMEOUT_SEC ))
+  bg_wait wait_for_verdict "$n" "$t_handle" "$vfile" "$deadline" "$t_path" || rc=$?
+  if [[ $rc -ne 0 ]]; then
+    case $rc in 2) why="timed out after $((TRIAGE_TIMEOUT_SEC / 60))m" ;; 3) why="lost the session terminal" ;; *) why="the session stopped without a verdict" ;; esac
+    log warn "#${n}: triage: ${why} — session output tail ---"; terminal_tail "$t_handle" | dim_lines || true
+    TMUX_STATE_FILE="$saved_state"
+    backend_set_status "$t_wt" todo "" "무인 수습: 판정 없이 끝남 — 확인 필요" || true
+    TRIAGE_NOTE=" — triage: ${why} (session worktree ${t_path})"; TRIAGE_RESULT="no verdict: ${why}"
+    return 1
+  fi
+  TMUX_STATE_FILE="$saved_state"
+
+  verdict="$(jq -r '.verdict' "$vfile")"
+  category="$(jq -r '.category // "unknown"' "$vfile")"
+  summary="$(jq -r '.summary // "" | gsub("[\r\n]+"; " ")' "$vfile")"
+  fix_pr="$(jq -r '.fix_pr // empty | tostring | select(test("^[0-9]+$"))' "$vfile" 2>/dev/null || true)"
+  pushed="$(jq -r 'if .pushed_to_pr == true then 1 else 0 end' "$vfile")"
+  kit_bug="$(jq -r '.kit_bug_report // empty' "$vfile")"
+  log "#${n}: triage verdict: ${verdict} (${category}) — ${summary}"
+  if [[ "$verdict" == resume && $resumable -eq 0 ]]; then log warn "#${n}: triage: ${kind} is diagnosis only — stopping"; verdict=halt; fi
+  if [[ "$verdict" == resume && -n "$fix_pr" && "$fix_pr" == "${CUR_PR:-}" ]]; then pushed=1; fix_pr=""; fi   # 티켓 PR 번호를 적었다 = 그 브랜치에 push
+  if [[ "$verdict" == resume && -n "$fix_pr" ]]; then
+    if triage_merge_fix_pr "$fix_pr"; then
+      TRIAGE_FIX_PR="$fix_pr"
+      [[ "$kind" != setup_failed ]] || sync_main_checkout
+    else
+      verdict=halt
+    fi
+  fi
+  if [[ "$verdict" != resume ]]; then
+    backend_set_status "$t_wt" todo "" "무인 수습: 멈춤 — 확인 필요" || true
+    TRIAGE_NOTE=" — triage (${category}): ${summary}${TRIAGE_NOTE}${kit_bug:+ · kit bug report ${kit_bug}}"
+    TRIAGE_RESULT="halt (${category}): ${summary}"
+    return 1
+  fi
+
+  if [[ -n "$TRIAGE_FIX_PR" ]]; then action="fix PR #${TRIAGE_FIX_PR} merged"; action_ko="수정 PR #${TRIAGE_FIX_PR} 병합"
+  elif [[ $pushed -eq 1 ]]; then action="pushed to PR #${CUR_PR:-?}"; action_ko="PR #${CUR_PR:-?} 브랜치에 push"
+  else action="no code change"; action_ko="코드 변경 없음"; fi
+  backend_set_status "$t_wt" completed "" "무인 수습: 이어 감 (${action_ko})" || true
+  backend_worktree_remove "$t_wt" "$t_path" || log warn "#${n}: failed to remove the triage worktree — clean up manually (${t_wt}, ${t_path})"
+  git -C "$ROOT" worktree prune || true
+  [[ -z "$t_branch" || "$t_branch" == HEAD || "$t_branch" == "$BASE_BRANCH" ]] || git -C "$ROOT" branch -D "$t_branch" >/dev/null 2>&1 || true
+  log ok "#${n}: triage: resuming (${action}) — ${summary}"
+  TRIAGE_RESULT="resumed (${category}, ${action}): ${summary}"
+  triage_resume_record "$n" "$reason" "$category" "$summary" "$action" "$action_ko"
+  STOP_KIND=""; STOP_RECORD=""
+  return 0
 }
 
 # ---------- 티켓 기록 · 스펙 리포트 ----------
@@ -1179,10 +1475,12 @@ record_ticket() {
   jq -cn --argjson spec "${spec:-0}" --argjson issue "$CUR_N" --arg title "$CUR_TITLE" --arg result "$result" --arg reason "$reason" \
     --arg pr "$CUR_PR" --arg started "$CUR_STARTED_ISO" --arg finished "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" \
     --argjson wall "$(( $(date +%s) - CUR_STARTED ))" --arg ci "$CUR_CI_SEC" --argjson repairs "$CUR_ROUND" \
-    --argjson idle "$(idle_fp_count)" --arg post "${POST_MERGE_RESULT:-}" --arg model "$CUR_MODEL" --arg agent "$AGENT" '
+    --argjson idle "$(idle_fp_count)" --arg post "${POST_MERGE_RESULT:-}" --arg model "$CUR_MODEL" --arg agent "$AGENT" \
+    --arg triage "${TRIAGE_RESULT:-}" '
     {spec: $spec, issue: $issue, title: $title, result: $result, started: $started, finished: $finished, wall_sec: $wall,
      repairs: $repairs, idle_false_positives: $idle, agent: $agent}
     + (if $reason != "" then {reason: $reason} else {} end)
+    + (if $triage != "" then {triage: $triage} else {} end)
     + (if $pr != "" then {pr: ($pr | tonumber)} else {} end)
     + (if $ci != "" then {ci_sec: ($ci | tonumber)} else {} end)
     + (if $post != "" then {post_merge: $post} else {} end)
@@ -1256,6 +1554,7 @@ def post: if . == "건너뜀" then "skipped"
             (if .rec.ci_sec == null then empty elif .rec.ci_sec < 0 then "no CI (path excluded from CI)" else "CI \(.rec.ci_sec | dur)" end),
             "\(.rec.repairs // 0) repair\(if (.rec.repairs // 0) == 1 then "" else "s" end)",
             (if .rec.post_merge then @html "post-merge check \(.rec.post_merge | post)" else empty end),
+            (if .rec.triage then @html "triage \(.rec.triage)" else empty end),
             (if .attempts > 1 then "\(.attempts) attempts" else empty end)] | join(" · ")) + "</div>" else "" end)
       + "</td><td class=\"nw\">" + (if .wall == null then "—" else (.wall.sec | dur) + (if .wall.src == "pr" then "<div class=\"muted small\">PR created→merged</div>" else "" end) end) + "</td>"
       + @html "<td class=\"nw\">\(.model)</td>"
@@ -1305,6 +1604,7 @@ run_ticket() {
   log title "=== #${n} ${title} ==="
   CUR_N="$n"; CUR_TITLE="$title"; CUR_STARTED="$started_at"; CUR_STARTED_ISO="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"; STOP_ISSUE="$n"
   CUR_PR=""; CUR_MODEL=""; CUR_CI_SEC=""; CUR_ROUND=0
+  STOP_KIND=""; STOP_RECORD=""; TRIAGE_RESULT=""
 
   git -C "$ROOT" fetch -q origin "$BASE_BRANCH"
 
@@ -1317,7 +1617,7 @@ run_ticket() {
   ensure_agent_started "${n}" "${handle}"
   CUR_MODEL="$(detect_model "${handle}")"
 
-  local pr rc=0 model_now prfile
+  local pr rc=0 model_now prfile reason
   progress_reset "${wt_path}"
   prfile="$(mktemp "${TMPDIR:-/tmp}/ticket-loop-pr-${n}.XXXXXX")"
   bg_wait wait_for_pr "${n}" "${handle}" "$deadline" > "$prfile" || rc=$?   # 신호에 바로 깨도록(bg_wait)
@@ -1327,18 +1627,27 @@ run_ticket() {
     backend_set_status "${wt}" todo "" "루프 중단: PR 없이 멈춤 — 확인 필요" || true
     [[ $rc -ne 2 ]] || die "#${n}: ticket timed out (${TICKET_TIMEOUT_SEC}s)"
     [[ $rc -ne 3 ]] || die "#${n}: cannot reach ${BACKEND_NAME} terminal ${handle} (${BACKEND_NAME} app closed?). The worktree is still on disk."
-    die "#${n}: worker stopped without a PR (a question or a failure?). Check the ${BRANCH_PREFIX}${n} worktree in ${BACKEND_NAME}."
+    reason="#${n}: worker stopped without a PR (a question or a failure?). Check the ${BRANCH_PREFIX}${n} worktree in ${BACKEND_NAME}."
+    STOP_KIND=worker_no_pr
+    triage worker_no_pr "$reason" || true   # 진단만 — 요약을 사유에 붙여 멈춘다
+    die "${reason}${TRIAGE_NOTE}"
   fi
   log step "#${n}: PR #${pr} opened"
   progress_sync
   CUR_PR="$pr"; model_now="$(detect_model "${handle}")"; [[ -z "$model_now" ]] || CUR_MODEL="$model_now"
   backend_set_status "${wt}" in-review "${pr}" "PR #${pr} — CI 대기" || true
 
+  # 수리를 다 쓰면 멈추기 전에 무인 수습을 한 번 띄운다(ci_failed) — 수습 세션이 PR 브랜치에 고쳐 push하면 이 고리의 처음(충돌·CI 확인)부터
+  # 이어 간다. 그래도 실패하면 수습 횟수를 이미 써서 그대로 멈춘다
   local round=0 state before
   while :; do
     state="$(mergeable_state "${pr}")"
     if [[ "$state" == "CONFLICTING" ]]; then
-      [[ ${round} -lt $REPAIR_ROUNDS ]] || die "#${n}: PR #${pr} conflicts with ${BASE_BRANCH} (${REPAIR_ROUNDS} repair round(s) used up)"
+      if [[ ${round} -ge $REPAIR_ROUNDS ]]; then
+        reason="#${n}: PR #${pr} conflicts with ${BASE_BRANCH} (${REPAIR_ROUNDS} repair round(s) used up)"
+        STOP_KIND=ci_failed; triage ci_failed "$reason" && continue
+        die "${reason}${TRIAGE_NOTE}"
+      fi
       round=$((round + 1)); CUR_ROUND=$round; log warn "#${n}: conflict → asking the worker to repair (${round})"
       repair "${handle}" "PR #${pr} 이 ${BASE_BRANCH}과 충돌한다. \`git fetch origin && git merge origin/${BASE_BRANCH}\`으로 충돌을 해결하고 테스트·lint를 다시 돌린 뒤 같은 브랜치에 push해라. 질문하지 말고 끝까지 해라." "$deadline" \
         || die "#${n}: timed out while repairing the conflict"
@@ -1352,12 +1661,20 @@ run_ticket() {
     log step "#${n}: waiting for CI (PR #${pr})"
     ci_started="$(date +%s)"
     if ci_passed "${pr}"; then ci_sec=$(( $(date +%s) - ci_started )); break; fi
-    [[ ${round} -lt $REPAIR_ROUNDS ]] || die "#${n}: PR #${pr} CI failed (${REPAIR_ROUNDS} repair round(s) used up). See gh pr checks ${pr}."
+    if [[ ${round} -ge $REPAIR_ROUNDS ]]; then
+      reason="#${n}: PR #${pr} CI failed (${REPAIR_ROUNDS} repair round(s) used up). See gh pr checks ${pr}."
+      STOP_KIND=ci_failed; triage ci_failed "$reason" && continue
+      die "${reason}${TRIAGE_NOTE}"
+    fi
     round=$((round + 1)); CUR_ROUND=$round; log warn "#${n}: CI failed → asking the worker to repair (${round})"
     before="$(pr_head_sha "${pr}")"
     repair "${handle}" "PR #${pr} 의 CI가 실패했다. \`gh pr checks ${pr}\` 와 \`gh run view --log-failed\` 로 원인을 보고 고친 뒤 테스트·lint를 다시 돌리고 같은 브랜치에 push해라. 테스트를 건너뛰거나 지우지 마라. 질문하지 말고 끝까지 해라." "$deadline" \
       || die "#${n}: timed out while repairing CI"
-    [[ "$(pr_head_sha "${pr}")" != "$before" ]] || die "#${n}: no new commit was pushed after the repair"
+    if [[ "$(pr_head_sha "${pr}")" == "$before" ]]; then
+      reason="#${n}: no new commit was pushed after the repair"
+      STOP_KIND=ci_failed; triage ci_failed "$reason" && continue
+      die "${reason}${TRIAGE_NOTE}"
+    fi
   done
   log ok "#${n}: CI passed"
   CUR_CI_SEC="$ci_sec"
@@ -1394,11 +1711,32 @@ run_ticket() {
     git -C "$ROOT" branch -D "${orca_branch}" >/dev/null 2>&1 || true
   fi
   git -C "$ROOT" push -q origin --delete "${branch}" >/dev/null 2>&1 || true
-  log ok "#${n} summary: wall-clock $(( ($(date +%s) - started_at) / 60 ))m, PR #${pr}, CI $([[ $ci_sec -ge 0 ]] && echo "${ci_sec}s" || echo "none (path excluded from CI)"), repairs ${round}, idle false positives $(idle_fp_count), post-merge check ${POST_MERGE_RESULT}"
+  # 병합 뒤 검증이 실패했으면 멈추기 전에 무인 수습을 띄운다(post_merge_failed). 수정 PR이 병합되면(또는 플레이크로 판정하면) 병합된 기본
+  # 브랜치로 검증을 다시 돌리고(로그 post-merge-N-after-triage.log) 통과하면 이어 간다. 이 티켓은 이미 병합됐으므로 수습 결과와 무관하게
+  # 기록은 merged다 — 멈추면 die가 알린다.
+  # 재실행까지 실패했으면 두 로그를 다 적는다. 재실행이 실패한 테스트를 못 찾아 끝냈을 수도, 같은 플레이크가 또 났을 수도 있어 판단은 수습 세션(또는 사람)이 한다
+  if [[ $post_rc -ne 0 ]]; then
+    if [[ -z "$POST_MERGE_RETRY_LOG" ]]; then
+      reason="#${n}: post-merge check failed on the merged ${BASE_BRANCH}. Check the log (${POST_MERGE_LOG}) and the check worktree ($(post_merge_worktree_path)), then rerun after a fix PR."
+    else
+      reason="#${n}: post-merge check failed on the merged ${BASE_BRANCH}, and again on retry. Check the logs (first run ${POST_MERGE_LOG}, retry ${POST_MERGE_RETRY_LOG}) and the check worktree ($(post_merge_worktree_path)). If it looks like a flake, just rerun; otherwise rerun after a fix PR."
+    fi
+    STOP_KIND=post_merge_failed
+    if triage post_merge_failed "$reason"; then
+      local first_result="$POST_MERGE_RESULT"
+      post_rc=0; run_post_merge "${n}" -after-triage || post_rc=$?
+      POST_MERGE_RESULT="${first_result}; after triage${TRIAGE_FIX_PR:+ (fix PR #${TRIAGE_FIX_PR})}: ${POST_MERGE_RESULT}"
+      if [[ $post_rc -ne 0 ]]; then
+        STOP_KIND=post_merge_failed
+        reason="#${n}: post-merge check failed again after triage${TRIAGE_FIX_PR:+ (fix PR #${TRIAGE_FIX_PR} merged)}. Check the logs (${POST_MERGE_LOG}${POST_MERGE_RETRY_LOG:+, retry ${POST_MERGE_RETRY_LOG}}) and the check worktree ($(post_merge_worktree_path))."
+      fi
+    else
+      reason+="$TRIAGE_NOTE"
+    fi
+  fi
+  log ok "#${n} summary: wall-clock $(( ($(date +%s) - started_at) / 60 ))m, PR #${pr}, CI $([[ $ci_sec -ge 0 ]] && echo "${ci_sec}s" || echo "none (path excluded from CI)"), repairs ${round}, idle false positives $(idle_fp_count), post-merge check ${POST_MERGE_RESULT}${TRIAGE_RESULT:+, triage ${TRIAGE_RESULT%%: *}}"
   record_ticket "merged"; CUR_N=""; rm -f "$IDLE_FP_FILE"
-  # 재실행까지 실패했으면 두 로그를 다 적는다. 재실행이 실패한 테스트를 못 찾아 끝냈을 수도, 같은 플레이크가 또 났을 수도 있어 판단은 사람이 한다
-  [[ $post_rc -eq 0 || -n "$POST_MERGE_RETRY_LOG" ]] || die "#${n}: post-merge check failed on the merged ${BASE_BRANCH}. Check the log (${POST_MERGE_LOG}) and the check worktree ($(post_merge_worktree_path)), then rerun after a fix PR."
-  [[ $post_rc -eq 0 ]] || die "#${n}: post-merge check failed on the merged ${BASE_BRANCH}, and again on retry. Check the logs (first run ${POST_MERGE_LOG}, retry ${POST_MERGE_RETRY_LOG}) and the check worktree ($(post_merge_worktree_path)). If it looks like a flake, just rerun; otherwise rerun after a fix PR."
+  [[ $post_rc -eq 0 ]] || die "$reason"
   notify "Ticket done" "#${n} ${title} — PR #${pr}, $(( ($(date +%s) - started_at) / 60 ))m" done
   STOP_ISSUE=""
 }
@@ -1410,6 +1748,10 @@ targets="$(pick_targets)"
 log "repository ${OWNER_REPO} / backend ${BACKEND_NAME} / base branch ${BASE_BRANCH} / label ${READY_LABEL}${SCOPE_LABEL:+ + ${SCOPE_LABEL}}${PARENT:+ / sub-issues of spec #${PARENT}}"
 log "post-merge check: $([[ $POST_MERGE -eq 1 ]] && echo "on — ${POST_MERGE_CMD}${POST_MERGE_RETRY_CMD:+ (retry once on failure: ${POST_MERGE_RETRY_CMD})}" || echo "off")"
 log "notifications: desktop$([[ -z "$SLACK_WEBHOOK_URL" ]] || echo " + Slack")"
+log "triage on stop: $([[ "$LOOP_TRIAGE" == 1 ]] && echo "on — up to ${TRIAGE_MAX} per run, $((TRIAGE_TIMEOUT_SEC / 60))m each" || echo "off")"
+if [[ "$LOOP_TRIAGE" == 1 ]] && ! triage_skill_on_base; then
+  log warn "note: the loop-triage skill is not on origin/${BASE_BRANCH} — stops are not triaged until the kit install is merged"
+fi
 if [[ -f "$LOOP_ENV" ]] && grep -q 'hooks\.slack\.com' "$LOOP_ENV"; then
   log warn "note: a Slack webhook URL is in .ticket-loop/loop.env, which is committed — move SLACK_WEBHOOK_URL to ${USER_LOOP_ENV} (anyone with the URL can post to the channel)"
 fi
@@ -1454,4 +1796,4 @@ close_spec_if_done "$PARENT"
 write_spec_report
 suggest_retro
 log ok "done: ${done_count} ticket$([[ $done_count -eq 1 ]] || echo s)"
-notify "Ticket loop finished" "${done_count} done$([[ -z "${CLOSED_SPECS// /}" ]] || echo " · spec${CLOSED_SPECS// / #} complete — consider /retro")" finish
+notify "Ticket loop finished" "${done_count} done$([[ $TRIAGE_USED -eq 0 ]] || echo " · ${TRIAGE_USED} triaged")$([[ -z "${CLOSED_SPECS// /}" ]] || echo " · spec${CLOSED_SPECS// / #} complete — consider /retro")" finish

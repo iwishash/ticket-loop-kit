@@ -12,7 +12,7 @@ set -euo pipefail
 #      setup-orca-loop skill and the old .gitignore lines
 #      0.7: moves skills from .claude/skills/<name> to .agents/skills/<name> and leaves a symbolic link behind (see below)
 #   1. Overwrites the managed files: scripts/ticket-loop.sh, scripts/ticket-state.sh, scripts/sync-mattpocock-skills.sh,
-#      .agents/skills/setup-ticket-loop/
+#      .agents/skills/setup-ticket-loop/, .agents/skills/loop-triage/ (what the loop's triage session runs when it stops)
 #   2. Places templates only when missing (project-owned afterwards): .agents/skills/implement and pr, .codex/rules/ticket-loop.rules
 #      (default branch filled in), .ticket-loop/worker-rules.md, docs/loop-reports/README.md, docs/agents/issue-tracker.md
 #      (GitHub tracker facts the vendored skills read)
@@ -21,7 +21,7 @@ set -euo pipefail
 #      --workflow-skills (default: keep what the previous install chose). Skills an earlier install vendored outside those sets
 #      are kept and synced, never removed, unless --prune-skills is given. Before touching anything it checks for the same skills
 #      installed another way (plugin, ~/.claude/skills, `npx skills`) and stops when two tools would fight over the same files
-#   4. Adds /.ticket-loop/*.log and /.ticket-loop/*.jsonl to .gitignore; merges deny rules into .claude/settings.json
+#   4. Adds /.ticket-loop/*.log, /.ticket-loop/*.jsonl and /.ticket-loop/stops/ to .gitignore; merges deny rules into .claude/settings.json
 #      (no gh pr merge, no force push, no direct push to the default branch). The Codex counterpart is .codex/rules (step 2)
 #   5. Creates the 6 GitHub labels, sets the repo-scoped git credential helper (gh), registers the repo with Orca
 #   6. Records the kit commit in .ticket-loop/kit.json
@@ -232,6 +232,7 @@ if ! grep -qxF '/.ticket-loop/*.log' .gitignore; then
   printf '%s# 티켓 루프 로그 — 규칙·설정 파일만 커밋한다\n/.ticket-loop/*.log\n' "$sep" >> .gitignore
 fi
 grep -qxF '/.ticket-loop/*.jsonl' .gitignore || printf '# 티켓 루프의 티켓별 기록(RECORDS_FILE) — 기계별 원자료. 스펙 리포트(docs/loop-reports/)만 커밋한다\n/.ticket-loop/*.jsonl\n' >> .gitignore
+grep -qxF '/.ticket-loop/stops/' .gitignore || printf '# 티켓 루프의 멈춤 기록과 수습 판정 — 기계별. /loop-triage가 읽는다\n/.ticket-loop/stops/\n' >> .gitignore
 
 mkdir -p .claude
 [[ -f .claude/settings.json ]] || echo '{}' > .claude/settings.json

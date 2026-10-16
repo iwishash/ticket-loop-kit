@@ -1,0 +1,6 @@
+# ticket-loop-kit 관리 파일: install.sh가 덮어쓴다. Codex용 메타데이터 — Claude Code는 SKILL.md의 frontmatter만 읽는다.
+interface:
+  display_name: "Triage a stopped ticket loop"
+  short_description: "Read the loop's stop record, fix what stopped it or diagnose it, and write the verdict the loop waits for"
+policy:
+  allow_implicit_invocation: false   # Claude Code의 disable-model-invocation: true 에 해당 — $loop-triage 로만 부른다
