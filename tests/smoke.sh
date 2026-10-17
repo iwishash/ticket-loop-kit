@@ -969,31 +969,125 @@ grep -q "^POST_MERGE_LOG=$PMD/repo/.ticket-loop/post-merge-7-after-triage.log PO
 echo "ok  무인 수습 연결(네 자리·수습 뒤 검증 로그 이름)"
 
 # idle 오판 수: wait_for_pr 는 서브셸(bg_wait)에서 돌아 변수로 세면 부모에 남지 않았다(0.8.9 까지 요약·기록이 늘 0).
-# 진짜 wait_for_pr 를 bg_wait 로 돌려, 오판(idle 뒤 다시 보니 PR 이 열려 있음) 한 번이 부모의 idle_fp_count 에 1 로 남는지 —
-# PR 을 찾은 경우와, 그 뒤 PR 없이 멈춘 경우(idle 세 번) 둘 다
+# 진짜 wait_for_pr 를 bg_wait 로 돌려 부모의 idle_fp_count 를 본다. 0.9.2 부터 오판은 일하던 워커를 idle 로 본 것만이다 —
+# idle 뒤 다시 보니 PR 이 열려 있어도 PR 이 idle 보다 먼저 열렸으면 일을 마친 워커(세지 않음), 나중이면 오판. PR 없이 센 idle 뒤에
+# 워커가 다시 일하면(화면이 바뀜·idle 이 풀림·PR 을 엶) 그 idle 들이 오판이고, idle 세 번으로 멈추면 그 연속 idle 은 오판이 아니다
 W="$T/idlefp"; mkdir -p "$W"
-sed -n '/^wait_for_pr() {/,/^}/p' "$KIT/files/scripts/ticket-loop.sh" > "$W/fn.sh"
-sed -n '/^idle_fp_count() /p' "$KIT/files/scripts/ticket-loop.sh" >> "$W/fn.sh"
-sed -n '/^bg_wait() {/,/^}/p' "$KIT/files/scripts/ticket-loop.sh" >> "$W/fn.sh"
-grep -q '^wait_for_pr() ' "$W/fn.sh" && grep -q '^idle_fp_count() ' "$W/fn.sh" && grep -q '^bg_wait() ' "$W/fn.sh" || fail "wait_for_pr·idle_fp_count·bg_wait 를 찾지 못함"
-idlefp_case() {  # $1 open_pr_for 가 PR 을 돌려줄 호출 번호들 → "종료 코드|PR|오판 수"
-  (cd "$W" && PR_AT="$1" CNT="$W/cnt" bash -c '
+for f in wait_for_pr idle_fp_add bg_wait pr_settle repair; do
+  sed -n "/^${f}() {/,/^}/p" "$KIT/files/scripts/ticket-loop.sh" >> "$W/fn.sh"
+  grep -q "^${f}() " "$W/fn.sh" || fail "${f} 를 찾지 못함"
+done
+sed -n '/^idle_fp_count() /p; /^ci_run_sec() {/,/^}/p' "$KIT/files/scripts/ticket-loop.sh" >> "$W/fn.sh"
+grep -q '^idle_fp_count() ' "$W/fn.sh" && grep -q '^ci_run_sec() ' "$W/fn.sh" || fail "idle_fp_count·ci_run_sec 를 찾지 못함"
+# $1 open_pr_for 가 PR 을 돌려줄 호출 번호들, $2 PR 생성 시각(지금 기준 초, 빈 값이면 못 읽음), $3 terminal_idle 이 "일하는 중"(1)을 돌려줄
+# 호출 번호들, $4 화면이 바뀌는 terminal_tail 호출 번호들 → "종료 코드|PR|오판 수"
+idlefp_case() {
+  (cd "$W" && PR_AT="$1" CREATED="$2" BUSY_AT="${3:-}" TAIL_NEW="${4:-}" CNT="$W/cnt" ICNT="$W/icnt" TCNT="$W/tcnt" bash -c '
     set -euo pipefail
-    echo 0 > "$CNT"
-    log() { :; }; terminal_idle() { return 0; }; terminal_tail() { echo same; }; idle_wait_ms() { echo 1; }
-    open_pr_for() { local c; c=$(( $(cat "$CNT") + 1 )); echo "$c" > "$CNT"; [[ " $PR_AT " != *" $c "* ]] || echo 77; }
+    echo 0 > "$CNT"; echo 0 > "$ICNT"; echo 0 > "$TCNT"
+    bump() { local c; c=$(( $(cat "$1") + 1 )); echo "$c" > "$1"; echo "$c"; }
+    log() { :; }; idle_wait_ms() { echo 1; }
+    terminal_idle() { local c; c="$(bump "$ICNT")"; [[ " $BUSY_AT " != *" $c "* ]] || return 1; return 0; }
+    terminal_tail() { local c v=0 k; c="$(bump "$TCNT")"; for k in $TAIL_NEW; do [[ $k -gt $c ]] || v=$((v + 1)); done; echo "screen$v"; }
+    open_pr_for() { local c; c="$(bump "$CNT")"; [[ " $PR_AT " != *" $c "* ]] || echo 77; }
+    pr_created_epoch() { [[ -z "$CREATED" ]] || echo $(( $(date +%s) + CREATED )); }
     PROGRESS_SEC=0; IDLE_WAIT_MS=1; STARTUP_GRACE_SEC=0; IDLE_RECHECK_SEC=0; IDLE_STRIKES=3
     source fn.sh
+    pr_settle() { :; }   # fn.sh 의 진짜 것을 덮는다(아래에서 따로 본다)
     IDLE_FP_FILE="$(mktemp)"; rc=0
     bg_wait wait_for_pr 7 h $(( $(date +%s) + 60 )) > out || rc=$?
     echo "$rc|$(cat out)|$(idle_fp_count)"; rm -f "$IDLE_FP_FILE"')
 }
-out="$(idlefp_case "2 3")"; [[ "$out" == "0|77|1" ]] || fail "idle 오판 뒤 PR 을 찾은 경우: $out (기대 0|77|1)"
-out="$(idlefp_case "2")"; [[ "$out" == "1||1" ]] || fail "idle 오판 뒤 PR 없이 멈춘 경우: $out (기대 1||1)"
+out="$(idlefp_case "2 3" -100)"; [[ "$out" == "0|77|0" ]] || fail "PR 을 연 뒤 idle(일을 마친 워커)을 오판으로 셈: $out (기대 0|77|0)"
+out="$(idlefp_case "2 3" 100)"; [[ "$out" == "0|77|1" ]] || fail "idle 을 잡은 뒤 열린 PR(일하던 워커): $out (기대 0|77|1)"
+out="$(idlefp_case "2 3" "")"; [[ "$out" == "0|77|0" ]] || fail "PR 생성 시각을 못 읽으면 세지 않아야: $out (기대 0|77|0)"
+out="$(idlefp_case "2" 100)"; [[ "$out" == "1||1" ]] || fail "오판 한 번 뒤 PR 없이 멈춘 경우: $out (기대 1||1)"
+out="$(idlefp_case "" 0)"; [[ "$out" == "1||0" ]] || fail "idle 세 번으로 멈춘 연속 idle 을 오판으로 셈: $out (기대 1||0)"
+out="$(idlefp_case "3" 0)"; [[ "$out" == "0|77|1" ]] || fail "PR 없이 센 idle 한 번 뒤 PR: $out (기대 0|77|1)"
+out="$(idlefp_case "" 0 "" "2")"; [[ "$out" == "1||1" ]] || fail "idle 뒤 화면이 바뀐 경우: $out (기대 1||1)"
+out="$(idlefp_case "4" 0 "2")"; [[ "$out" == "0|77|1" ]] || fail "idle 뒤 다시 일함(idle 풀림) 다음 PR: $out (기대 0|77|1)"
 [[ "$(cd "$W" && bash -c 'source fn.sh; IDLE_FP_FILE=; idle_fp_count; IDLE_FP_FILE=/nonexistent; idle_fp_count')" == $'0\n0' ]] || fail "idle_fp_count: 파일이 없으면 0"
 ! grep -q 'IDLE_FALSE_POSITIVES' "$KIT/files/scripts/ticket-loop.sh" || fail "부모에 남지 않는 변수 IDLE_FALSE_POSITIVES 를 아직 쓴다"
 grep -q 'idle false positives $(idle_fp_count)' "$KIT/files/scripts/ticket-loop.sh" && grep -q -- '--argjson idle "$(idle_fp_count)"' "$KIT/files/scripts/ticket-loop.sh" || fail "요약 줄·기록이 idle_fp_count 를 쓰지 않음"
-echo "ok  idle 오판 수가 서브셸(bg_wait)을 넘어 요약·기록에 남음"
+echo "ok  idle 오판 수(일하던 워커를 idle 로 본 것만)가 서브셸(bg_wait)을 넘어 요약·기록에 남음"
+
+# PR 을 찾은 뒤의 정리 대기(pr_settle): 이슈에 IN_REVIEW_LABEL 이 붙었으면 idle 을 기다리지 않고, idle 이면 바로, 둘 다 아니면
+# PR_SETTLE_SEC 에서 넘어간다(0.9.1 까지는 idle 하나만 10분 — cmux lifecycle 이 비면 10분을 다 썼다)
+settle_case() {  # $1 라벨 있음(1/0), $2 terminal_idle 종료 코드 → "idle 호출 수|경고 줄 수"
+  (cd "$W" && HAS="$1" IRC="$2" bash -c '
+    set -euo pipefail
+    n_idle=0; warns=0
+    issue_has_label() { [[ "$1" == 7 && "$2" == in-review && "$HAS" == 1 ]]; }
+    terminal_idle() { n_idle=$((n_idle + 1)); return "$IRC"; }
+    log() { [[ "$1" != warn ]] || warns=$((warns + 1)); }
+    IN_REVIEW_LABEL=in-review; PR_SETTLE_SEC=0
+    source fn.sh
+    pr_settle 7 h; echo "$n_idle|$warns"')
+}
+[[ "$(settle_case 1 1)" == "0|0" ]] || fail "pr_settle: 라벨이 있는데 idle 을 기다림: $(settle_case 1 1)"
+[[ "$(settle_case 0 0)" == "1|0" ]] || fail "pr_settle: idle 인데 넘어가지 않음: $(settle_case 0 0)"
+[[ "$(settle_case 0 3)" == "1|0" ]] || fail "pr_settle: 터미널에 닿지 못하는데 기다림: $(settle_case 0 3)"
+[[ "$(settle_case 0 1)" == "1|1" ]] || fail "pr_settle: 라벨도 idle 도 없으면 상한에서 한 줄 남기고 넘어가야: $(settle_case 0 1)"
+! grep -q 'terminal_idle "${handle}" "$IDLE_WAIT_MS"' "$KIT/files/scripts/ticket-loop.sh" || fail "PR 뒤에 아직 idle 을 IDLE_WAIT_MS(10분)까지 기다린다"
+echo "ok  PR 뒤 정리 대기(라벨·idle·상한)"
+
+# CI 소요는 GitHub 체크 시각으로: 가장 이른 시작 → 가장 늦은 끝. 시작 전 체크(0001-…)·빈 출력은 빼고, 못 읽으면 빈 값
+mkdir -p "$W/bin"
+cat > "$W/bin/gh" <<'GH'
+#!/usr/bin/env bash
+[[ "$1 $2" == "pr checks" ]] || exit 1
+printf '%s' "${CHECKS_JSON:-}"; exit "${CHECKS_RC:-0}"
+GH
+chmod +x "$W/bin/gh"
+ci_case() { (cd "$W" && PATH="$W/bin:$PATH" CHECKS_JSON="$1" CHECKS_RC="${2:-0}" bash -c 'set -euo pipefail; source fn.sh; v="$(ci_run_sec 162)"; echo "[$v]"'); }
+J='[{"startedAt":"2026-10-16T22:09:12Z","completedAt":"2026-10-16T22:10:17Z"},{"startedAt":"2026-10-16T22:09:12Z","completedAt":"2026-10-16T22:13:17Z"},{"startedAt":"2026-10-16T22:09:11Z","completedAt":"2026-10-16T22:10:50Z"}]'
+[[ "$(ci_case "$J")" == "[246]" ]] || fail "ci_run_sec: rental-portal PR #162 의 체크 시각에서 246초가 아님: $(ci_case "$J")"
+[[ "$(ci_case "$J" 8)" == "[246]" ]] || fail "ci_run_sec: gh 가 비0 으로 끝나도 출력은 읽어야: $(ci_case "$J" 8)"
+[[ "$(ci_case '[{"startedAt":"0001-01-01T00:00:00Z","completedAt":"0001-01-01T00:00:00Z"},{"startedAt":"2026-10-16T22:09:11.5Z","completedAt":"2026-10-16T22:10:50Z"}]')" == "[99]" ]] \
+  || fail "ci_run_sec: 시작 전 체크나 소수 초를 다루지 못함"
+[[ "$(ci_case '')" == "[]" && "$(ci_case '[]')" == "[]" && "$(ci_case 'not json')" == "[]" ]] || fail "ci_run_sec: 못 읽으면 빈 값이어야"
+grep -qF 'ci_sec="$(ci_run_sec "${pr}")"; [[ -n "$ci_sec" ]] || ci_sec=$(( $(date +%s) - ci_started ))' "$KIT/files/scripts/ticket-loop.sh" || fail "CI 통과 뒤 ci_run_sec 를 쓰지 않거나 못 읽을 때 루프가 잰 값으로 돌아가지 않음"
+echo "ok  CI 소요(GitHub 체크 시각)"
+
+# 수리 끝 알아채기: idle 이 끝내 안 잡혀도(cmux lifecycle 공백) 새 커밋이 push 돼 REPAIR_SETTLE_SEC 동안 그대로이고 워크트리가 깨끗하면 끝.
+# 커밋이 없거나 워크트리가 더러우면 제한 시간까지 기다린다(1), idle 이 잡히면 전처럼 바로 끝(0)
+repair_case() {  # $1 수리 뒤 head, $2 커밋 안 된 파일(빈 값이면 깨끗), $3 terminal_idle 종료 코드 → "종료 코드|경고 줄 수"
+  (cd "$W" && W="$W" NEWHEAD="$1" DIRTY="$2" IRC="$3" HC="$W/hc" bash -c '
+    set -euo pipefail
+    echo 0 > "$HC"; warns="$W/warns"; : > "$warns"
+    send_prompt() { :; }; progress_check() { :; }; die() { echo "die $*"; exit 9; }; idle_wait_ms() { echo 1; }
+    terminal_idle() { sleep 0.05; return "$IRC"; }
+    pr_head_sha() { local c; c=$(( $(cat "$HC") + 1 )); echo "$c" > "$HC"; [[ $c -eq 1 ]] && echo aaa1111 || echo "$NEWHEAD"; }
+    progress_dirty() { printf "%s" "$DIRTY"; }
+    log() { [[ "$1" != warn ]] || echo x >> "$warns"; }
+    PROGRESS_SEC=0; REPAIR_SETTLE_SEC=0; CUR_N=7; BACKEND_NAME=x
+    source fn.sh
+    rc=0; repair h "고쳐라" $(( $(date +%s) + 2 )) 77 || rc=$?
+    echo "$rc|$(grep -c x "$warns" || true)"')
+}
+[[ "$(repair_case bbb2222 "" 1)" == "0|1" ]] || fail "repair: 새 커밋이 그대로이고 워크트리가 깨끗한데 끝내지 않음: $(repair_case bbb2222 "" 1)"
+[[ "$(repair_case aaa1111 "" 1)" == "1|0" ]] || fail "repair: 새 커밋이 없는데 끝냄: $(repair_case aaa1111 "" 1)"
+[[ "$(repair_case bbb2222 "a.ts" 1)" == "1|0" ]] || fail "repair: 커밋 안 된 변경이 있는데 끝냄: $(repair_case bbb2222 a.ts 1)"
+[[ "$(repair_case aaa1111 "" 0)" == "0|0" ]] || fail "repair: idle 인데 끝내지 않음: $(repair_case aaa1111 "" 0)"
+grep -q 'repair "${handle}" "PR #${pr} 이 ${BASE_BRANCH}과 충돌한다.* "$deadline" "${pr}"' "$KIT/files/scripts/ticket-loop.sh" \
+  && grep -q 'repair "${handle}" "PR #${pr} 의 CI가 실패했다.* "$deadline" "${pr}"' "$KIT/files/scripts/ticket-loop.sh" || fail "수리 두 곳이 PR 번호를 넘기지 않음"
+echo "ok  수리 끝 알아채기(idle 없이 새 커밋)"
+
+# 기록: PR 을 알아채기까지(pr_pickup_sec) — 값이 있을 때만
+sed -n '/^idle_fp_count() /p; /^record_ticket() {/,/^}/p' "$KIT/files/scripts/ticket-loop.sh" > "$W/rec.sh"
+rec_case() {  # $1 CUR_PICKUP_SEC → 기록 한 줄
+  (cd "$W" && P="$1" bash -c '
+    set -euo pipefail
+    spec_of_ticket() { echo 40; }; log() { :; }
+    source rec.sh
+    LOG_FILE=/x/loop.log; RECORDS_FILE="$PWD/rec.jsonl"; : > "$RECORDS_FILE"
+    CUR_N=7; CUR_TITLE=t; CUR_PR=77; CUR_STARTED_ISO=s; CUR_STARTED=$(date +%s); CUR_CI_SEC=246; CUR_ROUND=0; CUR_MODEL=""; AGENT=claude; CUR_PICKUP_SEC="$P"
+    record_ticket merged; cat "$RECORDS_FILE"')
+}
+[[ "$(rec_case 638 | jq -c '[.pr_pickup_sec, .ci_sec]')" == "[638,246]" ]] || fail "기록에 pr_pickup_sec 가 없음: $(rec_case 638)"
+[[ "$(rec_case "" | jq 'has("pr_pickup_sec")')" == false ]] || fail "PR 을 못 찾은 기록에 pr_pickup_sec 가 있음"
+grep -q 'summary: wall-clock .*PR #${pr}${CUR_PICKUP_SEC:+ (picked up after ${CUR_PICKUP_SEC}s)}' "$KIT/files/scripts/ticket-loop.sh" || fail "요약 줄에 PR 을 알아채기까지가 없음"
+echo "ok  PR 을 알아채기까지(요약·기록)"
 
 # 템플릿 자리표: 무거운 테스트는 스위트와 파일 하나 실행 명령 두 자리표로, 설정 스킬의 결정 표가 둘 다 묻는다
 for f in .ticket-loop/worker-rules.md .agents/skills/implement/SKILL.md .agents/skills/pr/SKILL.md; do

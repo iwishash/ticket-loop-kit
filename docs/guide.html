@@ -774,6 +774,8 @@ bash scripts/ticket-loop.sh --parent 40             # 끝난 스펙이면 "No ti
   <tr><td><code>STARTUP_GRACE_SEC</code></td><td>120</td><td>기동 직후 2분은 대기 상태를 세지 않는다(프롬프트 처리 전에도 대기로 잡힌다)</td></tr>
   <tr><td><code>AGENT_START_WAIT_SEC</code></td><td>90</td><td>에이전트 배너가 보이기를 기다리는 상한. 넘기면 한 번 다시 띄우고, 또 넘기면 멈춘다</td></tr>
   <tr><td><code>CI_APPEAR_TIMEOUT_SEC</code></td><td>15분</td><td>PR에 체크가 나타나기를 기다리는 상한</td></tr>
+  <tr><td><code>PR_SETTLE_SEC</code></td><td>2분</td><td>PR을 찾은 뒤 워커의 이슈 정리를 기다리는 상한. 이슈에 <code>IN_REVIEW_LABEL</code>이 붙거나 워커가 대기 상태면 바로 넘어간다(7장 2단계)</td></tr>
+  <tr><td><code>REPAIR_SETTLE_SEC</code></td><td>5분</td><td>수리 중 대기 상태가 끝내 안 잡힐 때, 새 커밋이 push된 뒤 head가 이만큼 그대로이고 워크트리가 깨끗하면 수리가 끝난 것으로 본다(7장 4단계)</td></tr>
   <tr><td><code>PORT_WAIT_SEC</code></td><td>10분</td><td><code>POST_MERGE_PORT</code>가 비기를 기다리는 상한. 기다리는 동안 30초마다 다시 본다 — 로그 한 줄 뒤 조용해도 멈춘 게 아니다(7장 6단계, R10)</td></tr>
 </table>
 
@@ -815,8 +817,9 @@ systemd-inhibit bash scripts/ticket-loop.sh        # Linux (WSL은 Windows 전�
 <p><b>PR 대기.</b> head 브랜치가 <code>issue-N</code>과 같거나 <code>issue-N-</code>로 시작하는 열린 PR이 생길 때까지 반복한다. 워커는 <code>implement</code> 스킬대로 <code>issue-N-slug</code>를 만들지만, 루프가 만든 워크트리 브랜치 <code>issue-N</code>에 그대로 커밋해 PR을 열어도 같은 티켓의 PR이다 — rental-portal #102 실측(0.8.5): 워커가 <code>issue-102</code>로 PR #120을 열었는데 루프는 <code>issue-102-</code>만 봐서 못 찾고 idle 3회 뒤 "PR 없이 멈춤"으로 죽었다. <code>issue-1020</code>처럼 번호가 이어지는 브랜치는 다른 티켓이다.</p>
 <ul>
   <li><b>진행 로그.</b> 기다리는 동안 <code>PROGRESS_SEC</code>(1분)마다 워크트리를 git으로 들여다본다 — 브랜치가 <code>issue-N-slug</code>로 바뀌면 "branch …", 처음 파일이 수정되면 "first file changes — a.ts, b.ts, c.ts +1 more", 새 커밋이 들어오면 "commit <code>abc1234</code> feat: … #N"을 바로 한 줄씩. 그 밖에는 변경 파일 목록이 지난 줄과 달라졌을 때만, <code>HEARTBEAT_SEC</code>(5분)에 한 번까지 "working — Nm elapsed, M uncommitted files: …"을 남긴다. 목록이 그대로면 조용하다 — 같은 줄을 되풀이하지 않는다. 워커 화면을 읽어 도구 호출을 뽑지는 않는다(에이전트마다 형식이 다르다). 이 줄들은 터미널과 <code>LOG_FILE</code>에 함께 간다.</li>
-  <li>PR이 생기면 워커가 라벨·체크박스 정리를 마치도록 한 번 더 대기 상태를 기다린 뒤 다음 단계로 간다.</li>
-  <li>PR 없이 워커가 대기 상태면(기동 후 2분 제외) 30초 쉬고 <b>PR부터 다시 본다</b>. PR을 여는 순간에는 GitHub에 PR이 보이기 전에 대기 상태가 먼저 잡히기 때문이다(이렇게 넘어간 횟수를 "idle 오판"으로 세어 티켓 요약에 남긴다). 그래도 PR이 없으면 터미널 화면을 지난번과 비교해, 바뀌었으면 그사이 일한 것이므로 횟수를 0으로 되돌리고, 그 위에 1회를 센다. 연속 3회면 <b>PR 없이 멈춤</b>으로 루프를 멈춘다. 워커가 계속 출력 중이면 횟수를 0으로 되돌린다.</li>
+  <li>PR이 생기면 워커가 이슈 정리(인수 조건 체크박스, 맨 끝에 <span class="label">in-review</span> 라벨 — <code>implement</code> 스킬의 마지막 단계)를 마치기를 기다린다. 이슈에 <code>IN_REVIEW_LABEL</code>이 붙었거나 워커가 대기 상태면 바로, 아니면 2분(<code>PR_SETTLE_SEC</code>)에서 넘어간다. 기다리는 까닭은 CI 경로 필터에 걸려 체크 없이 바로 병합하는 PR이다 — 기다리지 않으면 워커보다 먼저 병합·이슈 닫힘·라벨 제거가 일어난다. 0.9.1까지는 대기 상태 하나만 10분까지 기다렸다. rental-portal 스펙 #141(cmux)에서 lifecycle이 빈 값으로 이어져 13건 중 3건이 10분을 다 썼고(라벨은 PR 생성 8~12초 뒤에 붙어 있었다), CI는 그사이 끝나 2~3초로 찍혔다. <code>IN_REVIEW_LABEL</code>을 바꾼 저장소는 <code>implement</code> 스킬의 라벨 이름도 같이 바꿔야 라벨로 끝난다.</li>
+  <li>PR 없이 워커가 대기 상태면(기동 후 2분 제외) 30초 쉬고 <b>PR부터 다시 본다</b>. PR을 여는 순간에는 GitHub에 PR이 보이기 전에 대기 상태가 먼저 잡히기 때문이다. 그래도 PR이 없으면 터미널 화면을 지난번과 비교해, 바뀌었으면 그사이 일한 것이므로 횟수를 0으로 되돌리고, 그 위에 1회를 센다. 연속 3회면 <b>PR 없이 멈춤</b>으로 루프를 멈춘다. 워커가 계속 출력 중이면 횟수를 0으로 되돌린다.</li>
+  <li><b>idle 오판</b>은 일하던 워커를 대기 상태로 본 횟수다(티켓 요약·기록). 다시 보니 PR이 열려 있을 때 PR이 대기 상태보다 먼저 열렸으면 일을 마친 워커라 세지 않고, 나중에 열렸으면 센다. PR 없이 센 대기 뒤에 워커가 다시 일했으면(화면이 바뀜, 대기가 풀림, PR을 엶) 그 대기들도 센다. 연속 3회로 멈추면 그 연속 대기는 오판이 아니다. 0.9.1까지는 "다시 보니 PR이 열려 있음"을 다 셌다 — 대개 PR을 연 뒤 대기에 든, 일을 마친 워커였다.</li>
   <li>백엔드 터미널에 닿지 못하면(앱 종료, tmux 창 사라짐 등) 즉시 멈춘다(cmux·tmux는 5번 연속 조회 실패일 때). 대기 상태를 기다리다 시간이 다 된 것(워커가 아직 일하는 중 — 진행 로그를 켜 두면 1분, 끄면 10분마다)은 닿지 못한 것과 구별해 계속 기다린다(2.4). 타임아웃도 아닌 이상한 응답(사람이 Orca에서 그 워크트리를 열어 세션이 다시 붙을 때 생긴다)은 터미널 읽기를 10초 간격으로 5번 다시 해 보고, 전부 실패할 때만 닿지 못한 것으로 본다. 티켓 제한 시간을 넘기면 타임아웃으로 멈춘다.</li>
 </ul></div></div>
 
@@ -824,7 +827,8 @@ systemd-inhibit bash scripts/ticket-loop.sh        # Linux (WSL은 Windows 전�
 <p><b>충돌 확인.</b> PR의 병합 가능 여부(<code>mergeable</code>)를 본다. 계산 중(<code>UNKNOWN</code>)이면 10초 간격으로 최대 6번 다시 본다. 충돌(<code>CONFLICTING</code>)이면 같은 워커 터미널에 "기본 브랜치를 병합해 충돌을 해결하고, 테스트·lint 후 push하라"고 보낸다.</p></div></div>
 
 <div class="step"><div class="n">4</div><div class="b">
-<p><b>CI 대기.</b> 저장소 CI의 경로 필터에 걸리는 PR(<code>CI_SKIP_CMD</code>가 <code>skip</code>, 또는 바뀐 파일이 전부 <code>CI_SKIP_REGEX</code>에 맞음)이면 체크를 기다리지 않고 병합으로 넘어간다(병합 뒤 검증도 건너뛴다). 그 밖에는 체크가 나타나기를 최대 15분 기다린 뒤 <code>gh pr checks --watch --fail-fast</code>로 끝까지 본다. 실패하면 워커에게 "<code>gh pr checks</code>·<code>gh run view --log-failed</code>로 원인을 보고 고쳐 push하라"고 보낸다. 수리 뒤에도 PR의 head 커밋이 그대로면(새 push 없음) 멈춘다. 충돌·CI 수리는 합쳐서 <code>REPAIR_ROUNDS</code>회까지다.</p></div></div>
+<p><b>CI 대기.</b> 저장소 CI의 경로 필터에 걸리는 PR(<code>CI_SKIP_CMD</code>가 <code>skip</code>, 또는 바뀐 파일이 전부 <code>CI_SKIP_REGEX</code>에 맞음)이면 체크를 기다리지 않고 병합으로 넘어간다(병합 뒤 검증도 건너뛴다). 그 밖에는 체크가 나타나기를 최대 15분 기다린 뒤 <code>gh pr checks --watch --fail-fast</code>로 끝까지 본다. 실패하면 워커에게 "<code>gh pr checks</code>·<code>gh run view --log-failed</code>로 원인을 보고 고쳐 push하라"고 보낸다. 수리 뒤에도 PR의 head 커밋이 그대로면(새 push 없음) 멈춘다. 충돌·CI 수리는 합쳐서 <code>REPAIR_ROUNDS</code>회까지다. 수리가 끝났는지는 워커의 대기 상태로 보는데, 대기가 끝내 잡히지 않으면(cmux lifecycle이 빈 값으로 이어질 때) 새 커밋이 push된 뒤 head가 5분(<code>REPAIR_SETTLE_SEC</code>) 그대로이고 워크트리에 커밋 안 된 변경이 없을 때 끝난 것으로 본다. 0.9.1까지는 티켓 제한 시간까지 기다렸다.</p>
+<p>요약·기록의 CI 소요는 PR head 체크들의 GitHub 시각 — 가장 이른 시작부터 가장 늦은 끝까지 — 이다(못 읽으면 루프가 기다린 시간). 루프가 CI 대기를 시작한 때부터 재면, PR을 늦게 알아챈 티켓에서 이미 끝난 CI가 2~3초로 찍힌다.</p></div></div>
 
 <div class="step"><div class="n">5</div><div class="b">
 <p><b>병합.</b> <code>gh pr merge --&lt;MERGE_METHOD&gt;</code>. 5초 뒤에도 이슈가 열려 있으면 직접 닫고 코멘트를 남긴다. <span class="label">in-review</span>를 지운다. 이어서 이 티켓이 속한 스펙 이슈(<code>--parent</code> 값, 없으면 GitHub의 부모 이슈)의 하위 이슈 목록을 세어 모두 닫혔으면 스펙 이슈도 코멘트와 함께 닫는다. 요약 값 <code>sub_issues_summary</code>는 쓰지 않는다(선행 이슈 요약처럼 늦게 바뀔 수 있다). 하위 이슈가 하나라도 열려 있거나 스펙이 이미 닫혔으면 아무것도 하지 않는다 — 같은 검사를 <code>--parent</code> 실행이 끝날 때 한 번 더 하므로, 마지막 티켓을 사람이 닫은 스펙도 다음 실행에서 닫힌다.</p></div></div>
@@ -846,10 +850,11 @@ pnpm exec vitest run --config vitest.integration.config.ts $files</code></pre>
 
 <div class="step"><div class="n">7</div><div class="b">
 <p><b>정리와 요약.</b> 워크스페이스를 <code>completed</code>로 표시하고 <code>orca worktree rm --force</code>로 지운다(cmux: <code>workspace close --force</code>, tmux: <code>kill-window</code>, 둘 다 뒤에 <code>git worktree remove --force</code>). 이어서 <code>git worktree prune</code>을 하고, 로컬의 이슈 브랜치와 Orca가 워크트리용으로 만든 브랜치(설정에 따라 <code>issue-N</code> 또는 <code>&lt;git 사용자&gt;/issue-N</code>, 워크트리를 만든 직후 기록해 둔다), 원격의 이슈 브랜치를 지운다. 마지막으로 로그에 한 줄을 남긴다.</p>
-<pre class="out">[2026-10-08 22:36:14] #42 summary: wall-clock 54m, PR #46, CI 261s, repairs 0, idle false positives 1, post-merge check passed in 212s</pre>
+<pre class="out">[2026-10-08 22:36:14] #42 summary: wall-clock 54m, PR #46 (picked up after 19s), CI 258s, repairs 0, idle false positives 0, post-merge check passed in 212s</pre>
+<p class="small muted">"picked up after"는 PR 생성부터 루프가 다음 단계(충돌·CI 확인)로 넘어가기까지다. 몇십 초를 넘으면 2단계의 정리 대기가 상한까지 간 것이다.</p>
 <p class="small muted">이 줄들이 <code>/retro</code>의 1차 자료다. 오래 걸린 티켓, 수리가 잦은 티켓, idle 오판이 많은 티켓을 찾아 원인을 본다.</p>
 <p>같은 내용에 모델(터미널 화면에서 읽은 <code>MODEL_REGEX</code> 결과)과 시작·종료 시각을 더한 한 줄을 <code>RECORDS_FILE</code>(JSONL)에도 덧붙인다. <code>--no-merge</code>로 끝난 티켓은 <code>no-merge</code>, 처리 중 루프가 멈춘 티켓은 <code>stopped</code>(멈춘 이유 포함)로 남는다. 로그는 사람이 읽고, 기록은 리포트가 읽는다.</p>
-<pre class="out">{"spec":40,"issue":42,"title":"T02: …","result":"merged","started":"2026-10-08T12:42:10Z","finished":"2026-10-08T13:36:14Z","wall_sec":3244,"repairs":0,"idle_false_positives":1,"agent":"claude","pr":46,"ci_sec":261,"post_merge":"passed in 212s","model":"Opus 5.5"}</pre></div></div>
+<pre class="out">{"spec":40,"issue":42,"title":"T02: …","result":"merged","started":"2026-10-08T12:42:10Z","finished":"2026-10-08T13:36:14Z","wall_sec":3244,"repairs":0,"idle_false_positives":0,"agent":"claude","pr":46,"pr_pickup_sec":19,"ci_sec":258,"post_merge":"passed in 212s","model":"Opus 5.5"}</pre></div></div>
 
 <div class="step"><div class="n">8</div><div class="b">
 <p><b>다음 티켓.</b> 자동 선택이면 대상을 다시 계산한다. 이번 실행에서 이미 처리한 티켓은 GitHub 반영이 늦어도 다시 집지 않는다. 대상이 없거나 <code>--max</code>에 닿으면 "done: N tickets"를 남기고 끝난다. 이번 실행에서 끝난(하위 이슈가 모두 닫혀 루프가 닫은) 스펙이 있으면 그 앞에 회고를 권하는 안내 한 줄을 남긴다 — <code>/retro</code>가 읽을 자료(로그, 스펙 리포트, 병합된 PR 본문의 "남은 판단 사항"·"검증하지 못한 것")를 적어 둔다. 권고일 뿐 루프가 회고를 돌리지는 않는다. <code>/retro</code>는 사람이 후보를 보고 고르는 대화형 스킬이고, 환경을 고치는 일은 검토를 거쳐 PR로 가는 것이 맞기 때문이다(11장).</p></div></div>
@@ -952,11 +957,11 @@ caffeinate -is bash scripts/ticket-loop.sh --parent 40</code></pre>
 [2026-10-08 21:54:17] #42: working — 12m elapsed, 2 uncommitted files: src/app/api/todos/export/route.ts, tests/api/todos-export.test.ts
 [2026-10-08 22:08:20] #42: commit 3f9c2a1 feat: GET /api/todos/export CSV 응답 #42
 [2026-10-08 22:26:35] #42: commit b71e0d4 fix: 리뷰 반영 — 빈 목록 헤더만 #42
-[2026-10-08 22:31:40] #42: PR #46 opened
+[2026-10-08 22:31:40] #42: PR #46 opened (created 22:31:21, picked up after 19s)
 [2026-10-08 22:31:41] #42: waiting for CI (PR #46)
 [2026-10-08 22:36:02] #42: CI passed
 [2026-10-08 22:36:05] #42: PR #46 merged
-[2026-10-08 22:36:14] #42 summary: wall-clock 54m, PR #46, CI 261s, repairs 0, idle false positives 1, post-merge check skipped
+[2026-10-08 22:36:14] #42 summary: wall-clock 54m, PR #46 (picked up after 19s), CI 258s, repairs 0, idle false positives 0, post-merge check skipped
 [2026-10-08 22:36:12] === #43 T03: 목록 화면 "내보내기" 버튼 ===
 ...
 [2026-10-09 00:58:31] done: 3 tickets</pre></div></div>
@@ -1446,7 +1451,7 @@ set -euo pipefail
 # 터미널·로그 파일에 찍는 문구는 영어다(워커 프롬프트·GitHub 코멘트·백엔드 상태 코멘트는 그대로).
 # 터미널에는 단계별로 색을 입힌다(티켓 제목·단계·성공·주의·오류). stderr가 터미널이 아니거나 NO_COLOR가 있으면 맨글자고,
 # 로그 파일에는 언제나 색 코드 없이 쓴다.
-# 티켓마다 "#N summary: …" 한 줄(벽시계·PR·CI 소요·수리·idle 오판·병합 뒤 검증)을 남겨 /retro가 읽는다.
+# 티켓마다 "#N summary: …" 한 줄(벽시계·PR과 그 PR을 알아채기까지·CI 소요·수리·idle 오판·병합 뒤 검증)을 남겨 /retro가 읽는다.
 # 같은 내용 + 모델을 RECORDS_FILE(JSONL)에도 남기고, 스펙 리포트가 GitHub의 PR과 합쳐 표로 만든다.
 # 저장소별 설정은 .ticket-loop/loop.env에 둔다(있으면 읽는다). 그 파일은 `VAR="${VAR:-값}"` 꼴로 써서
 # 실행할 때 준 환경변수가 이기게 한다. 예: CI_SKIP_REGEX="${CI_SKIP_REGEX:-^docs/}" POST_MERGE_PORT="${POST_MERGE_PORT:-3000}"
@@ -1645,6 +1650,8 @@ AGENT_START_WAIT_SEC=90   # 에이전트 배너가 보이기까지 기다리는 
 CI_APPEAR_TIMEOUT_SEC=900
 PORT_WAIT_SEC=600         # POST_MERGE_PORT가 비기를 기다리는 상한. 기다리는 동안은 30초마다 다시 본다(멈춤이 아니다)
 REOPEN_WATCH_SEC=2        # 수습 수정 PR을 병합한 뒤 티켓 이슈가 닫히는지 다시 보는 간격(5번 — triage_keep_issue_open)
+PR_SETTLE_SEC=120         # PR을 찾은 뒤 워커의 이슈 정리(체크박스·IN_REVIEW_LABEL)를 기다리는 상한. 라벨이 붙거나 idle이면 바로 넘어간다(pr_settle)
+REPAIR_SETTLE_SEC=300     # 수리 중 idle이 끝내 안 잡힐 때: 새 커밋이 push된 뒤 head가 이만큼 그대로이고 워크트리가 깨끗하면 수리가 끝난 것으로 본다
 
 DRY_RUN=0
 NO_MERGE=0
@@ -1961,6 +1968,10 @@ open_pr_for() {
 }
 
 issue_title() { gh issue view "$1" --json title -q .title; }
+issue_has_label() { gh issue view "$1" --json labels -q '.labels[].name' 2&gt;/dev/null | grep -Fxq -- "$2"; }
+# GitHub 시각(ISO 8601, UTC) → epoch. macOS·Linux의 date 차이를 피해 jq로. 못 읽으면 빈 값
+iso_epoch() { jq -rn --arg t "$1" '$t | sub("\\.[0-9]+Z$"; "Z") | fromdate' 2&gt;/dev/null || true; }
+pr_created_epoch() { iso_epoch "$(gh pr view "$1" --json createdAt -q .createdAt 2&gt;/dev/null || true)"; }
 
 candidates() {
   # READY_LABEL(+SCOPE_LABEL)(+PARENT의 하위 이슈), IN_REVIEW_LABEL 없음, 제목 순번 → 이슈 번호 순
@@ -2456,16 +2467,39 @@ progress_check() {   # $1 티켓 번호. 바뀐 것이 있으면 한 줄씩, 없
 idle_wait_ms() { if [[ "$PROGRESS_SEC" -gt 0 ]]; then echo $(( PROGRESS_SEC * 1000 )); else echo "$IDLE_WAIT_MS"; fi; }
 # ----- 진행 로그 끝 -----
 
+# idle 오판 $1번을 센다(idle_fp_count). 오판은 일하던 워커를 idle로 본 것이다 — 그 뒤 워커가 다시 일했거나(화면이 바뀜·idle이 풀림)
+# PR을 열었다
+idle_fp_add() { local i; for (( i = 0; i &lt; $1; i++ )); do echo &gt;&gt; "${IDLE_FP_FILE:-/dev/null}"; done; }
+
+# PR을 찾은 뒤 워커가 이슈 정리(implement 스킬의 마지막 단계 — 체크박스, 맨 끝에 IN_REVIEW_LABEL)를 마치기를 기다린다. 이슈에 그 라벨이
+# 붙었거나 워커가 idle이면 끝, 아니면 PR_SETTLE_SEC에서 넘어간다. 기다림은 남긴다 — CI 경로 필터로 체크 없이 바로 병합하는 PR은 워커보다
+# 먼저 병합·이슈 닫힘·라벨 제거가 일어난다. 0.9.1까지는 idle 하나만 IDLE_WAIT_MS(10분)까지 기다렸다 — rental-portal 스펙 #141(cmux)에서
+# lifecycle이 빈 값으로 이어져 13건 중 3건이 10분을 다 썼고, CI는 그사이 끝나 2~3초로 찍혔다. 세 건 모두 라벨은 PR 생성 8~12초 뒤에 붙어 있었다
+pr_settle() {
+  local n="$1" handle="$2" until=$(( $(date +%s) + PR_SETTLE_SEC )) rc
+  while :; do
+    ! issue_has_label "$n" "$IN_REVIEW_LABEL" || return 0
+    rc=0; terminal_idle "$handle" 10000 || rc=$?
+    [[ $rc -ne 0 &amp;&amp; $rc -ne 3 ]] || return 0   # idle, 또는 터미널에 닿지 못함(기다려도 소용없다)
+    if [[ "$(date +%s)" -ge "$until" ]]; then
+      log warn "#${n}: no ${IN_REVIEW_LABEL} label on the issue and the worker not idle ${PR_SETTLE_SEC}s after finding the PR — moving on"
+      return 0
+    fi
+  done
+}
+
 # PR이 생길 때까지(또는 워커가 멈출 때까지) 기다린다. 성공 시 PR 번호를 stdout에 쓴다.
 # 반환: 0 PR 열림, 1 PR 없이 멈춤, 2 타임아웃, 3 백엔드 터미널 끊김
+# idle 오판(idle_fp_add)은 PR 없이 센 idle 뒤에 워커가 다시 일한 것, 그리고 idle을 잡은 뒤 열린 PR이다. 0.9.1까지는 "idle 뒤 다시 보니
+# PR이 열려 있음"을 다 셌는데, 대개 일을 마친 워커였다(PR을 연 뒤 idle) — 폴링 순서의 부산물이지 오판이 아니다
 wait_for_pr() {
-  local n="$1" handle="$2" deadline="$3" strikes=0 pr started idle last_screen="" screen wait_ms
+  local n="$1" handle="$2" deadline="$3" strikes=0 pending=0 pr started idle idle_at created last_screen="" screen wait_ms
   started="$(date +%s)"; wait_ms="$(idle_wait_ms)"
   while :; do
     pr="$(open_pr_for "${n}")"
     if [[ -n "${pr}" ]]; then
-      # PR 직후 라벨·체크박스 정리까지 끝나도록 한 번 더 idle을 기다린다
-      terminal_idle "${handle}" "$IDLE_WAIT_MS" || true
+      idle_fp_add "$pending"   # 앞서 센 idle 뒤에 워커가 PR까지 갔다
+      pr_settle "${n}" "${handle}"
       [[ "$PROGRESS_SEC" -le 0 ]] || progress_check "${n}"
       echo "${pr}"; return 0
     fi
@@ -2474,33 +2508,53 @@ wait_for_pr() {
     [[ $idle -ne 3 ]] || return 3
     [[ "$PROGRESS_SEC" -le 0 ]] || progress_check "${n}"
     if [[ $idle -eq 0 ]]; then
-      if [[ $(( $(date +%s) - started )) -lt $STARTUP_GRACE_SEC ]]; then sleep "$IDLE_RECHECK_SEC"; continue; fi
-      # PR을 연 직후에는 idle이 PR 조회보다 먼저 잡힌다(매 티켓 실측) — 잠깐 뒤 PR부터 다시 본다
+      idle_at="$(date +%s)"
+      if [[ $(( idle_at - started )) -lt $STARTUP_GRACE_SEC ]]; then sleep "$IDLE_RECHECK_SEC"; continue; fi
+      # PR을 연 직후에는 idle이 PR 조회보다 먼저 잡힌다(매 티켓 실측) — 잠깐 뒤 PR부터 다시 본다. PR이 idle보다 먼저 열렸으면 일을 마친
+      # 워커다. idle을 잡은 뒤에 열렸으면 그 idle은 일하던 워커를 본 오판이다
       sleep "$IDLE_RECHECK_SEC"
-      [[ -z "$(open_pr_for "${n}")" ]] || { echo &gt;&gt; "${IDLE_FP_FILE:-/dev/null}"; continue; }   # idle 오판 한 번(idle_fp_count)
-      # 지난 idle 이후 화면이 바뀌었으면 그사이 일했다는 뜻 — 연속 횟수를 새로 센다
+      pr="$(open_pr_for "${n}")"
+      if [[ -n "$pr" ]]; then
+        created="$(pr_created_epoch "$pr")"
+        [[ -z "$created" || "$created" -le "$idle_at" ]] || idle_fp_add 1
+        continue
+      fi
+      # 지난 idle 이후 화면이 바뀌었으면 그사이 일했다는 뜻 — 앞서 센 idle은 오판이고, 연속 횟수를 새로 센다
       screen="$(terminal_tail "${handle}" | cksum | cut -d' ' -f1)"
-      if [[ "$screen" != "$last_screen" ]]; then strikes=0; last_screen="$screen"; fi
-      strikes=$((strikes + 1))
+      if [[ "$screen" != "$last_screen" ]]; then idle_fp_add "$pending"; pending=0; strikes=0; last_screen="$screen"; fi
+      strikes=$((strikes + 1)); pending=$((pending + 1))
       log warn "#${n}: worker idle, no PR (${strikes}/${IDLE_STRIKES})"
-      [[ ${strikes} -lt $IDLE_STRIKES ]] || return 1
+      [[ ${strikes} -lt $IDLE_STRIKES ]] || return 1   # 정말 멈췄다 — 이 연속 idle은 오판이 아니다
       sleep "$IDLE_RECHECK_SEC"
     else
-      strikes=0
+      idle_fp_add "$pending"; pending=0; strikes=0   # 워커가 계속 일한다 — 앞서 센 idle은 오판
     fi
   done
 }
 
-# 수리 프롬프트를 보내고 워커가 다시 idle이 될 때까지 기다린다(그동안의 커밋도 진행 로그에 찍힌다)
+# 수리 프롬프트를 보내고 워커가 다시 idle이 될 때까지 기다린다(그동안의 커밋도 진행 로그에 찍힌다). $4 PR 번호 — idle이 끝내 안 잡히는
+# 백엔드(cmux lifecycle이 빈 값으로 이어질 때 — rental-portal 스펙 #141에서 하루 126번)에서도 끝을 알아챈다: 수리 프롬프트 뒤 새 커밋이
+# push됐고 head가 REPAIR_SETTLE_SEC 동안 그대로이며 워크트리에 커밋 안 된 변경이 없으면 끝난 것으로 본다. 없으면 티켓 제한 시간까지 기다렸다
 repair() {
-  local handle="$1" text="$2" deadline="$3" idle wait_ms
+  local handle="$1" text="$2" deadline="$3" pr="${4:-}" idle wait_ms before="" head="" seen="" seen_at=0
   wait_ms="$(idle_wait_ms)"
+  [[ -z "$pr" ]] || before="$(pr_head_sha "$pr" 2&gt;/dev/null || true)"
   send_prompt "${handle}" "$text"
   while :; do
     idle=0; bg_wait terminal_idle "${handle}" "$wait_ms" || idle=$?
     [[ $idle -eq 3 ]] || [[ "$PROGRESS_SEC" -le 0 ]] || progress_check "${CUR_N}"
     [[ $idle -ne 0 ]] || return 0
     [[ $idle -ne 3 ]] || die "Cannot reach ${BACKEND_NAME} terminal ${handle} (${BACKEND_NAME} app closed?)"
+    if [[ -n "$before" ]]; then
+      head="$(pr_head_sha "$pr" 2&gt;/dev/null || true)"
+      if [[ -n "$head" &amp;&amp; "$head" != "$before" ]]; then
+        [[ "$head" == "$seen" ]] || { seen="$head"; seen_at="$(date +%s)"; }
+        if [[ $(( $(date +%s) - seen_at )) -ge $REPAIR_SETTLE_SEC &amp;&amp; -z "$(progress_dirty)" ]]; then
+          log warn "#${CUR_N}: the worker never went idle, but PR #${pr} has had a new commit (${head:0:7}) for ${REPAIR_SETTLE_SEC}s+ and the worktree is clean — treating the repair as done"
+          return 0
+        fi
+      fi
+    fi
     [[ "$(date +%s)" -lt "$deadline" ]] || return 1
   done
 }
@@ -2521,6 +2575,15 @@ ci_passed() {
 }
 
 pr_head_sha() { gh pr view "$1" --json headRefOid -q .headRefOid; }
+
+# CI가 실제로 돈 시간(초) — PR head 체크들의 가장 이른 시작부터 가장 늦은 끝까지(GitHub 시각). 루프가 CI 대기를 시작한 때부터 재면 그 전에
+# 끝난 CI가 2~3초로 찍힌다(0.9.1까지 — PR을 알아채는 게 늦으면). 못 읽으면 빈 값이고, 부르는 쪽이 루프가 잰 값을 쓴다
+ci_run_sec() {
+  { gh pr checks "$1" --json startedAt,completedAt 2&gt;/dev/null || true; } | jq -r '
+    def t: if . == null or . == "" or startswith("0001-") then empty else sub("\\.[0-9]+Z$"; "Z") | fromdate end;
+    ([.[].startedAt | t] | min) as $s | ([.[].completedAt | t] | max) as $e
+    | if $s == null or $e == null or $e &lt; $s then empty else ($e - $s) end' 2&gt;/dev/null || true
+}
 
 # 반환 0: CI가 도는 PR, 1: 저장소 CI의 경로 필터에 걸려 체크가 안 붙는 게 정상인 PR(CI_SKIP_CMD가 "skip", 또는 바뀐 파일이 전부
 # CI_SKIP_REGEX에 맞음). 둘 다 없거나 판정이 안 되면 0(기다리는 쪽).
@@ -2844,7 +2907,7 @@ triage() {
 # 하나가 끝날 때(병합·--no-merge·중단) RECORDS_FILE에 한 줄을 덧붙이고, --parent 실행이 정상 종료하면 그 기록과 GitHub
 # (하위 이슈·PR 본문)을 합쳐 REPORT_DIR/spec-&lt;N&gt;.html을 만든다. 기록이 없는 티켓(다른 PC·사람 처리)은 PR 시각으로 대신한다.
 
-CUR_N=""; CUR_TITLE=""; CUR_STARTED=0; CUR_STARTED_ISO=""; CUR_PR=""; CUR_MODEL=""; CUR_CI_SEC=""; CUR_ROUND=0
+CUR_N=""; CUR_TITLE=""; CUR_STARTED=0; CUR_STARTED_ISO=""; CUR_PR=""; CUR_MODEL=""; CUR_CI_SEC=""; CUR_PICKUP_SEC=""; CUR_ROUND=0
 
 # 워커 터미널의 에이전트 상태줄·배너에서 모델 이름을 뽑는다(Claude Code: "[Opus 5.5 | Max]", Codex: 기동 블록의 "model: gpt-5.1-codex"). 못 찾으면 빈 값.
 detect_model() { [[ -n "$MODEL_REGEX" ]] || return 0; terminal_tail "$1" 2&gt;/dev/null | grep -oE "$MODEL_REGEX" | tail -n1 || true; }
@@ -2888,7 +2951,7 @@ suggest_retro() {
   done
 }
 
-# idle 오판 수 — PR 대기 중 idle이 잡혔지만 잠깐 뒤 다시 보니 PR이 열려 있던 횟수(PR을 연 직후 idle이 PR 조회보다 먼저 잡힌다).
+# idle 오판 수 — 일하던 워커를 idle로 본 횟수(wait_for_pr 머리 주석). 0.9.1까지는 "idle 뒤 다시 보니 PR이 열려 있음"을 셌다.
 # wait_for_pr는 서브셸(bg_wait, 0.8.7까지는 커맨드 치환)에서 돌아 변수로 세면 부모에 남지 않는다 — 0.8.9까지 요약 줄과 기록의
 # idle_false_positives가 늘 0이었다. 티켓마다 IDLE_FP_FILE에 한 번에 한 줄씩 쓰고 줄 수를 센다
 idle_fp_count() { if [[ -n "${IDLE_FP_FILE:-}" &amp;&amp; -f "$IDLE_FP_FILE" ]]; then echo $(( $(wc -l &lt; "$IDLE_FP_FILE") )); else echo 0; fi; }
@@ -2899,7 +2962,7 @@ record_ticket() {
   mkdir -p "$(dirname "$file")"
   spec="$(spec_of_ticket "$CUR_N")"
   jq -cn --argjson spec "${spec:-0}" --argjson issue "$CUR_N" --arg title "$CUR_TITLE" --arg result "$result" --arg reason "$reason" \
-    --arg pr "$CUR_PR" --arg started "$CUR_STARTED_ISO" --arg finished "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" \
+    --arg pr "$CUR_PR" --arg pickup "${CUR_PICKUP_SEC:-}" --arg started "$CUR_STARTED_ISO" --arg finished "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" \
     --argjson wall "$(( $(date +%s) - CUR_STARTED ))" --arg ci "$CUR_CI_SEC" --argjson repairs "$CUR_ROUND" \
     --argjson idle "$(idle_fp_count)" --arg post "${POST_MERGE_RESULT:-}" --arg model "$CUR_MODEL" --arg agent "$AGENT" \
     --arg triage "${TRIAGE_RESULT:-}" '
@@ -2908,6 +2971,7 @@ record_ticket() {
     + (if $reason != "" then {reason: $reason} else {} end)
     + (if $triage != "" then {triage: $triage} else {} end)
     + (if $pr != "" then {pr: ($pr | tonumber)} else {} end)
+    + (if $pickup != "" then {pr_pickup_sec: ($pickup | tonumber)} else {} end)
     + (if $ci != "" then {ci_sec: ($ci | tonumber)} else {} end)
     + (if $post != "" then {post_merge: $post} else {} end)
     + (if $model != "" then {model: $model} else {} end)' &gt;&gt; "$file" 2&gt;/dev/null \
@@ -3029,7 +3093,7 @@ run_ticket() {
   POST_MERGE_RESULT="skipped"; POST_MERGE_LOG=""; POST_MERGE_RETRY_LOG=""
   log title "=== #${n} ${title} ==="
   CUR_N="$n"; CUR_TITLE="$title"; CUR_STARTED="$started_at"; CUR_STARTED_ISO="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"; STOP_ISSUE="$n"
-  CUR_PR=""; CUR_MODEL=""; CUR_CI_SEC=""; CUR_ROUND=0
+  CUR_PR=""; CUR_MODEL=""; CUR_CI_SEC=""; CUR_PICKUP_SEC=""; CUR_ROUND=0
   STOP_KIND=""; STOP_RECORD=""; TRIAGE_RESULT=""
 
   git -C "$ROOT" fetch -q origin "$BASE_BRANCH"
@@ -3058,7 +3122,12 @@ run_ticket() {
     triage worker_no_pr "$reason" || true   # 진단만 — 요약을 사유에 붙여 멈춘다
     die "${reason}${TRIAGE_NOTE}"
   fi
-  log step "#${n}: PR #${pr} opened"
+  # PR을 알아채기까지(PR 생성 → 루프가 다음 단계로) — 늘어지면 그만큼 CI·병합이 늦다(0.9.1의 PR 뒤 10분 대기를 손으로 대조해 찾았다)
+  local created pickup=""
+  created="$(pr_created_epoch "${pr}")"
+  if [[ -n "$created" ]]; then pickup=$(( $(date +%s) - created )); [[ $pickup -ge 0 ]] || pickup=0; fi
+  CUR_PICKUP_SEC="$pickup"
+  log step "#${n}: PR #${pr} opened${pickup:+ (created $(fmt_epoch "$created"), picked up after ${pickup}s)}"
   progress_sync
   CUR_PR="$pr"; model_now="$(detect_model "${handle}")"; [[ -z "$model_now" ]] || CUR_MODEL="$model_now"
   backend_set_status "${wt}" in-review "${pr}" "PR #${pr} — CI 대기" || true
@@ -3075,7 +3144,7 @@ run_ticket() {
         die "${reason}${TRIAGE_NOTE}"
       fi
       round=$((round + 1)); CUR_ROUND=$round; log warn "#${n}: conflict → asking the worker to repair (${round})"
-      repair "${handle}" "PR #${pr} 이 ${BASE_BRANCH}과 충돌한다. \`git fetch origin &amp;&amp; git merge origin/${BASE_BRANCH}\`으로 충돌을 해결하고 테스트·lint를 다시 돌린 뒤 같은 브랜치에 push해라. 질문하지 말고 끝까지 해라." "$deadline" \
+      repair "${handle}" "PR #${pr} 이 ${BASE_BRANCH}과 충돌한다. \`git fetch origin &amp;&amp; git merge origin/${BASE_BRANCH}\`으로 충돌을 해결하고 테스트·lint를 다시 돌린 뒤 같은 브랜치에 push해라. 질문하지 말고 끝까지 해라." "$deadline" "${pr}" \
         || die "#${n}: timed out while repairing the conflict"
       continue
     fi
@@ -3086,7 +3155,10 @@ run_ticket() {
     fi
     log step "#${n}: waiting for CI (PR #${pr})"
     ci_started="$(date +%s)"
-    if ci_passed "${pr}"; then ci_sec=$(( $(date +%s) - ci_started )); break; fi
+    if ci_passed "${pr}"; then
+      ci_sec="$(ci_run_sec "${pr}")"; [[ -n "$ci_sec" ]] || ci_sec=$(( $(date +%s) - ci_started ))
+      break
+    fi
     if [[ ${round} -ge $REPAIR_ROUNDS ]]; then
       reason="#${n}: PR #${pr} CI failed (${REPAIR_ROUNDS} repair round(s) used up). See gh pr checks ${pr}."
       STOP_KIND=ci_failed; triage ci_failed "$reason" &amp;&amp; continue
@@ -3094,7 +3166,7 @@ run_ticket() {
     fi
     round=$((round + 1)); CUR_ROUND=$round; log warn "#${n}: CI failed → asking the worker to repair (${round})"
     before="$(pr_head_sha "${pr}")"
-    repair "${handle}" "PR #${pr} 의 CI가 실패했다. \`gh pr checks ${pr}\` 와 \`gh run view --log-failed\` 로 원인을 보고 고친 뒤 테스트·lint를 다시 돌리고 같은 브랜치에 push해라. 테스트를 건너뛰거나 지우지 마라. 질문하지 말고 끝까지 해라." "$deadline" \
+    repair "${handle}" "PR #${pr} 의 CI가 실패했다. \`gh pr checks ${pr}\` 와 \`gh run view --log-failed\` 로 원인을 보고 고친 뒤 테스트·lint를 다시 돌리고 같은 브랜치에 push해라. 테스트를 건너뛰거나 지우지 마라. 질문하지 말고 끝까지 해라." "$deadline" "${pr}" \
       || die "#${n}: timed out while repairing CI"
     if [[ "$(pr_head_sha "${pr}")" == "$before" ]]; then
       reason="#${n}: no new commit was pushed after the repair"
@@ -3160,7 +3232,7 @@ run_ticket() {
       reason+="$TRIAGE_NOTE"
     fi
   fi
-  log ok "#${n} summary: wall-clock $(( ($(date +%s) - started_at) / 60 ))m, PR #${pr}, CI $([[ $ci_sec -ge 0 ]] &amp;&amp; echo "${ci_sec}s" || echo "none (path excluded from CI)"), repairs ${round}, idle false positives $(idle_fp_count), post-merge check ${POST_MERGE_RESULT}${TRIAGE_RESULT:+, triage ${TRIAGE_RESULT%%: *}}"
+  log ok "#${n} summary: wall-clock $(( ($(date +%s) - started_at) / 60 ))m, PR #${pr}${CUR_PICKUP_SEC:+ (picked up after ${CUR_PICKUP_SEC}s)}, CI $([[ $ci_sec -ge 0 ]] &amp;&amp; echo "${ci_sec}s" || echo "none (path excluded from CI)"), repairs ${round}, idle false positives $(idle_fp_count), post-merge check ${POST_MERGE_RESULT}${TRIAGE_RESULT:+, triage ${TRIAGE_RESULT%%: *}}"
   record_ticket "merged"; CUR_N=""; rm -f "$IDLE_FP_FILE"
   [[ $post_rc -eq 0 ]] || die "$reason"
   notify "Ticket done" "#${n} ${title} — PR #${pr}, $(( ($(date +%s) - started_at) / 60 ))m" done
@@ -3228,6 +3300,7 @@ notify "Ticket loop finished" "${done_count} done$([[ $TRIAGE_USED -eq 0 ]] || e
 <p class="small muted">3판(2026-10-12)은 두 번째 스펙의 첫 티켓 2건을 돌린 실측에서 나왔다 — 묶음 결과를 한 표로 보고 싶다는 요구와, 포트를 기다리는 루프가 멈춘 것처럼 보인 일.</p>
 <table class="dense">
   <tr><th style="width:22%">바뀐 곳</th><th>내용</th><th style="width:20%">계기</th></tr>
+  <tr><td>PR 뒤 대기·CI 소요·idle 오판·수리 끝 (6장 내부 상수, 7장 2·4·7단계, 9장 예시 로그, 부록 D)</td><td>PR을 찾은 뒤에는 대기 상태 하나만 10분까지 기다리지 않고, 이슈에 <code>IN_REVIEW_LABEL</code>이 붙거나 대기 상태면 바로, 아니면 2분에서 넘어간다. CI 소요는 GitHub 체크 시각으로 재고, 요약·기록에 PR을 알아채기까지(<code>pr_pickup_sec</code>)를 싣는다. idle 오판은 일하던 워커를 대기로 본 것만 센다(PR을 연 뒤의 대기는 세지 않고, 다시 일한 워커의 앞선 대기는 센다). 수리는 대기가 끝내 안 잡혀도 새 커밋이 5분 그대로이고 워크트리가 깨끗하면 끝난 것으로 본다.</td><td>키트 0.9.2 — rental-portal 스펙 #141(cmux) 13건 중 3건이 PR 뒤 10분을 기다렸고 CI가 2~3초로 찍혔다(이슈 #2)</td></tr>
   <tr><td>수정 PR이 티켓을 닫던 것 (10.6, 부록 D)</td><td>준비 실패의 수정 PR 제목이 <code>fix: #17 …</code>이었고, 병합 커밋(PR 제목이 들어간다)의 닫기 키워드로 GitHub가 아직 구현 전인 #17을 닫았다. <code>loop-triage</code> 스킬은 수정 PR 제목을 <code>fix: &lt;요약&gt; — #N …</code>으로 바꾸고 제목·본문·커밋 메시지에서 닫기 키워드 바로 뒤에 <code>#N</code>을 두지 않게 했다. 루프는 병합 뒤 검증 실패가 아닌 수습에서 수정 PR을 병합한 뒤 티켓 이슈를 몇 초 지켜보고, 닫혔으면 코멘트와 함께 다시 연다.</td><td>키트 0.9.1 — 0.9.0 더미 저장소 실측(#17 → 수정 PR #18), 워커가 알아채 다시 열었다</td></tr>
   <tr><td>무인 수습과 멈춤 기록 (6장 변수 표, 10.2, 10.6, 11장, 부록 D)</td><td>멈출 때마다 멈춤 기록(<code>.ticket-loop/stops/&lt;id&gt;.json</code>)을 남기고, 병합 뒤 검증 실패·수리를 다 쓴 CI 실패와 충돌·워크트리 준비 실패·PR 없이 멈춘 워커에서는 멈추기 전에 수습 세션(<code>loop-triage</code> 스킬)을 띄워 판정(<code>resume</code>/<code>halt</code>)을 기다린다. 고쳐지면 멈춘 자리에서 이어 가고(수정 PR은 CI 뒤 병합, 병합 뒤 검증은 다시 통과해야 한다), 아니면 판정 요약을 사유에 붙여 멈춘다. 한 실행에 한 번이 기본(<code>LOOP_TRIAGE</code>, <code>TRIAGE_MAX</code>, <code>TRIAGE_TIMEOUT_SEC</code>, <code>TRIAGE_LABEL</code>). 사람은 <code>/loop-triage &lt;id&gt;</code>로 기록부터 이어받는다.</td><td>키트 0.9.0 — rental-portal spec #96: 병합 뒤 검증 실패에서 루프가 다시 돌기까지 3시간 25분, 수정은 3줄</td></tr>
   <tr><td>병합 뒤 검증 재실행 (6장 변수 표, 7장 6단계, R10, 부록 D)</td><td><code>POST_MERGE_RETRY_CMD</code>를 더했다. 병합 뒤 검증이 실패하면 포트 대기를 다시 지나 같은 워크트리에서 그 명령을 딱 한 번 돌린다(첫 실행 로그 경로는 <code>POST_MERGE_FAILED_LOG</code>, 출력은 <code>post-merge-N-retry.log</code>). 통과하면 계속 가고 이슈 코멘트와 Slack(멘션 없음)에 플레이크 의심을 남긴다. 재실행도 실패하면 두 로그를 적고 멈춘다. 비워 두면 전과 같다. 7장에 vitest 예.</td><td>키트 0.8.11 — rental-portal #106 병합 뒤 검증이 무관한 테스트 하나의 시간 초과로 멈춤(7회 중 2회)</td></tr>
