@@ -23,7 +23,7 @@ disable-model-invocation: true
 
 | 필드 | 뜻 |
 |---|---|
-| `kind` | `post_merge_failed` · `ci_failed` · `setup_failed` · `worker_no_pr`(무인 수습 대상), `signal` · `unexpected_exit` · `other`(사람 모드에서만) |
+| `kind` | `post_merge_failed` · `ci_failed` · `setup_failed` · `worker_no_pr`(무인 수습 대상), `merge_failed` · `signal` · `unexpected_exit` · `other`(사람 모드에서만) |
 | `reason` | 루프가 멈추며 쓴 문구 그대로 |
 | `issue`, `title`, `spec`, `pr` | 처리 중이던 티켓, 그 티켓의 PR(있으면) |
 | `base_branch`, `repo` | 기본 브랜치, `owner/repo` |
@@ -105,6 +105,7 @@ disable-model-invocation: true
 ### 그 밖 (사람 모드에서만 만난다)
 
 - `signal`: 사람이 멈췄거나(Ctrl-C, 창 닫기, kill) 시스템이 끝냈다. 진단할 것이 없으면 그렇게 말하고 8절로 간다.
+- `merge_failed`: CI는 통과했는데 병합이 거절됐다. 루프는 GitHub 일시 장애(5xx·네트워크)면 이미 몇 번 다시 해 봤고, 사유의 괄호 안에 마지막 `gh` 오류의 첫 줄이 있다. `gh pr view <pr> --json state,mergeable,mergeStateStatus,reviewDecision`으로 가른다. `MERGED`면 그 사이 병합된 것이고, `CLEAN`이면 일시 장애가 지나간 것이다(`environment`). `BLOCKED`(필수 리뷰·필수 검사 같은 브랜치 보호)는 사람이 승인하거나 규칙을 바꿀 자리이고, `BEHIND`(최신 브랜치 요구)·`DIRTY`(충돌)는 PR 브랜치를 기본 브랜치에 맞춰야 한다. 그다음은 8절이다.
 - `unexpected_exit`: `set -e`에 걸린 명령이 사유에 있다. 네트워크·GitHub 일시 장애면 `environment`, 루프 로직이면 `loop-bug`.
 - `other`: 사유 문구를 루프 로그와 맞춰 읽는다.
 

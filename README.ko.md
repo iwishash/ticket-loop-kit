@@ -36,7 +36,7 @@ GitHub 이슈 티켓을 워크트리에서 한 건씩 무인으로 구현·검�
 npx github:iwishash/ticket-loop-kit init
 ```
 
-백엔드와 설치 단계를 키보드로 고른다(`--yes`면 묻지 않고, `NO_COLOR`로 색을 끈다). 버전 고정은 `npx github:iwishash/ticket-loop-kit#v0.9.3 init`. Node 없이:
+백엔드와 설치 단계를 키보드로 고른다(`--yes`면 묻지 않고, `NO_COLOR`로 색을 끈다). 버전 고정은 `npx github:iwishash/ticket-loop-kit#v0.9.4 init`. Node 없이:
 
 ```bash
 bash <(curl -fsSL https://raw.githubusercontent.com/iwishash/ticket-loop-kit/main/install.sh)

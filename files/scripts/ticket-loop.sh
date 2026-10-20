@@ -136,7 +136,8 @@ set -euo pipefail
 # 판정이 halt이거나, 판정 없이 끝나거나(제한 시간·idle), 수정 PR의 CI가 실패하거나, 이어 간 뒤 같은 곳에서 또 실패하면 진단을 사유에 붙여
 # 멈춘다(수습 세션의 워크트리는 남긴다). 한 실행에 TRIAGE_MAX번까지, 같은 멈춤에는 한 번만. 수습 세션은 기본 브랜치에 커밋된
 # loop-triage 스킬을 쓰므로 키트 설치 PR이 병합되기 전에는 띄우지 않는다. 그 밖의 멈춤(타임아웃, 터미널 끊김, 에이전트 기동 실패,
-# 병합 실패, 신호, set -e)은 수습 없이 멈춘다 — 어디서든 안전하게 이어 갈 수 있는 자리가 아니다.
+# 병합 실패, 신호, set -e)은 수습 없이 멈춘다 — 어디서든 안전하게 이어 갈 수 있는 자리가 아니다. GitHub 일시 장애(5xx·연결 오류)는
+# 읽기 호출과 병합 모두 멈추기 전에 GH_TRIES번까지 다시 해 본다. 필수 리뷰 같은 브랜치 보호의 거절은 사람에게 넘기는 자리다.
 
 ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"   # 저장소 루트. 도구 검사 뒤 git으로 다시 확정한다
 LOOP_ENV="$ROOT/.ticket-loop/loop.env"
@@ -237,6 +238,8 @@ IDLE_RECHECK_SEC=30
 STARTUP_GRACE_SEC=120     # 기동 직후에는 프롬프트 처리 전에도 idle로 잡힌다
 AGENT_START_WAIT_SEC=90   # 에이전트 배너가 보이기까지 기다리는 상한(1회), 넘기면 한 번 다시 띄운다
 CI_APPEAR_TIMEOUT_SEC=900
+GH_TRIES=3                # GitHub 일시 장애(5xx·연결 오류)에 걸린 gh 읽기 호출(gh 함수)과 병합(merge_pr)을 다시 해 보는 횟수(첫 시도 포함).
+GH_RETRY_SEC=15           # 그 사이 GH_RETRY_SEC×회차씩 쉰다(15초·30초)
 PORT_WAIT_SEC=600         # POST_MERGE_PORT가 비기를 기다리는 상한. 기다리는 동안은 30초마다 다시 본다(멈춤이 아니다)
 REOPEN_WATCH_SEC=2        # 수습 수정 PR을 병합한 뒤 티켓 이슈가 닫히는지 다시 보는 간격(5번 — triage_keep_issue_open)
 PR_SETTLE_SEC=120         # PR을 찾은 뒤 워커의 이슈 정리(체크박스·IN_REVIEW_LABEL)를 기다리는 상한. 라벨이 붙거나 idle이면 바로 넘어간다(pr_settle)
@@ -310,7 +313,7 @@ dim_lines() { local l; while IFS= read -r l || [[ -n "$l" ]]; do printf '%s%s%s%
 # 알림은 데스크톱(자리에 있을 때)과 Slack(SLACK_WEBHOOK_URL — 자리를 비웠을 때) 두 곳으로 간다. 어느 쪽이 실패해도 루프 결과는 바뀌지 않는다.
 # STOP_ISSUE: 멈추면 GitHub 기록을 남길 티켓. CUR_N(티켓 기록)은 병합 기록을 쓰면 비지만, 그 뒤 병합 뒤 검증이 실패해도 그 티켓의 멈춤이다
 REPO_URL=""; STOP_ISSUE=""; STOP_REPORTED=0; LOCK_HELD=0; BG_PID=""
-# STOP_KIND: 멈춤 기록의 종류(post_merge_failed·ci_failed·setup_failed·worker_no_pr·signal·unexpected_exit, 그 밖은 비워 other).
+# STOP_KIND: 멈춤 기록의 종류(post_merge_failed·ci_failed·setup_failed·worker_no_pr·merge_failed·signal·unexpected_exit, 그 밖은 비워 other).
 # STOP_RECORD: 이번 멈춤에 이미 쓴 멈춤 기록(무인 수습이 쓴 것) — stop_report가 같은 멈춤을 두 번 기록하지 않게
 STOP_KIND=""; STOP_RECORD=""
 fmt_epoch() { date -r "$1" '+%H:%M:%S' 2>/dev/null || date -d "@$1" '+%H:%M:%S'; }   # macOS / Linux
@@ -517,6 +520,41 @@ kill_tree() {
 for tool in gh jq git; do
   command -v "$tool" >/dev/null 2>&1 || die "${tool} is not installed."
 done
+
+# ---------- GitHub 일시 장애 ----------
+# GitHub는 공지 없이 짧게 5xx·연결 오류를 낸다(이슈 #7: CI 통과 직후 병합 한 번이 502). 루프의 gh 읽기가 그 한 번을 그대로 받으면 멈추거나
+# (set -e — 병합 뒤 브랜치 조회, 수리 전 head) 틀린 값으로 읽는다(빈 대상 목록 → "No more tickets"로 끝남). 호출마다 막는 대신 gh를 함수로
+# 감싸 읽기 호출만 GH_TRIES번까지 다시 해 본다. 쓰기(병합·코멘트·라벨·이슈 닫기)는 다시 하지 않는다 — 응답만 실패하고 서버는 처리했을 수
+# 있어 두 번 들어간다(병합은 merge_pr가 상태를 확인하며 따로 다시 한다). 오래 도는 --watch도 감싸지 않는다(ci_passed가 결과를 다시 읽는다).
+# 도구 검사(command -v) 뒤에 둔다 — 함수가 먼저 있으면 gh가 없어도 검사를 통과한다
+GH_TRANSIENT_RE='status code: 5[0-9]{2}|HTTP 5[0-9]{2}|bad gateway|service unavailable|gateway time-?out|timeout|timed out|something went wrong while executing your query|error connecting to|dial tcp|connection (reset|refused)|tls handshake|unexpected eof|no such host'
+# 다시 해도 되는 gh 호출인가 — 조회 하위 명령, 메서드·필드 없는 REST api(필드가 있으면 POST다), mutation이 아닌 GraphQL
+gh_read_only() {
+  local a
+  case "$1 ${2:-}" in
+    "pr view"|"pr list"|"pr diff"|"issue view"|"issue list"|"repo view") ;;
+    "pr checks") [[ " $* " != *" --watch "* ]] || return 1 ;;
+    "api graphql") [[ "$*" != *mutation* ]] || return 1 ;;
+    "api "*) for a in "$@"; do case "$a" in -X|--method|--method=*|-f|-F|--field|--field=*|--raw-field|--raw-field=*|--input|--input=*) return 1 ;; esac; done ;;
+    *) return 1 ;;
+  esac
+}
+gh() {
+  local out rc try errf pause
+  gh_read_only "$@" || { command gh "$@"; return; }
+  errf="$(mktemp "${TMPDIR:-/tmp}/ticket-loop-gh.XXXXXX")"
+  for (( try = 1; ; try++ )); do
+    rc=0; out="$(command gh "$@" 2>"$errf")" || rc=$?
+    if [[ $rc -eq 0 || $try -ge $GH_TRIES ]] || ! grep -Eqi "$GH_TRANSIENT_RE" "$errf"; then
+      [[ -z "$out" ]] || printf '%s\n' "$out"
+      cat "$errf" >&2; rm -f "$errf"
+      return "$rc"
+    fi
+    pause=$(( try * GH_RETRY_SEC ))
+    log warn "gh $1 ${2:-}: transient GitHub error (${try}/${GH_TRIES}) — retrying in ${pause}s ($(grep -m1 . "$errf"))"
+    sleep "$pause"
+  done
+}
 [[ -n "$AGENT_RESTART_CMD" && -n "$AGENT_BANNER_REGEX" ]] \
   || die "AGENT=${AGENT} has no preset (claude | codex). Set AGENT_RESTART_CMD and AGENT_BANNER_REGEX in .ticket-loop/loop.env."
 
@@ -1185,9 +1223,21 @@ wait_checks_appear() {
   done
 }
 
+# --watch는 GitHub API 오류 한 번에도 1로 끝난다 — 체크 실패와 같은 코드다. 그대로 실패로 읽으면 워커에게 할 일 없는 수리를 보낸다.
+# 1이면 체크 상태(bucket)를 다시 읽어 실패·취소가 있을 때만 실패, 다 통과했으면 통과, 아직 도는 체크가 있으면 다시 본다(GH_TRIES번까지).
+# 못 읽으면 전처럼 실패다
 ci_passed() {
+  local try buckets
   wait_checks_appear "$1" || { log warn "PR #$1: no checks were registered"; return 1; }
-  bg_wait gh pr checks "$1" --watch --fail-fast >/dev/null   # 끝날 때까지 블록, 실패 시 비0
+  for (( try = 1; try <= GH_TRIES; try++ )); do
+    bg_wait gh pr checks "$1" --watch --fail-fast >/dev/null && return 0   # 끝날 때까지 블록, 실패 시 비0
+    buckets="$(gh pr checks "$1" --json bucket --jq '[.[].bucket] | unique | join(" ")' 2>/dev/null || true)"
+    [[ -n "$buckets" && " $buckets " != *" fail "* && " $buckets " != *" cancel "* ]] || return 1
+    [[ " $buckets " == *" pending "* ]] || { log warn "PR #$1: CI watch failed but every check passed (GitHub error?) — going on"; return 0; }
+    [[ $try -lt $GH_TRIES ]] || break
+    log warn "PR #$1: CI watch failed with no failed check (GitHub error?) — watching again (${try}/${GH_TRIES})"
+  done
+  return 1
 }
 
 pr_head_sha() { gh pr view "$1" --json headRefOid -q .headRefOid; }
@@ -1225,6 +1275,32 @@ mergeable_state() {
     sleep 10
   done
   echo "UNKNOWN"
+}
+
+# PR을 병합한다. GitHub 일시 장애(GH_TRANSIENT_RE, 그리고 "Base branch was modified")면 GH_TRIES번까지 다시 해 본다(GH_RETRY_SEC×회차씩 쉬고).
+# 실패할 때마다 먼저 이미 병합됐는지 본다 — 서버는 병합을 끝냈는데 응답에서만 502가 났을 수 있고, 그대로 다시 부르면 "already merged"로
+# 실패한다. 그 밖의 실패(권한, 필수 리뷰 같은 브랜치 보호, 충돌)는 바로 1이다. 마지막 gh 오류의 첫 줄을 MERGE_ERR에 남긴다.
+# 실측(0.9.2, cmux): CI 통과 직후 병합 한 번이 "non-200 OK status code: 502 Bad Gateway"를 받아 루프가 멈췄다(이슈 #7)
+MERGE_ERR=""
+merge_pr() {
+  local pr="$1" out try pause
+  local transient="${GH_TRANSIENT_RE}|base branch was modified"
+  MERGE_ERR=""
+  for (( try = 1; try <= GH_TRIES; try++ )); do
+    out="$(gh pr merge "$pr" "--$MERGE_METHOD" 2>&1)" && return 0
+    if [[ "$(gh pr view "$pr" --json state -q .state 2>/dev/null || true)" == MERGED ]]; then
+      log warn "PR #${pr}: the merge call failed but the PR is merged — going on"
+      return 0
+    fi
+    [[ -z "$out" ]] || printf '%s\n' "$out" | dim_lines
+    MERGE_ERR="$(grep -m1 . <<<"$out" || true)"
+    grep -Eqi "$transient" <<<"$out" || return 1
+    [[ $try -lt $GH_TRIES ]] || break
+    pause=$(( try * GH_RETRY_SEC ))
+    log warn "PR #${pr}: merge hit a transient GitHub error (${try}/${GH_TRIES}) — retrying in ${pause}s"
+    sleep "$pause"
+  done
+  return 1
 }
 
 # ---------- 병합 뒤 검증 ----------
@@ -1389,7 +1465,7 @@ triage_merge_fix_pr() {
   else
     log step "triage: fix PR #${pr} excluded by the repository CI path filter — merging without checks"
   fi
-  gh pr merge "$pr" "--$MERGE_METHOD" || { TRIAGE_NOTE=" (fix PR #${pr}: merge failed)"; return 1; }
+  merge_pr "$pr" || { TRIAGE_NOTE=" (fix PR #${pr}: merge failed${MERGE_ERR:+ — ${MERGE_ERR}})"; return 1; }
   log ok "triage: fix PR #${pr} merged"
   git -C "$ROOT" push -q origin --delete "$head" >/dev/null 2>&1 || true
   git -C "$ROOT" fetch -q origin "$BASE_BRANCH" || true
@@ -1799,7 +1875,11 @@ run_ticket() {
     return 0
   fi
 
-  gh pr merge "${pr}" "--$MERGE_METHOD" || die "#${n}: failed to merge PR #${pr}"
+  # 일시 장애가 아닌 거절(필수 리뷰 같은 브랜치 보호)은 사람에게 넘기는 자리라 무인 수습을 띄우지 않는다(종류만 merge_failed)
+  if ! merge_pr "${pr}"; then
+    STOP_KIND=merge_failed
+    die "#${n}: failed to merge PR #${pr} after CI passed${MERGE_ERR:+ (${MERGE_ERR})}. Check gh pr view ${pr} — if it is mergeable, merge it and rerun."
+  fi
   log ok "#${n}: PR #${pr} merged"
   sleep 5
   if [[ "$(gh issue view "${n}" --json state -q .state)" != "CLOSED" ]]; then
@@ -1816,15 +1896,17 @@ run_ticket() {
     run_post_merge "${n}" || post_rc=$?
   fi
 
-  local branch; branch="$(gh pr view "${pr}" --json headRefName -q .headRefName)"
+  # 이미 병합됐다 — 조회가 실패해도 멈추지 않고 브랜치 삭제만 건너뛴다
+  local branch; branch="$(gh pr view "${pr}" --json headRefName -q .headRefName || true)"
+  [[ -n "$branch" ]] || log warn "#${n}: could not read the head branch of PR #${pr} — delete it yourself (local and origin)"
   backend_set_status "${wt}" completed "${pr}" "PR #${pr} 병합 완료" || true
   backend_worktree_remove "${wt}" "${wt_path}" || log warn "#${n}: failed to remove the worktree — clean up manually (${wt}, ${wt_path})"
   git -C "$ROOT" worktree prune || true
-  git -C "$ROOT" branch -D "${branch}" >/dev/null 2>&1 || true
+  [[ -z "$branch" ]] || git -C "$ROOT" branch -D "${branch}" >/dev/null 2>&1 || true
   if [[ -n "$orca_branch" && "$orca_branch" != "HEAD" && "$orca_branch" != "$BASE_BRANCH" ]]; then
     git -C "$ROOT" branch -D "${orca_branch}" >/dev/null 2>&1 || true
   fi
-  git -C "$ROOT" push -q origin --delete "${branch}" >/dev/null 2>&1 || true
+  [[ -z "$branch" ]] || git -C "$ROOT" push -q origin --delete "${branch}" >/dev/null 2>&1 || true
   # 병합 뒤 검증이 실패했으면 멈추기 전에 무인 수습을 띄운다(post_merge_failed). 수정 PR이 병합되면(또는 플레이크로 판정하면) 병합된 기본
   # 브랜치로 검증을 다시 돌리고(로그 post-merge-N-after-triage.log) 통과하면 이어 간다. 이 티켓은 이미 병합됐으므로 수습 결과와 무관하게
   # 기록은 merged다 — 멈추면 die가 알린다.

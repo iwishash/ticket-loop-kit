@@ -812,8 +812,9 @@ git -C "$TG/repo" add -A && git -C "$TG/repo" -c user.name=t -c user.email=t@t c
 git -C "$TG/repo" push -q origin "$(git -C "$TG/repo" -c user.name=t -c user.email=t@t commit-tree -m empty 4b825dc642cb6eb9a060e54bf8d69288fbee4904):refs/heads/noskill" 2>/dev/null
 sed -n '/^# ----- 알림 · 멈춤 보고 -----/,/^# ----- 알림 · 멈춤 보고 끝 -----/p' "$KIT/files/scripts/ticket-loop.sh" > "$TG/fn.sh"
 sed -n '/^# ---------- 무인 수습 ----------/,/^# ---------- 티켓 기록 · 스펙 리포트 ----------/p' "$KIT/files/scripts/ticket-loop.sh" >> "$TG/fn.sh"
-sed -n '/^idle_wait_ms() /p' "$KIT/files/scripts/ticket-loop.sh" >> "$TG/fn.sh"
-grep -q '^triage() {' "$TG/fn.sh" && grep -q '^wait_for_verdict() {' "$TG/fn.sh" && grep -q '^idle_wait_ms() ' "$TG/fn.sh" || fail "무인 수습 블록을 찾지 못함"
+sed -n '/^idle_wait_ms() /p; /^GH_TRANSIENT_RE=/p; /^merge_pr() {/,/^}/p' "$KIT/files/scripts/ticket-loop.sh" >> "$TG/fn.sh"
+grep -q '^triage() {' "$TG/fn.sh" && grep -q '^wait_for_verdict() {' "$TG/fn.sh" && grep -q '^idle_wait_ms() ' "$TG/fn.sh" && grep -q '^merge_pr() {' "$TG/fn.sh" \
+  || fail "무인 수습 블록을 찾지 못함"
 for b in curl osascript; do cp "$M/bin/$b" "$TG/bin/$b"; done
 cat > "$TG/bin/gh" <<'EOF'
 #!/usr/bin/env bash
@@ -830,7 +831,7 @@ set -euo pipefail
 ROOT="$PWD"; MAIN_WT="$PWD"; OWNER_REPO=o/r; BASE_BRANCH="${BASE:-main}"; BACKEND=cmux; BACKEND_NAME=cmux; AGENT=claude; SKILL_PREFIX=/
 SLACK_WEBHOOK_URL=https://hooks.example/x; SLACK_MENTION="<@U1>"; STOPPED_LABEL=loop-stopped
 LOG_FILE="$PWD/.ticket-loop/loop.log"; mkdir -p .ticket-loop; : > "$LOG_FILE"
-LOOP_TRIAGE="${LOOP_TRIAGE:-1}"; TRIAGE_MAX="${TRIAGE_MAX:-1}"; TRIAGE_TIMEOUT_SEC="${TRIAGE_TIMEOUT_SEC:-60}"; TRIAGE_LABEL=loop-triage; MERGE_METHOD=merge
+LOOP_TRIAGE="${LOOP_TRIAGE:-1}"; TRIAGE_MAX="${TRIAGE_MAX:-1}"; TRIAGE_TIMEOUT_SEC="${TRIAGE_TIMEOUT_SEC:-60}"; TRIAGE_LABEL=loop-triage; MERGE_METHOD=merge; GH_TRIES=3; GH_RETRY_SEC=0
 PROGRESS_SEC=0; IDLE_WAIT_MS=1; STARTUP_GRACE_SEC=0; IDLE_RECHECK_SEC=0; IDLE_STRIKES=3; REOPEN_WATCH_SEC=0
 log() { case "$1" in title|step|ok|warn|err) shift ;; esac; printf '[2026-10-16 15:43:17] %s\n' "$*" >> "$LOG_FILE"; }
 dim_lines() { sed 's/^/  /' >> "$LOG_FILE"; }
@@ -1074,6 +1075,118 @@ J='[{"startedAt":"2026-10-16T22:09:12Z","completedAt":"2026-10-16T22:10:17Z"},{"
 [[ "$(ci_case '')" == "[]" && "$(ci_case '[]')" == "[]" && "$(ci_case 'not json')" == "[]" ]] || fail "ci_run_sec: 못 읽으면 빈 값이어야"
 grep -qF 'ci_sec="$(ci_run_sec "${pr}")"; [[ -n "$ci_sec" ]] || ci_sec=$(( $(date +%s) - ci_started ))' "$KIT/files/scripts/ticket-loop.sh" || fail "CI 통과 뒤 ci_run_sec 를 쓰지 않거나 못 읽을 때 루프가 잰 값으로 돌아가지 않음"
 echo "ok  CI 소요(GitHub 체크 시각)"
+
+# 병합 재시도(이슈 #7): GitHub 일시 장애(5xx·네트워크·"Base branch was modified")만 GH_TRIES 번까지 다시 하고, 실패할 때마다 먼저
+# 이미 병합됐는지 본다. 브랜치 보호 같은 거절은 바로 1 — 사람에게 넘기는 자리다
+MG="$T/merge"; mkdir -p "$MG/bin"
+sed -n '/^GH_TRANSIENT_RE=/p; /^merge_pr() {/,/^}/p' "$KIT/files/scripts/ticket-loop.sh" > "$MG/fn.sh"
+grep -q '^merge_pr() ' "$MG/fn.sh" && grep -q '^GH_TRANSIENT_RE=' "$MG/fn.sh" || fail "merge_pr 를 찾지 못함"
+cat > "$MG/bin/gh" <<'GH'
+#!/usr/bin/env bash
+nth() { local i="$1" f="$2" l; l="$(sed -n "${i}p" "$f")"; [[ -n "$l" ]] || l="$(tail -n1 "$f")"; printf '%s' "$l"; }   # 넘치면 마지막 줄
+case "$1 $2" in
+  "pr merge") c=$(( $(cat "$MG/mc") + 1 )); echo "$c" > "$MG/mc"; echo "$*" >> "$MG/args"
+              l="$(nth "$c" "$MG/merges")"; [[ "$l" == ok ]] && exit 0; printf '%s\n' "$l" >&2; exit 1 ;;
+  "pr view") c=$(( $(cat "$MG/vc") + 1 )); echo "$c" > "$MG/vc"; nth "$c" "$MG/states"; echo ;;
+  *) exit 1 ;;
+esac
+GH
+chmod +x "$MG/bin/gh"
+merge_case() {  # $1 pr view 가 차례로 낼 state(공백으로 가름), 나머지: gh pr merge 가 차례로 낼 결과(ok 또는 오류 문구) — 둘 다 마지막 값이 이어짐
+                # → "종료 코드|병합 호출 수|경고 수" (MERGE_ERR 는 $MG/err)
+  tr ' ' '\n' <<<"$1" > "$MG/states"; shift; printf '%s\n' "$@" > "$MG/merges"; echo 0 > "$MG/mc"; echo 0 > "$MG/vc"; : > "$MG/args"
+  (cd "$MG" && PATH="$MG/bin:$PATH" MG="$MG" bash -c '
+    set -euo pipefail
+    warns=0; log() { [[ "$1" != warn ]] || warns=$((warns + 1)); }; dim_lines() { cat >/dev/null; }
+    MERGE_METHOD=squash; GH_TRIES=3; GH_RETRY_SEC=0
+    source fn.sh
+    rc=0; merge_pr 77 || rc=$?
+    printf "%s" "$MERGE_ERR" > "$MG/err"; echo "$rc|$(cat "$MG/mc")|$warns"')
+}
+E502='non-200 OK status code: 502 Bad Gateway body: "bad gateway\n"'
+[[ "$(merge_case OPEN ok)" == "0|1|0" && "$(cat "$MG/args")" == "pr merge 77 --squash" ]] || fail "merge_pr: 한 번에 병합되는 경우: $(merge_case OPEN ok) / $(cat "$MG/args")"
+[[ "$(merge_case OPEN "$E502" ok)" == "0|2|1" ]] || fail "merge_pr: 502 한 번 뒤 다시 해 병합하지 않음(#7): $(merge_case OPEN "$E502" ok)"
+[[ "$(merge_case OPEN "$E502")" == "1|3|2" && "$(cat "$MG/err")" == "$E502" ]] || fail "merge_pr: 502 가 이어지면 GH_TRIES 번 뒤 1 이어야: $(merge_case OPEN "$E502") / $(cat "$MG/err")"
+[[ "$(merge_case MERGED "$E502")" == "0|1|1" ]] || fail "merge_pr: 502 를 받았지만 병합된 PR 을 다시 병합하려 함: $(merge_case MERGED "$E502")"
+[[ "$(merge_case "OPEN MERGED" "$E502" "X Pull request #77 was already merged")" == "0|2|2" ]] || fail "merge_pr: 다시 해 보니 이미 병합됨을 성공으로 보지 않음"
+[[ "$(merge_case OPEN "HTTP 503: Service Unavailable (https://api.github.com/graphql)" "dial tcp: lookup api.github.com: no such host" ok)" == "0|3|2" ]] \
+  || fail "merge_pr: REST 5xx·네트워크 오류를 일시 장애로 보지 않음"
+[[ "$(merge_case OPEN "GraphQL: Base branch was modified. Review and try the merge again. (mergePullRequest)" ok)" == "0|2|1" ]] || fail "merge_pr: Base branch was modified 를 다시 하지 않음"
+P='X Pull request #77 is not mergeable: the base branch policy prohibits the merge.'
+[[ "$(merge_case OPEN "$P" ok)" == "1|1|0" && "$(cat "$MG/err")" == "$P" ]] || fail "merge_pr: 브랜치 보호 거절을 다시 함: $(merge_case OPEN "$P" ok)"
+SCRIPT="$KIT/files/scripts/ticket-loop.sh"
+[[ "$(grep -c 'gh pr merge "' "$SCRIPT")" == 1 ]] && grep -qF 'if ! merge_pr "${pr}"; then' "$SCRIPT" && grep -A1 -F 'if ! merge_pr "${pr}"; then' "$SCRIPT" | grep -q 'STOP_KIND=merge_failed$' \
+  && grep -qF 'merge_pr "$pr" || { TRIAGE_NOTE=' "$SCRIPT" || fail "티켓 PR·수습 수정 PR 병합이 merge_pr 를 거치지 않거나 멈춤 종류가 merge_failed 가 아님"
+echo "ok  병합 재시도(일시 장애만, 이미 병합됨은 성공, 브랜치 보호 거절은 바로 멈춤)"
+
+# gh 읽기 재시도: 루프의 gh 를 감싼 함수가 읽기 호출만 일시 장애에 다시 하고, 쓰기·--watch·필드 있는 api(POST)·mutation 은 한 번만
+# 부른다. 출력·종료 코드는 그대로 넘기고 다 실패하면 마지막 오류를 stderr 로 낸다. 함수는 도구 검사(command -v gh) 뒤에 있어야 한다
+GW="$T/ghwrap"; mkdir -p "$GW/bin"
+sed -n '/^GH_TRANSIENT_RE=/p; /^gh_read_only() {/,/^}/p; /^gh() {/,/^}/p' "$SCRIPT" > "$GW/fn.sh"
+grep -q '^gh() {' "$GW/fn.sh" && grep -q '^gh_read_only() {' "$GW/fn.sh" && grep -q '^GH_TRANSIENT_RE=' "$GW/fn.sh" || fail "gh 감싸기 함수를 찾지 못함"
+cat > "$GW/bin/gh" <<'GH'
+#!/usr/bin/env bash
+c=$(( $(cat "$GW/c") + 1 )); echo "$c" > "$GW/c"
+if [[ $c -le $FAILS ]]; then printf '%s\n' "$MSG" >&2; exit 1; fi
+printf 'out %s\n' "$*"; exit "$RC"
+GH
+chmod +x "$GW/bin/gh"
+ghw_case() {  # $1 처음 실패할 횟수, $2 그 오류 문구, $3 성공 때 종료 코드, 나머지: gh 인자 → "종료 코드|호출 수|경고 수|stdout" (stderr 는 $GW/err)
+  local fails="$1" msg="$2" rc="$3"; shift 3; echo 0 > "$GW/c"; : > "$GW/warns"
+  (cd "$GW" && PATH="$GW/bin:$PATH" GW="$GW" FAILS="$fails" MSG="$msg" RC="$rc" bash -c '
+    set -euo pipefail
+    log() { [[ "$1" != warn ]] || echo x >> "$GW/warns"; }
+    GH_TRIES=3; GH_RETRY_SEC=0
+    source fn.sh
+    rc=0; out="$(gh "$@" 2>"$GW/err")" || rc=$?
+    echo "$rc|$(cat "$GW/c")|$(grep -c x "$GW/warns" || true)|$out"' _ "$@")
+}
+[[ "$(ghw_case 1 "$E502" 0 pr view 7 --json state)" == "0|2|1|out pr view 7 --json state" ]] || fail "gh: 읽기가 502 한 번 뒤 다시 하지 않음: $(ghw_case 1 "$E502" 0 pr view 7 --json state)"
+[[ "$(ghw_case 5 "$E502" 0 pr view 7)" == "1|3|2|" ]] && grep -qF '502 Bad Gateway' "$GW/err" || fail "gh: 502 가 이어지면 GH_TRIES 번 뒤 오류를 내야: $(ghw_case 5 "$E502" 0 pr view 7) / $(cat "$GW/err")"
+[[ "$(ghw_case 1 "gh: Bad Gateway (HTTP 502)" 0 api repos/o/r/issues/1 --jq .title)" == "0|2|1|out api repos/o/r/issues/1 --jq .title" ]] || fail "gh: GET api 를 다시 하지 않음"
+[[ "$(ghw_case 1 "$E502" 0 api graphql -f 'query={ repository { id } }')" == "0|2|1|out api graphql -f query={ repository { id } }" ]] || fail "gh: GraphQL 조회를 다시 하지 않음"
+[[ "$(ghw_case 0 "" 8 pr checks 7 --json bucket)" == "8|1|0|out pr checks 7 --json bucket" ]] || fail "gh: 종료 코드(8 대기)·출력을 그대로 넘기지 않음: $(ghw_case 0 "" 8 pr checks 7 --json bucket)"
+NF='GraphQL: Could not resolve to a PullRequest with the number of 7. (repository.pullRequest)'
+[[ "$(ghw_case 1 "$NF" 0 pr view 7)" == "1|1|0|" ]] && grep -qF 'Could not resolve' "$GW/err" || fail "gh: 일시 장애가 아닌 오류를 다시 함"
+for args in "issue comment 7 --body x" "pr merge 7 --squash" "issue close 7" "pr checks 7 --watch --fail-fast" "api repos/o/r/issues/1/comments -f body=x" "api repos/o/r/issues/1 -X PATCH"; do
+  # shellcheck disable=SC2086
+  [[ "$(ghw_case 1 "$E502" 0 $args)" == "1|1|0|" ]] || fail "gh: 쓰기·--watch·POST api 를 다시 함($args): $(ghw_case 1 "$E502" 0 $args)"
+done
+[[ "$(ghw_case 1 "$E502" 0 api graphql -f 'query=mutation { x }')" == "1|1|0|" ]] || fail "gh: GraphQL mutation 을 다시 함"
+[[ "$(grep -n '^for tool in gh jq git; do' "$SCRIPT" | cut -d: -f1)" -lt "$(grep -n '^gh() {' "$SCRIPT" | cut -d: -f1)" ]] || fail "gh 함수가 도구 검사보다 먼저 정의됨(gh 가 없어도 검사를 통과한다)"
+grep -qF 'branch="$(gh pr view "${pr}" --json headRefName -q .headRefName || true)"' "$SCRIPT" && grep -qF '[[ -z "$branch" ]] || git -C "$ROOT" push -q origin --delete "${branch}"' "$SCRIPT" \
+  || fail "병합 뒤 브랜치 조회가 실패하면 멈추거나 빈 이름으로 지움"
+echo "ok  gh 읽기 재시도(읽기만 — 쓰기·--watch·POST api·mutation 은 한 번, 출력·종료 코드 그대로)·병합 뒤 브랜치 조회 실패에 멈추지 않음"
+
+# CI 대기: --watch 는 API 오류 한 번에도 1 이다(체크 실패와 같은 코드). 1 이면 체크 상태를 다시 읽어 실패·취소가 있을 때만 실패, 다 통과면
+# 통과, 도는 체크가 있으면 GH_TRIES 번까지 다시 본다. 못 읽으면 전처럼 실패
+sed -n '/^ci_passed() {/,/^}/p; /^wait_checks_appear() {/,/^}/p; /^bg_wait() {/,/^}/p' "$SCRIPT" > "$GW/ci.sh"
+grep -q '^ci_passed() {' "$GW/ci.sh" && grep -q '^bg_wait() {' "$GW/ci.sh" || fail "ci_passed·bg_wait 를 찾지 못함"
+cat > "$GW/bin/gh" <<'GH'
+#!/usr/bin/env bash
+case " $* " in
+  *" --watch "*) c=$(( $(cat "$GW/w") + 1 )); echo "$c" > "$GW/w"; set -- $WATCH; i=$c; [[ $i -le $# ]] || i=$#; exit "${!i}" ;;
+  *" bucket "*) printf '%s\n' "$BUCKETS" ;;
+  *" name "*) echo 1 ;;
+esac
+GH
+ci2_case() {  # $1 --watch 가 차례로 낼 종료 코드(공백, 마지막 값이 이어짐), $2 체크 상태(bucket) → "종료 코드|watch 횟수|경고 수"
+  echo 0 > "$GW/w"; : > "$GW/warns"
+  (cd "$GW" && PATH="$GW/bin:$PATH" GW="$GW" WATCH="$1" BUCKETS="$2" bash -c '
+    set -euo pipefail
+    log() { [[ "$1" != warn ]] || echo x >> "$GW/warns"; }
+    GH_TRIES=3; CI_APPEAR_TIMEOUT_SEC=5; BG_PID=""
+    source ci.sh
+    rc=0; ci_passed 7 || rc=$?
+    echo "$rc|$(cat "$GW/w")|$(grep -c x "$GW/warns" || true)"')
+}
+[[ "$(ci2_case 0 "")" == "0|1|0" ]] || fail "ci_passed: 통과한 watch: $(ci2_case 0 "")"
+[[ "$(ci2_case 1 "fail pass")" == "1|1|0" && "$(ci2_case 1 "cancel pass")" == "1|1|0" ]] || fail "ci_passed: 실패·취소한 체크가 있는데 실패가 아님"
+[[ "$(ci2_case 1 "pass skipping")" == "0|1|1" ]] || fail "ci_passed: watch 는 1 이지만 다 통과했는데 실패로 봄: $(ci2_case 1 "pass skipping")"
+[[ "$(ci2_case "1 0" "pass pending")" == "0|2|1" ]] || fail "ci_passed: 도는 체크가 있는데 다시 보지 않음: $(ci2_case "1 0" "pass pending")"
+[[ "$(ci2_case 1 "pending")" == "1|3|2" ]] || fail "ci_passed: GH_TRIES 번 뒤에도 끝내지 않음: $(ci2_case 1 pending)"
+[[ "$(ci2_case 1 "")" == "1|1|0" ]] || fail "ci_passed: 체크 상태를 못 읽으면 실패여야: $(ci2_case 1 "")"
+echo "ok  CI 대기(--watch 가 1 이면 체크 상태를 다시 읽어 실패가 있을 때만 실패)"
 
 # 수리 끝 알아채기: idle 이 끝내 안 잡혀도(cmux lifecycle 공백) 새 커밋이 push 돼 REPAIR_SETTLE_SEC 동안 그대로이고 워크트리가 깨끗하면 끝.
 # 커밋이 없거나 워크트리가 더러우면 제한 시간까지 기다린다(1). idle 이 잡히면 새 커밋이 있을 때 바로 끝(0), 새 커밋이 아직 없으면 화면이

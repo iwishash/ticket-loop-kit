@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.9.4 — 2026-10-21
+
+CI가 통과한 티켓 PR을 병합하는 순간 GitHub API가 `502 Bad Gateway`를 한 번 돌려줬고, 루프가 그 자리에서 멈췄다(이슈 #7, 0.9.2, cmux). 앞뒤의 `gh` 호출은 모두 정상이었고 PR은 충돌 없이 병합 가능한 채로 열려 있었다 — GitHub 상태 페이지에 공지가 없는 짧은 502였다. 멈춤 종류가 `other`라 무인 수습도 뜨지 않아, 사람이 직접 병합하고 워커 워크트리를 지운 뒤 다시 실행했다.
+
+- 원인: 병합 호출 `gh pr merge … || die`에 재시도가 없었다. 루프의 다른 `gh` 호출을 훑어보니 같은 부류가 더 있었다. 하나는 `set -e`로 멈추는 곳이다(병합 뒤 브랜치 이름 조회, CI 수리 전 PR head 조회). 다른 하나는 멈추지 않고 틀린 값으로 읽는 곳이다. 대상 고르기는 명령 치환 안이라 실패가 빈 목록이 되어 "No more tickets"로 끝날 수 있었고, `gh pr checks --watch`는 API 오류 한 번에도 체크 실패와 같은 1로 끝나 워커에게 할 일 없는 수리를 보낼 수 있었다
+- `ticket-loop.sh` `gh` 함수: 루프 안의 `gh`를 감싸, 조회 호출(`pr view|list|diff`, `--watch` 없는 `pr checks`, `issue view|list`, `repo view`, 메서드·필드 없는 REST `api`, mutation이 아닌 GraphQL)이 GitHub 일시 장애(`GH_TRANSIENT_RE` — `status code: 5xx`·`HTTP 5xx`, bad gateway·service unavailable·timeout, "Something went wrong while executing your query", 연결 오류)로 실패하면 `GH_RETRY_SEC`×회차(15초·30초) 쉬고 `GH_TRIES`(3)번까지 다시 한다. 출력·종료 코드·stderr는 그대로 넘긴다. 쓰기(코멘트·라벨·이슈 닫기·병합)는 다시 하지 않는다 — 응답만 실패하고 서버는 처리했을 수 있어 두 번 들어간다. 도구 검사(`command -v gh`) 뒤에 정의한다(먼저 있으면 gh가 없어도 검사를 통과한다)
+- `merge_pr`: 병합이 실패하면 먼저 `gh pr view --json state`로 이미 병합됐는지 본다(서버는 병합을 끝냈는데 응답만 502였을 수 있다 — 그대로 다시 부르면 "already merged"로 또 실패한다). 병합됐으면 성공이다. 아니면 일시 장애와 "Base branch was modified"일 때만 같은 간격으로 세 번까지 다시 한다. 그 밖의 거절(필수 리뷰 같은 브랜치 보호, 권한)은 전처럼 바로 멈춘다 — 가이드북 12장이 병합 전에 사람이 보는 방법으로 권하는 자리다. 수습 세션의 수정 PR 병합(`triage_merge_fix_pr`)도 이 함수를 쓴다
+- 병합이 끝내 실패하면 멈춤 종류를 `merge_failed`로 남기고(전에는 `other`) 사유에 마지막 `gh` 오류 첫 줄과 "gh pr view N을 보고 병합 가능하면 병합한 뒤 다시 실행" 안내를 싣는다. 무인 수습 대상으로는 넣지 않았다(이슈의 선택 항목 3) — 일시 장애는 재시도가 받고, 남는 거절은 사람에게 넘기려고 켜 둔 것이라 수습 세션이 할 일이 없다. `loop-triage` 스킬의 사람 모드에 `merge_failed`를 가르는 법(`state`·`mergeStateStatus`: `MERGED`·`CLEAN`·`BLOCKED`·`BEHIND`·`DIRTY`)을 더했다
+- `ci_passed`: `--watch`가 실패로 끝나면 체크 상태(`gh pr checks --json bucket`)를 다시 읽어 실패·취소한 체크가 있을 때만 실패다. 다 통과했으면 통과("CI watch failed but every check passed"), 아직 도는 체크가 있으면 `GH_TRIES`번까지 다시 본다. 못 읽으면 전처럼 실패
+- 병합 뒤 브랜치 이름 조회가 실패해도 멈추지 않는다(티켓은 이미 병합됐다). 경고 한 줄을 남기고 브랜치 삭제만 건너뛴다
+- `tests/smoke.sh`: `merge_pr` 여덟 경우(한 번에 병합·`--squash` 전달, 502 한 번 뒤 병합, 502가 이어지면 세 번 뒤 실패와 `MERGE_ERR`, 502지만 이미 병합됨, 다시 해 보니 "already merged", REST 503·DNS 오류, "Base branch was modified", 브랜치 보호 거절은 한 번에 실패). `gh` 함수 열세 경우(조회·GET api·GraphQL 조회는 다시 하고, 계속 실패하면 세 번 뒤 오류, 종료 코드 8·출력 그대로, 일시 장애가 아닌 오류·코멘트·병합·이슈 닫기·`--watch`·필드 있는 api·`-X PATCH`·mutation은 한 번)와 도구 검사보다 뒤에 정의됐는지. `ci_passed` 일곱 경우(통과, 실패·취소, watch는 1이지만 다 통과, 도는 체크면 다시 봄, 세 번 뒤 끝, 못 읽음). 티켓 PR·수정 PR 병합이 `merge_pr`를 거치는지, 멈춤 종류, 병합 뒤 브랜치 조회. 넣은 결함 일곱 개(병합 재시도 없음, 병합 여부 확인 없음, 일시 장애를 가리지 않고 병합 재시도, 조회 재시도 없음, 쓰기까지 재시도, `--watch` 결과를 다시 읽지 않음, 도는 체크를 통과로 봄)에서 각각 해당 검사가 실패하는 것을 확인했다. 감싼 `gh`를 실제 `gh` 2.97로 불러 조회 출력·GraphQL·`--json bucket --jq`·not found 오류(다시 하지 않음, 종료 코드 1)를 확인했다
+- 가이드북 6장 내부 상수, 7장 4·5단계, 10.2, 10.6, R3, 부록 D 재생성, 부록 E 한 행. PDF 재빌드
+- 이미 설치된 저장소: `npx github:iwishash/ticket-loop-kit#v0.9.4 init`(또는 `install.sh`) 뒤 그 PR을 병합한다. 설정은 없다
+
 ## 0.9.3 — 2026-10-21
 
 CI 수리 요청 5초 만에 루프가 "수리 뒤 새 커밋 없음"으로 멈췄다. rental-portal #251(0.9.2, cmux, 2026-10-20)에서 PR #269의 CI가 실패해 루프가 워커에게 수리를 보냈는데(23:44:21), 다음 줄이 "no new commit was pushed after the repair"(23:44:26)였다. 워커는 그 뒤에도 수리를 계속해 2분 뒤 커밋을 push했고, 그사이 뜬 수습 세션과 같은 PR 브랜치에 함께 push했다(수습 세션이 알아채 워커의 30초 한도 커밋을 되돌렸다). 수습 세션이 멈춤 기록 옆에 키트 버그 보고(`.kit-bug.md`)를 남겼다. rental-portal 로그에서 수리가 돈 것은 이번이 처음이다 — cmux 백엔드가 생긴 뒤로 숨어 있던 버그다.
