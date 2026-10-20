@@ -314,7 +314,7 @@ cat > "$F/run-tmux.sh" <<'SH'
 set -euo pipefail
 export HOME="$2"
 BACKEND=tmux; ORCA_CLI=orca; CMUX_CLI=cmux; TMUX_CLI=tmux; TMUX_SESSION=""; OWNER_REPO=o/r; ROOT=/tmp; MAIN_WT=/tmp; BASE_BRANCH=main; BRANCH_PREFIX=issue-; AGENT=claude; SKILL_PREFIX=/
-AGENT_RESTART_CMD="claude --dangerously-skip-permissions"; TERMINAL_RETRY=1; TERMINAL_RETRY_SEC=0; IDLE_POLL_SEC=0; WORKTREE_DIR=""; WORKTREE_SETUP_CMD=""
+AGENT_RESTART_CMD="claude --dangerously-skip-permissions"; TERMINAL_RETRY=1; TERMINAL_RETRY_SEC=0; IDLE_POLL_SEC=0; SEND_ACCEPT_SEC=15; WORKTREE_DIR=""; WORKTREE_SETUP_CMD=""
 log() { :; }; die() { echo "die: $*" >&2; exit 1; }
 source "$1"
 tmux_check
@@ -353,12 +353,26 @@ mkdir -p "$F/home"
 echo "ok  tmux 백엔드 함수·훅 가짜 호출"
 
 # cmux 백엔드: 가짜 cmux 로 wait_idle 의 세 경우 — lifecycle idle → 0, lifecycle 빈 값인데 화면은 읽힘 → 계속 기다림(타임아웃 1)과 안내 로그,
-# 화면도 못 읽음 → 3(닿지 못함). 2026-10-14 rental-portal #100 에서 빈 값 5번(25초)으로 일하던 워커를 두고 루프가 죽은 오판을 고정한다
+# 화면도 못 읽음 → 3(닿지 못함). 2026-10-14 rental-portal #100 에서 빈 값 5번(25초)으로 일하던 워커를 두고 루프가 죽은 오판을 고정한다.
+# send 의 다섯 경우 — 붙여 넣은 뒤 lifecycle 이 직전 턴의 idle 에서 running 으로 → 0, 끝까지 idle 이고 화면도 그대로 → 비0, 끝까지 idle 이지만
+# 프롬프트가 화면에 찍힘 → 0, lifecycle 빈 값 → 0, paste 거부 → 비0. 2026-10-20 rental-portal #251 에서 붙여 넣은 직후의 묵은 idle 을
+# 수리 끝으로 읽어 5초 만에 멈춘 것을 고정한다
 cat > "$F/cmux" <<'SH'
 #!/bin/bash
 case "$1" in
-  rpc) [[ "${FAKE_LC:-}" == none ]] || echo "{\"lifecycle\":\"${FAKE_LC:-idle}\"}" ;;
-  read-screen) if [[ "${FAKE_SCREEN:-ok}" == ok ]]; then echo "[Opus 5.5 | Max]"; else echo "Error: not_found: Workspace not found" >&2; exit 1; fi ;;
+  rpc)
+    lc="${FAKE_LC:-idle}"
+    if [[ -n "${FAKE_LC_FILE:-}" ]]; then   # 부를 때마다 한 줄씩, 마지막 줄은 이어진다
+      lc="$(head -n 1 "$FAKE_LC_FILE")"
+      if [[ "$(wc -l < "$FAKE_LC_FILE")" -gt 1 ]]; then tail -n +2 "$FAKE_LC_FILE" > "$FAKE_LC_FILE.n"; mv "$FAKE_LC_FILE.n" "$FAKE_LC_FILE"; fi
+    fi
+    [[ "$lc" == none ]] || echo "{\"lifecycle\":\"$lc\"}" ;;
+  read-screen)
+    if [[ "${FAKE_SCREEN:-ok}" != ok ]]; then echo "Error: not_found: Workspace not found" >&2; exit 1; fi
+    if [[ -n "${FAKE_SCREEN_FILE:-}" ]]; then cat "$FAKE_SCREEN_FILE"; else echo "[Opus 5.5 | Max]"; fi ;;
+  paste)   # FAKE_PASTE_SHOWS=1 이면 붙여 넣은 줄이 화면에 찍힌다
+    [[ "${FAKE_PASTE_SHOWS:-0}" != 1 ]] || echo "> ${*: -1}" >> "$FAKE_SCREEN_FILE"
+    exit "${FAKE_PASTE_RC:-0}" ;;
   *) exit 0 ;;
 esac
 SH
@@ -366,17 +380,29 @@ chmod +x "$F/cmux"
 cat > "$F/run-cmux.sh" <<'SH'
 set -euo pipefail
 BACKEND=cmux; ORCA_CLI=orca; CMUX_CLI=cmux; TMUX_CLI=tmux; TMUX_SESSION=""; OWNER_REPO=o/r; ROOT=/tmp; MAIN_WT=/tmp; BASE_BRANCH=main; BRANCH_PREFIX=issue-; AGENT=claude; SKILL_PREFIX=/
-AGENT_RESTART_CMD=claude; TERMINAL_RETRY=2; TERMINAL_RETRY_SEC=0; IDLE_POLL_SEC=0; WORKTREE_DIR=""; WORKTREE_SETUP_CMD=""
+AGENT_RESTART_CMD=claude; TERMINAL_RETRY=2; TERMINAL_RETRY_SEC=0; IDLE_POLL_SEC=0; SEND_ACCEPT_SEC=2; WORKTREE_DIR=""; WORKTREE_SETUP_CMD=""
 LOGGED=""; log() { LOGGED+="$*"$'\n'; }; die() { echo "die: $*" >&2; exit 1; }
 source "$1"
+export FAKE_SCREEN_FILE="$PWD/screen" FAKE_LC_FILE="$PWD/lc"
+send_case() {   # $1 lifecycle 차례(줄마다 한 번), $2 FAKE_PASTE_SHOWS, $3 FAKE_PASTE_RC → "종료 코드|남은 lifecycle 첫 줄"
+  local rc=0; printf '%s\n' $1 > "$FAKE_LC_FILE"; echo "[Opus 5.5 | Max]" > "$FAKE_SCREEN_FILE"
+  FAKE_PASTE_SHOWS="$2" FAKE_PASTE_RC="$3" cmux_send s1 "고쳐라" || rc=$?
+  echo "$rc|$(head -n 1 "$FAKE_LC_FILE")"
+}
+[[ "$(send_case "idle idle running idle" 0 0)" == "0|idle" ]] || die "send: idle → running 에서 수락으로 돌아오지 않음(또는 running 을 지나쳐 더 읽음): $(send_case "idle idle running idle" 0 0)"
+[[ "$(send_case idle 0 0)" == 1\|* ]] || die "send: 끝까지 idle·화면 그대로인데 수락으로 봄(묵은 idle, #251)"
+[[ "$(send_case idle 1 0)" == 0\|* ]] || die "send: 끝까지 idle 이지만 프롬프트가 화면에 찍혔는데 비0"
+[[ "$(send_case "none idle" 0 0)" == "0|idle" ]] || die "send: lifecycle 빈 값인데 기다림: $(send_case "none idle" 0 0)"
+[[ "$(send_case running 0 1)" == 1\|* ]] || die "send: paste 가 거부됐는데 0"
+unset FAKE_SCREEN_FILE FAKE_LC_FILE
 export FAKE_LC=idle FAKE_SCREEN=ok; cmux_wait_idle s1 1000 || die "idle 인데 wait_idle 이 0 이 아님"
 export FAKE_LC=none FAKE_SCREEN=ok; rc=0; cmux_wait_idle s1 0 || rc=$?; [[ $rc -eq 1 ]] || die "lifecycle 빈 값·화면 읽힘인데 1(계속 기다림)이 아님: $rc"
 [[ "$LOGGED" == *"keep waiting"* ]] || die "화면이 읽히는데 안내 로그가 없다"
 export FAKE_LC=none FAKE_SCREEN=gone; rc=0; cmux_wait_idle s1 60000 || rc=$?; [[ $rc -eq 3 ]] || die "lifecycle 빈 값·화면도 못 읽는데 3 이 아님: $rc"
 echo ok
 SH
-(cd "$F" && PATH="$F:$PATH" bash run-cmux.sh "$F/backend.sh" >/dev/null) || fail "cmux 백엔드 wait_idle 가짜 호출 실패"
-echo "ok  cmux 백엔드 wait_idle 세 경우"
+(cd "$F" && PATH="$F:$PATH" bash run-cmux.sh "$F/backend.sh" >/dev/null) || fail "cmux 백엔드 wait_idle·send 가짜 호출 실패"
+echo "ok  cmux 백엔드 wait_idle 세 경우, send 다섯 경우"
 
 # 에이전트 프리셋: AGENT 가 기동 명령·배너·모델 정규식·스킬 접두사의 기본값을 정하고, 준 값이 이긴다. 프롬프트에는 특정 에이전트의 이름·도구가 없다
 A="$T/agent"; mkdir -p "$A"
@@ -1050,17 +1076,22 @@ grep -qF 'ci_sec="$(ci_run_sec "${pr}")"; [[ -n "$ci_sec" ]] || ci_sec=$(( $(dat
 echo "ok  CI 소요(GitHub 체크 시각)"
 
 # 수리 끝 알아채기: idle 이 끝내 안 잡혀도(cmux lifecycle 공백) 새 커밋이 push 돼 REPAIR_SETTLE_SEC 동안 그대로이고 워크트리가 깨끗하면 끝.
-# 커밋이 없거나 워크트리가 더러우면 제한 시간까지 기다린다(1), idle 이 잡히면 전처럼 바로 끝(0)
-repair_case() {  # $1 수리 뒤 head, $2 커밋 안 된 파일(빈 값이면 깨끗), $3 terminal_idle 종료 코드 → "종료 코드|경고 줄 수"
-  (cd "$W" && W="$W" NEWHEAD="$1" DIRTY="$2" IRC="$3" HC="$W/hc" bash -c '
+# 커밋이 없거나 워크트리가 더러우면 제한 시간까지 기다린다(1). idle 이 잡히면 새 커밋이 있을 때 바로 끝(0), 새 커밋이 아직 없으면 화면이
+# 그대로인 idle 을 IDLE_STRIKES 번 연달아 볼 때만 끝(호출부가 "새 커밋 없음"으로 멈춘다) — 2026-10-20 rental-portal #251 에서 수리
+# 프롬프트 직후의 묵은 idle 하나로 5초 만에 멈췄고 워커는 2분 뒤 push 했다
+repair_case() {  # $1 수리 뒤 head(공백으로 가른 차례, 마지막 값이 이어짐), $2 커밋 안 된 파일(빈 값이면 깨끗), $3 terminal_idle 종료 코드,
+                 # $4 terminal_tail 화면(차례, 마지막 값이 이어짐) → "종료 코드|경고 줄 수"
+  (cd "$W" && W="$W" NEWHEAD="$1" DIRTY="$2" IRC="$3" SCREENS="${4:-same}" HC="$W/hc" TC="$W/tc" bash -c '
     set -euo pipefail
-    echo 0 > "$HC"; warns="$W/warns"; : > "$warns"
+    echo 0 > "$HC"; echo 0 > "$TC"; warns="$W/warns"; : > "$warns"
+    nth() { local i="$1"; shift; [[ $i -le $# ]] || i=$#; echo "${!i}"; }   # $1 번째 값(넘치면 마지막)
     send_prompt() { :; }; progress_check() { :; }; die() { echo "die $*"; exit 9; }; idle_wait_ms() { echo 1; }
     terminal_idle() { sleep 0.05; return "$IRC"; }
-    pr_head_sha() { local c; c=$(( $(cat "$HC") + 1 )); echo "$c" > "$HC"; [[ $c -eq 1 ]] && echo aaa1111 || echo "$NEWHEAD"; }
+    terminal_tail() { local c; c=$(( $(cat "$TC") + 1 )); echo "$c" > "$TC"; nth "$c" $SCREENS; }
+    pr_head_sha() { local c; c=$(( $(cat "$HC") + 1 )); echo "$c" > "$HC"; [[ $c -eq 1 ]] && echo aaa1111 || nth $(( c - 1 )) $NEWHEAD; }
     progress_dirty() { printf "%s" "$DIRTY"; }
     log() { [[ "$1" != warn ]] || echo x >> "$warns"; }
-    PROGRESS_SEC=0; REPAIR_SETTLE_SEC=0; CUR_N=7; BACKEND_NAME=x
+    PROGRESS_SEC=0; REPAIR_SETTLE_SEC=0; CUR_N=7; BACKEND_NAME=x; IDLE_STRIKES=3; IDLE_RECHECK_SEC=0
     source fn.sh
     rc=0; repair h "고쳐라" $(( $(date +%s) + 2 )) 77 || rc=$?
     echo "$rc|$(grep -c x "$warns" || true)"')
@@ -1068,10 +1099,13 @@ repair_case() {  # $1 수리 뒤 head, $2 커밋 안 된 파일(빈 값이면 �
 [[ "$(repair_case bbb2222 "" 1)" == "0|1" ]] || fail "repair: 새 커밋이 그대로이고 워크트리가 깨끗한데 끝내지 않음: $(repair_case bbb2222 "" 1)"
 [[ "$(repair_case aaa1111 "" 1)" == "1|0" ]] || fail "repair: 새 커밋이 없는데 끝냄: $(repair_case aaa1111 "" 1)"
 [[ "$(repair_case bbb2222 "a.ts" 1)" == "1|0" ]] || fail "repair: 커밋 안 된 변경이 있는데 끝냄: $(repair_case bbb2222 a.ts 1)"
-[[ "$(repair_case aaa1111 "" 0)" == "0|0" ]] || fail "repair: idle 인데 끝내지 않음: $(repair_case aaa1111 "" 0)"
+[[ "$(repair_case bbb2222 "" 0)" == "0|0" ]] || fail "repair: idle 이고 새 커밋이 있는데 바로 끝내지 않음: $(repair_case bbb2222 "" 0)"
+[[ "$(repair_case aaa1111 "" 0)" == "0|3" ]] || fail "repair: 새 커밋 없는 idle 을 IDLE_STRIKES 번 보고 끝내지 않음: $(repair_case aaa1111 "" 0)"
+[[ "$(repair_case "aaa1111 bbb2222" "" 0)" == "0|1" ]] || fail "repair: 묵은 idle 뒤 들어온 커밋으로 끝내지 않음(#251): $(repair_case "aaa1111 bbb2222" "" 0)"
+[[ "$(repair_case aaa1111 "" 0 "s1 s2")" == "0|4" ]] || fail "repair: 화면이 바뀌면 idle 을 처음부터 세야: $(repair_case aaa1111 "" 0 "s1 s2")"
 grep -q 'repair "${handle}" "PR #${pr} 이 ${BASE_BRANCH}과 충돌한다.* "$deadline" "${pr}"' "$KIT/files/scripts/ticket-loop.sh" \
   && grep -q 'repair "${handle}" "PR #${pr} 의 CI가 실패했다.* "$deadline" "${pr}"' "$KIT/files/scripts/ticket-loop.sh" || fail "수리 두 곳이 PR 번호를 넘기지 않음"
-echo "ok  수리 끝 알아채기(idle 없이 새 커밋)"
+echo "ok  수리 끝 알아채기(idle 없이 새 커밋, 새 커밋 없는 idle 은 연달아 볼 때만)"
 
 # 기록: PR 을 알아채기까지(pr_pickup_sec) — 값이 있을 때만
 sed -n '/^idle_fp_count() /p; /^record_ticket() {/,/^}/p' "$KIT/files/scripts/ticket-loop.sh" > "$W/rec.sh"

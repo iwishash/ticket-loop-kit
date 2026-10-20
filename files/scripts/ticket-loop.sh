@@ -229,6 +229,7 @@ esac
 # ----- 에이전트 프리셋 끝 -----
 IDLE_WAIT_MS=600000       # idle 1회 대기 상한(Orca: terminal wait 한 번, cmux: 폴링 한 바퀴). PR·수리 대기는 PROGRESS_SEC(진행 로그)마다 돌아온다
 IDLE_POLL_SEC=5           # cmux·tmux 백엔드가 에이전트 상태(lifecycle / 훅 파일)를 다시 읽는 간격
+SEND_ACCEPT_SEC=15        # cmux·tmux 백엔드: 프롬프트를 보낸 뒤 에이전트가 새 턴을 시작하는지(running) 0.5초마다 보는 상한
 TERMINAL_RETRY=5          # wait가 이상하게 끝났을 때 터미널 읽기를 다시 해 보는 횟수
 TERMINAL_RETRY_SEC=10
 IDLE_STRIKES=3            # PR 없이 연속 idle이면 멈춤으로 본다
@@ -778,10 +779,23 @@ cmux_worktree_remove() {
   git -C "$ROOT" worktree remove --force "$2"
 }
 
+# 붙여 넣은 뒤 lifecycle이 직전 턴의 idle에서 벗어나는지 SEND_ACCEPT_SEC 동안 본다(tmux의 sent→running 확인과 같은 뜻). 붙여 넣은
+# 직후에는 cmux가 아직 새 턴을 몰라 직전 턴의 idle을 그대로 돌려준다 — 0.9.2까지는 확인 없이 돌아와, 수리 프롬프트 직후의 묵은 idle을
+# 수리 끝으로 읽었다(2026-10-20 rental-portal #251: 수리 요청 5초 뒤 "no new commit"으로 멈췄고, 워커는 2분 뒤 수리 커밋을 push했다).
+# running이면 수락이다. 빈 값·unknown은 판정할 수 없지만 cmux_wait_idle이 그 값을 idle로 읽지 않으니 넘어간다. 끝까지 idle이면 화면으로
+# 가른다 — 붙여 넣은 프롬프트가 화면에 찍혔으면 들어간 것으로 보고(훅 보고가 늦은 경우, 남은 묵은 idle은 repair가 거른다), 화면도
+# 그대로면 비0이다
 cmux_send() {
-  "$CMUX_CLI" agent-hibernation wake "$1" >/dev/null 2>&1 || true
+  local handle="$1" i before
+  "$CMUX_CLI" agent-hibernation wake "$handle" >/dev/null 2>&1 || true
+  before="$(cmux_tail "$handle" 2>/dev/null | cksum)" || before=""
   # paste --submit: 한 줄을 붙여 넣고 제출. 에이전트 입력에 초안이나 대화상자가 있으면 거부(비0)한다 — 사람이 끼어든 것이니 보내지 않는다
-  "$CMUX_CLI" paste --surface "$1" --submit "$2" >/dev/null
+  "$CMUX_CLI" paste --surface "$handle" --submit "$2" >/dev/null || return 1
+  for (( i = 0; i < SEND_ACCEPT_SEC * 2; i++ )); do
+    case "$(cmux_lifecycle "$handle")" in idle|needsInput) ;; *) return 0 ;; esac
+    sleep 0.5
+  done
+  [[ -z "$before" || "$(cmux_tail "$handle" 2>/dev/null | cksum)" != "$before" ]]
 }
 cmux_type()      { "$CMUX_CLI" send --surface "$1" --force "$2" >/dev/null && "$CMUX_CLI" send-key --surface "$1" enter >/dev/null; }
 cmux_interrupt() { "$CMUX_CLI" send-key --surface "$1" ctrl+c >/dev/null; }
@@ -835,7 +849,7 @@ cmux_set_status() {
 #     claude-hooks.json을 쓰고, 기동 명령에 `--settings <그 파일>`(claude) 또는 `-c notify=[…]`(codex)를 붙인다. 훅은
 #     UserPromptSubmit → running, Stop → idle, Notification(permission_prompt·elicitation_dialog) → needsInput, SessionEnd → exited 를
 #     state/<워크트리 디렉터리 이름> 파일에 한 단어로 쓰고, 루프가 IDLE_POLL_SEC마다 읽는다(cmux의 lifecycle과 같은 뜻)
-#   - 프롬프트가 수락됐는지도 그 파일로 안다: 보내기 전에 sent를 쓰고 15초 안에 running(UserPromptSubmit)이 되는지 본다.
+#   - 프롬프트가 수락됐는지도 그 파일로 안다: 보내기 전에 sent를 쓰고 SEND_ACCEPT_SEC(15초) 안에 running(UserPromptSubmit)이 되는지 본다.
 #     Codex의 notify는 턴 종료(agent-turn-complete)만 알리므로 보낸 것으로 치고 루프가 직접 running을 쓴다
 #   - Stop은 메인 에이전트의 턴이 끝날 때마다 온다 — 백그라운드 서브에이전트(ticket-review)를 기다리는 동안도 idle로 보인다(실측 1회).
 #     서브에이전트가 돌아오면 Claude Code가 스스로 턴을 열어 UserPromptSubmit이 running을 다시 쓰고, 공통부는 화면이 바뀌면 연속
@@ -927,7 +941,7 @@ tmux_send() {
   printf 'sent\n' > "$TMUX_STATE_FILE"
   tmux_type "$handle" "$2" || return 1
   if [[ "$AGENT" != claude ]]; then printf 'running\n' > "$TMUX_STATE_FILE"; return 0; fi   # 제출 훅이 없는 에이전트
-  for i in $(seq 1 30); do   # 15초: UserPromptSubmit 훅이 running을 쓰면 수락된 것
+  for (( i = 0; i < SEND_ACCEPT_SEC * 2; i++ )); do   # UserPromptSubmit 훅이 running을 쓰면 수락된 것
     [[ "$(tmux_state)" != running ]] || return 0
     sleep 0.5
   done
@@ -1120,21 +1134,35 @@ wait_for_pr() {
   done
 }
 
-# 수리 프롬프트를 보내고 워커가 다시 idle이 될 때까지 기다린다(그동안의 커밋도 진행 로그에 찍힌다). $4 PR 번호 — idle이 끝내 안 잡히는
-# 백엔드(cmux lifecycle이 빈 값으로 이어질 때 — rental-portal 스펙 #141에서 하루 126번)에서도 끝을 알아챈다: 수리 프롬프트 뒤 새 커밋이
-# push됐고 head가 REPAIR_SETTLE_SEC 동안 그대로이며 워크트리에 커밋 안 된 변경이 없으면 끝난 것으로 본다. 없으면 티켓 제한 시간까지 기다렸다
+# 수리 프롬프트를 보내고 워커가 다시 idle이 될 때까지 기다린다(그동안의 커밋도 진행 로그에 찍힌다). $4 PR 번호를 주면 두 가지를 더 본다.
+#   - idle인데 PR에 새 커밋이 아직 없으면 바로 끝내지 않는다. 화면이 그대로인 idle을 IDLE_STRIKES번 연달아(그 사이 IDLE_RECHECK_SEC) 볼
+#     때만 끝이고, 호출부가 head를 비교해 "새 커밋 없음"으로 멈춘다. 그 전에 커밋이 들어오면 끝, 화면이 바뀌거나 워커가 다시 일하면 처음부터
+#     센다(wait_for_pr와 같은 규칙). 프롬프트 직후의 묵은 idle(2026-10-20 rental-portal #251, cmux — cmux_send 참고)과 백그라운드
+#     서브에이전트를 기다리는 동안의 idle을 수리 끝으로 읽지 않기 위해서다. 0.9.2까지는 첫 idle에서 끝냈다
+#   - idle이 끝내 안 잡히는 백엔드(cmux lifecycle이 빈 값으로 이어질 때 — rental-portal 스펙 #141에서 하루 126번)에서도 끝을 알아챈다:
+#     수리 프롬프트 뒤 새 커밋이 push됐고 head가 REPAIR_SETTLE_SEC 동안 그대로이며 워크트리에 커밋 안 된 변경이 없으면 끝난 것으로 본다.
+#     0.9.1까지는 티켓 제한 시간까지 기다렸다
 repair() {
-  local handle="$1" text="$2" deadline="$3" pr="${4:-}" idle wait_ms before="" head="" seen="" seen_at=0
+  local handle="$1" text="$2" deadline="$3" pr="${4:-}" idle wait_ms before="" head="" seen="" seen_at=0 strikes=0 last_screen="" screen
   wait_ms="$(idle_wait_ms)"
   [[ -z "$pr" ]] || before="$(pr_head_sha "$pr" 2>/dev/null || true)"
   send_prompt "${handle}" "$text"
   while :; do
     idle=0; bg_wait terminal_idle "${handle}" "$wait_ms" || idle=$?
     [[ $idle -eq 3 ]] || [[ "$PROGRESS_SEC" -le 0 ]] || progress_check "${CUR_N}"
-    [[ $idle -ne 0 ]] || return 0
     [[ $idle -ne 3 ]] || die "Cannot reach ${BACKEND_NAME} terminal ${handle} (${BACKEND_NAME} app closed?)"
-    if [[ -n "$before" ]]; then
-      head="$(pr_head_sha "$pr" 2>/dev/null || true)"
+    [[ -z "$before" ]] || head="$(pr_head_sha "$pr" 2>/dev/null || true)"
+    if [[ $idle -eq 0 ]]; then
+      # 새 커밋이 있으면 끝이다. PR 번호가 없거나 head를 못 읽으면 전처럼 idle 하나로 끝낸다
+      [[ -n "$before" && -n "$head" && "$head" == "$before" ]] || return 0
+      screen="$(terminal_tail "${handle}" | cksum | cut -d' ' -f1)"
+      if [[ "$screen" != "$last_screen" ]]; then strikes=0; last_screen="$screen"; fi
+      strikes=$((strikes + 1))
+      log warn "#${CUR_N}: worker idle after the repair prompt, no new commit on PR #${pr} yet (${strikes}/${IDLE_STRIKES})"
+      [[ ${strikes} -lt $IDLE_STRIKES ]] || return 0
+      sleep "$IDLE_RECHECK_SEC"
+    else
+      strikes=0   # 워커가 다시 일한다
       if [[ -n "$head" && "$head" != "$before" ]]; then
         [[ "$head" == "$seen" ]] || { seen="$head"; seen_at="$(date +%s)"; }
         if [[ $(( $(date +%s) - seen_at )) -ge $REPAIR_SETTLE_SEC && -z "$(progress_dirty)" ]]; then

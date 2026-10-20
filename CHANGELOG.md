@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.9.3 — 2026-10-21
+
+CI 수리 요청 5초 만에 루프가 "수리 뒤 새 커밋 없음"으로 멈췄다. rental-portal #251(0.9.2, cmux, 2026-10-20)에서 PR #269의 CI가 실패해 루프가 워커에게 수리를 보냈는데(23:44:21), 다음 줄이 "no new commit was pushed after the repair"(23:44:26)였다. 워커는 그 뒤에도 수리를 계속해 2분 뒤 커밋을 push했고, 그사이 뜬 수습 세션과 같은 PR 브랜치에 함께 push했다(수습 세션이 알아채 워커의 30초 한도 커밋을 되돌렸다). 수습 세션이 멈춤 기록 옆에 키트 버그 보고(`.kit-bug.md`)를 남겼다. rental-portal 로그에서 수리가 돈 것은 이번이 처음이다 — cmux 백엔드가 생긴 뒤로 숨어 있던 버그다.
+
+- 원인: `cmux_send`는 `paste --submit`만 하고 돌아왔다(백엔드 계약은 "수락되지 않으면 비0" — Orca는 `--wait-submit`, tmux는 `sent`→running을 본다). 붙여 넣은 직후의 `lifecycle`은 cmux가 새 턴을 알기 전이라 직전 턴의 `idle`이고, `repair`가 바로 부른 `cmux_wait_idle`이 그 묵은 `idle`을 첫 폴링에서 받아 수리 끝으로 돌려줬다. 호출부는 PR head가 그대로라 멈췄다
+- `ticket-loop.sh` `cmux_send`: 붙여 넣은 뒤 `SEND_ACCEPT_SEC`(15초) 동안 0.5초마다 `lifecycle`을 본다. `idle`·`needsInput`에서 벗어나면 수락이다(빈 값·`unknown`도 넘어간다 — `cmux_wait_idle`이 그 값을 idle로 읽지 않는다). 끝까지 `idle`이면 화면으로 가른다 — 붙여 넣기 전과 화면이 달라졌으면(프롬프트가 찍힘) 수락, 그대로면 비0이고 루프는 "Prompt was not accepted"로 멈춘다. 다시 보내지는 않는다 — 실제로는 들어갔는데 훅 보고만 늦은 경우 같은 지시가 두 번 들어간다. tmux의 15초도 같은 상수로 바꿨다
+- `repair`: idle인데 PR에 새 커밋이 아직 없으면 바로 끝내지 않는다. 화면이 그대로인 idle을 `IDLE_STRIKES`(3)번 연달아(그 사이 `IDLE_RECHECK_SEC` 30초) 볼 때만 끝이고 호출부가 "새 커밋 없음"으로 멈춘다. 그 전에 커밋이 들어오면 끝, 화면이 바뀌거나 워커가 다시 일하면 처음부터 센다(`wait_for_pr`와 같은 규칙). 각 idle은 "worker idle after the repair prompt, no new commit on PR #N yet (k/3)"로 남는다. 위 묵은 idle이 남아도, 백그라운드 서브에이전트를 기다리는 동안의 idle(2.5절 `Stop` 훅)이어도 수리 끝으로 읽지 않는다. 정말 push 없이 멈춘 워커는 전보다 약 1분 늦게 멈춘다
+- `tests/smoke.sh`: 가짜 cmux에 차례대로 바뀌는 `lifecycle`(`FAKE_LC_FILE`)·화면 파일·`paste`를 더해 `cmux_send` 다섯 경우(idle→running에서 수락하고 더 읽지 않음, 끝까지 idle·화면 그대로면 비0, 프롬프트가 화면에 찍히면 0, 빈 값이면 0, `paste` 거부면 비0). `repair` 세 경우를 더했다(idle이고 새 커밋 있음 → 바로 끝, 새 커밋 없는 idle 세 번 → 끝·경고 셋, 묵은 idle 뒤 커밋 → 끝·경고 하나, 화면이 바뀌면 처음부터 셈). 수락 확인을 뺀 사본, 화면 대체 신호를 뺀 사본, `repair`가 첫 idle에서 끝내는 사본(0.9.2), 화면이 바뀌어도 세는 사본에서 각각 실패하는 것을 확인했다
+- 가이드북 2.5절 비교 표·주의(묵은 lifecycle, 실측 줄), 6장 내부 상수(`SEND_ACCEPT_SEC`, `IDLE_STRIKES`), 7장 4단계, 부록 D 재생성, 부록 E 한 행. PDF 재빌드
+- 이미 설치된 저장소: `npx github:iwishash/ticket-loop-kit#v0.9.3 init`(또는 `install.sh`) 뒤 그 PR을 병합한다. 설정은 없다
+
 ## 0.9.2 — 2026-10-18
 
 PR을 찾은 뒤 루프가 10분을 놀았다(이슈 #2). rental-portal 스펙 #141(0.9.1, cmux, 13티켓)에서 #145·#152·#179가 "PR #N opened"를 PR 생성 636~656초 뒤에 찍었다. `wait_for_pr`가 PR을 찾은 뒤 "라벨·체크박스 정리까지 끝나도록" idle을 `IDLE_WAIT_MS`(10분)까지 한 번 더 기다리는데, cmux lifecycle이 빈 값으로 이어져(그날 로그에 `empty lifecycle` 126줄, 거의 모든 티켓) idle이 끝내 잡히지 않았다. CI는 그사이 끝나 있어 요약·기록·스펙 리포트에 2~3초로 찍혔다. CI 끝에서 루프가 알아채기까지 실제로 늦은 시간은 6분 26초·6분 28초·5분 12초(합 약 18분)다. 세 건 모두 `in-review` 라벨은 PR 생성 8~12초 뒤에 붙어 있었다(이슈 타임라인).
