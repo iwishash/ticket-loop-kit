@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.9.6 — 2026-10-21
+
+루프가 시작할 때 키트 이름과 버전을 보여 주지 않았다. 로그는 날짜별 한 파일(`loop-MMDD.log`)에 실행이 이어 붙는데, 어디서 새 실행이 시작하는지도, 그 실행을 어느 키트 버전이 돌렸는지도 줄에 없었다. 0.9.1~0.9.5처럼 루프 버그를 고친 릴리스가 잇따른 뒤로는 `/retro`나 멈춤 진단에서 "고치기 전 버전이 낸 줄인가"를 가를 수 있어야 한다. 버전은 멈춤 기록(`kit` 필드)에만 남아 있었다.
+
+- `ticket-loop.sh` `kit_banner`: 메인의 첫 출력으로 `━━ ticket-loop-kit 0.9.6 (435e70e) ━━…` 한 줄을 찍는다(앞에 빈 줄, 56칸 고정 — 좁은 워커 창에서도 접히지 않게). 터미널에서는 굵은 256색 주황(`C_BANNER`, 208)이다 — 16색에는 주황이 없고, 기존 단계 색(티켓 제목 자주·단계 청록·성공 초록·주의 노랑·오류 빨강) 어느 것과도 겹치지 않는다. 테마 팔레트가 아니라 고정 색이라 테마가 바뀌어도 같은 주황이다. `NO_COLOR`·파이프·로그 파일에서는 맨글자다. `backend_check`보다 앞이라 백엔드 점검에서 바로 멈춰도 버전이 남는다. `--dry-run`에도 찍는다
+- `kit_version`: 버전·커밋을 설치기가 쓴 `.ticket-loop/kit.json`에서 읽는다(멈춤 기록과 같은 출처). 없거나 못 읽으면 `unknown`, 커밋이 없으면 버전만
+- Slack 시작 알림 본문 끝에 `· kit 0.9.6 (435e70e)`
+- npx 설치기(`bin/ticket-loop-kit.js`): 첫 줄을 같은 머리줄로 바꿨다(같은 모양·색, 루프의 `kit_banner`와 글자까지 같다). 저장소 경로는 다음 줄 `▸ Repository: …`로 옮겼다. `install.sh`의 `▸ ticket-loop-kit … → …` 줄은 그대로 둔다 — npx 설치기가 install.sh를 부르므로 머리줄로 바꾸면 npx 경로에서 두 번 찍힌다
+- `tests/smoke.sh`: 머리줄 모양(색 없음·폭을 넘는 긴 이름·`C_BANNER`로 감싸기), `C_BANNER`가 256색 208인지, `kit_version` 다섯 경우(버전·커밋, 커밋 없음, 깨진 JSON, 파일 없음, install.sh가 쓴 실제 kit.json), 메인에서 `backend_check` 앞인지, Slack 시작 알림의 버전, npx 설치기 첫 줄이 `kit_banner`와 같은지. 넣은 결함 여섯 개(보라로 바꿈, `backend_check` 뒤로 옮김, 커밋을 빼먹음, Slack에서 버전 뺌, npx 폭이 다름, 긴 이름에서 꼬리 ━ 없음)에서 각각 해당 검사가 실패하는 것을 확인했다
+- 가이드북 6장 `LOG_FILE`·`SLACK_WEBHOOK_URL` 행, 9장 점검 출력 예, 부록 D 재생성, 부록 E 한 행. PDF 재빌드
+- 이미 설치된 저장소: `npx github:iwishash/ticket-loop-kit#v0.9.6 init`(또는 `install.sh`) 뒤 그 PR을 병합한다. 설정은 없다
+
 ## 0.9.5 — 2026-10-21
 
 CI 수리가 코드 변경 없이 녹색이 됐는데 루프가 "no new commit was pushed after the repair"로 멈췄다(이슈 #9, 0.9.2 설치본, cmux, rental-portal #258 → PR #280). CI 실패의 원인은 코드가 아니라 러너 인프라였다 — 같은 HOME을 나눠 쓰는 self-hosted 러너 둘이 `pnpm/action-setup`의 `~/setup-pnpm`을 동시에 지우고 설치했고(`ENOTEMPTY`·`ENOENT`), 같은 커밋의 세 번째 job은 통과했다. 워커는 올바르게 `gh run rerun <id> --failed`만 했고 재실행은 1분 뒤 통과했다. 이번 멈춤은 수리 요청 2초 뒤였는데, 그쪽은 0.9.3이 고친 묵은 idle이다. 이 이슈는 그 뒤에도 남는 판정 문제다. 같은 실행에서 #251이 무인 수습을 먼저 써서(`TRIAGE_MAX=1`) 수습도 뜨지 않았다.

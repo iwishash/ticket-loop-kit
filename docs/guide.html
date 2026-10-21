@@ -749,14 +749,14 @@ bash scripts/ticket-loop.sh --parent 40             # 끝난 스펙이면 "No ti
   <tr><td><code>POST_MERGE_COPY</code></td><td>(없음)</td><td>그 전에 메인 체크아웃에서 복사할 파일(공백 구분), 예 <code>.env.local</code></td></tr>
   <tr><td><code>POST_MERGE_PORT</code></td><td>(없음)</td><td>그 명령이 쓰는 포트. 지정하면 비기를 최대 10분 기다린다</td></tr>
   <tr><td><code>POST_MERGE_WORKTREE</code></td><td><code>~/.cache/ticket-loop/&lt;owner-repo&gt;/post-merge</code></td><td>병합 뒤 검증을 돌릴 전용 워크트리. 저장소 밖에 두고 재사용한다</td></tr>
-  <tr><td><code>LOG_FILE</code></td><td><code>.ticket-loop/loop-MMDD.log</code></td><td>진행 로그. 복구와 회고의 1차 자료다. <code>/dev/null</code>이면 끈다. 상대 경로는 저장소 루트 기준이고 시작 때 절대 경로로 굳힌다(<code>RECORDS_FILE</code>·<code>REPORT_DIR</code>도 같다) — 병합 뒤 검증 로그 <code>post-merge-N.log</code>는 이 파일과 같은 디렉터리에 생긴다. 터미널에는 같은 줄을 단계별 색으로 보여 준다(티켓 제목 굵은 자주, 단계 전환 청록, 성공 초록, 되풀이·수리·건너뜀 노랑, 중단 굵은 빨강, 시각과 워커 화면 꼬리는 흐리게) — stderr가 터미널이 아니거나 <code>NO_COLOR</code>가 있으면 맨글자고, 파일에는 언제나 색 코드 없이 쓴다</td></tr>
+  <tr><td><code>LOG_FILE</code></td><td><code>.ticket-loop/loop-MMDD.log</code></td><td>진행 로그. 복구와 회고의 1차 자료다. <code>/dev/null</code>이면 끈다. 상대 경로는 저장소 루트 기준이고 시작 때 절대 경로로 굳힌다(<code>RECORDS_FILE</code>·<code>REPORT_DIR</code>도 같다) — 병합 뒤 검증 로그 <code>post-merge-N.log</code>는 이 파일과 같은 디렉터리에 생긴다. 터미널에는 같은 줄을 단계별 색으로 보여 준다(티켓 제목 굵은 자주, 단계 전환 청록, 성공 초록, 되풀이·수리·건너뜀 노랑, 중단 굵은 빨강, 시각과 워커 화면 꼬리는 흐리게) — stderr가 터미널이 아니거나 <code>NO_COLOR</code>가 있으면 맨글자고, 파일에는 언제나 색 코드 없이 쓴다. 실행 맨 앞에는 키트 머리줄 <code>━━ ticket-loop-kit 0.9.6 (커밋) ━━…</code>(굵은 주황)을 한 줄 찍는다 — 같은 날 로그에 이어 붙는 실행의 경계이고, 그 실행을 어느 키트 버전이 돌렸는지 남긴다(<code>.ticket-loop/kit.json</code>, 없으면 <code>unknown</code>)</td></tr>
   <tr><td><code>PROGRESS_SEC</code></td><td><code>60</code></td><td>PR·수리를 기다리는 동안 워크트리를 git으로 들여다보는 간격. 브랜치 생성(<code>issue-N</code> → <code>issue-N-slug</code>), 첫 파일 수정, 새 커밋(제목 그대로, 오래된 것부터)을 그때 바로 한 줄씩 찍는다 — 워크트리를 만든 뒤 PR까지 수십 분 동안 루프 터미널이 조용해 멈춘 것처럼 보이던 구간이다. 백엔드·에이전트와 무관하고 네트워크를 쓰지 않는다. <code>0</code>이면 끄고 idle 대기 상한(10분)마다만 돌아온다</td></tr>
   <tr><td><code>HEARTBEAT_SEC</code></td><td><code>300</code></td><td>커밋은 없지만 커밋 안 된 변경 파일 목록이 지난 줄과 달라졌을 때 "working — Nm elapsed, M uncommitted files: …(이름 셋까지)" 한 줄을 찍는 최소 간격. 목록이 같으면(또는 비어 있으면) 시간이 아무리 지나도 찍지 않는다 — 같은 내용을 되풀이하지 않는다. 이슈를 읽고 TDD로 도는 첫 수십 분은 커밋이 없어도 무엇을 만지는지 보인다</td></tr>
   <tr><td><code>RECORDS_FILE</code></td><td><code>.ticket-loop/tickets.jsonl</code></td><td>티켓마다 한 줄씩 남기는 기록(벽시계·CI 소요·수리·병합 뒤 검증·모델). 기계별 원자료라 커밋하지 않는다(<code>.gitignore</code>에 <code>/.ticket-loop/*.jsonl</code>). 스펙 리포트가 읽는다(7장 9단계)</td></tr>
   <tr><td><code>REPORT_DIR</code></td><td><code>docs/loop-reports</code></td><td><code>--parent</code> 실행이 끝나면 <code>spec-&lt;N&gt;.html</code>을 쓰는 디렉터리. 리포트는 사람이 PR로 커밋한다</td></tr>
   <tr><td><code>REPORT_OPEN</code></td><td><code>1</code></td><td>리포트를 쓴 뒤 기본 브라우저로 연다(macOS <code>open</code>, Linux <code>xdg-open</code>). <code>0</code>이면 끔. SSH 세션·화면 없는 Linux에서는 값과 무관하게 열지 않는다</td></tr>
   <tr><td><code>MODEL_REGEX</code></td><td>Claude Code 상태줄의 <code>Opus 5.5</code> 꼴 / Codex 기동 블록의 <code>gpt-5.1-codex</code> 꼴</td><td>워커 터미널 화면에서 모델 이름을 뽑는 정규식(ERE). 못 찾으면 리포트에 "not recorded"(Codex는 상태줄 설정에 따라 모델이 안 보일 수 있다)</td></tr>
-  <tr><td><code>SLACK_WEBHOOK_URL</code></td><td>없음(Slack 끔)</td><td>Slack Incoming Webhook URL. 루프 시작·티켓 완료·멈춤·루프 종료를 그 채널에 올린다. 멈춤에는 사유와 로그 끝 12줄(워커 화면 꼬리 포함)이 붙는다. 잠금을 잡은 실행만 보낸다(<code>--dry-run</code>, 이미 도는 루프와 겹친 실행은 안 보낸다). 비밀 값이라 커밋하는 <code>loop.env</code>가 아니라 <code>~/.config/ticket-loop/loop.env</code>에 둔다(아래)</td></tr>
+  <tr><td><code>SLACK_WEBHOOK_URL</code></td><td>없음(Slack 끔)</td><td>Slack Incoming Webhook URL. 루프 시작·티켓 완료·멈춤·루프 종료를 그 채널에 올린다. 시작에는 대상 수·백엔드·에이전트·키트 버전과 대상 목록이 붙는다. 멈춤에는 사유와 로그 끝 12줄(워커 화면 꼬리 포함)이 붙는다. 잠금을 잡은 실행만 보낸다(<code>--dry-run</code>, 이미 도는 루프와 겹친 실행은 안 보낸다). 비밀 값이라 커밋하는 <code>loop.env</code>가 아니라 <code>~/.config/ticket-loop/loop.env</code>에 둔다(아래)</td></tr>
   <tr><td><code>SLACK_MENTION</code></td><td>없음</td><td>멈춤 알림 앞에 붙일 멘션, 예 <code>&lt;@U012AB3CD&gt;</code>(자기 멤버 ID) 또는 <code>&lt;!channel&gt;</code>. 채널 알림을 "멘션만"으로 두고도 멈출 때만 폰이 울린다. Ctrl-C로 멈춘 것에는 붙이지 않는다</td></tr>
   <tr><td><code>STOPPED_LABEL</code></td><td><code>loop-stopped</code></td><td>티켓 처리 중 멈추면 그 이슈에 코멘트(사유·머신·PR·워크트리·루프 자신의 로그 끝 30줄)와 함께 붙이는 라벨. 없으면 만든다. 기록용이다 — 루프는 본인 계정으로 쓰므로 GitHub는 본인에게 알리지 않고, 대상 선택은 이 라벨을 보지 않는다. 루프가 그 티켓을 병합하면 뗀다</td></tr>
   <tr><td><code>LOOP_TRIAGE</code></td><td><code>1</code></td><td>멈출 일이 생기면 멈추기 전에 수습 세션을 띄운다(10.6). <code>0</code>이면 전처럼 바로 멈춘다</td></tr>
@@ -935,7 +935,8 @@ pnpm exec vitest run --config vitest.integration.config.ts $files</code></pre>
 <p><b>점검</b></p>
 <pre><code>gh issue list --label ready-for-agent
 bash scripts/ticket-loop.sh --parent 40 --dry-run</code></pre>
-<pre class="out">[2026-10-08 21:00:03] skip #42 (T02: GET /api/todos/export 응답): blocked by an open issue
+<pre class="out">━━ ticket-loop-kit 0.9.6 (435e70e) ━━━━━━━━━━━━━━━━━━━━━
+[2026-10-08 21:00:03] skip #42 (T02: GET /api/todos/export 응답): blocked by an open issue
 [2026-10-08 21:00:04] skip #43 (T03: 목록 화면 "내보내기" 버튼): blocked by an open issue
 [2026-10-08 21:00:04] skip #44 (T04: 1만 행 초과 시 안내와 문서 갱신): blocked by an open issue
 [2026-10-08 21:00:04] repository acme/todo-app / backend Orca / base branch main / label ready-for-agent / sub-issues of spec #40
@@ -1453,7 +1454,7 @@ set -euo pipefail
 # HEARTBEAT_SEC마다 "working" 한 줄을 찍는다. 지난번과 같은 내용이면 찍지 않는다.
 # 터미널·로그 파일에 찍는 문구는 영어다(워커 프롬프트·GitHub 코멘트·백엔드 상태 코멘트는 그대로).
 # 터미널에는 단계별로 색을 입힌다(티켓 제목·단계·성공·주의·오류). stderr가 터미널이 아니거나 NO_COLOR가 있으면 맨글자고,
-# 로그 파일에는 언제나 색 코드 없이 쓴다.
+# 로그 파일에는 언제나 색 코드 없이 쓴다. 실행 맨 앞에는 키트 이름·버전 머리줄을 한 줄 찍는다(.ticket-loop/kit.json — 설치기가 쓴다).
 # 티켓마다 "#N summary: …" 한 줄(벽시계·PR과 그 PR을 알아채기까지·CI 소요·수리·idle 오판·병합 뒤 검증)을 남겨 /retro가 읽는다.
 # 같은 내용 + 모델을 RECORDS_FILE(JSONL)에도 남기고, 스펙 리포트가 GitHub의 PR과 합쳐 표로 만든다.
 # 저장소별 설정은 .ticket-loop/loop.env에 둔다(있으면 읽는다). 그 파일은 `VAR="${VAR:-값}"` 꼴로 써서
@@ -1685,10 +1686,13 @@ done
 
 # 터미널 색 — 단계가 한눈에 갈리도록. 터미널일 때만 칠하고, NO_COLOR(https://no-color.org)나 TERM=dumb이면 끈다.
 # 아래 exec가 stderr를 tee로 바꾸기 전에 판정해야 한다. 파이프로 받는 쪽과 로그 파일은 맨글자만 본다.
+# C_BANNER(시작 머리줄)는 256색 주황(208) — 16색에는 주황이 없고, 나머지 단계 색(보라·청록·초록·노랑·빨강) 어느 것과도 겹치지 않는다.
+# 테마 팔레트가 아니라 고정 색이라 터미널 테마가 바뀌어도 같은 주황이다(macOS Terminal·iTerm2·Ghostty/cmux·tmux·Orca 모두 256색)
 if [[ -t 2 &amp;&amp; -z "${NO_COLOR:-}" &amp;&amp; "${TERM:-}" != dumb ]]; then
   C_RESET=$'\e[0m'; C_DIM=$'\e[2m'; C_TITLE=$'\e[1;35m'; C_STEP=$'\e[36m'; C_OK=$'\e[32m'; C_WARN=$'\e[33m'; C_ERR=$'\e[1;31m'
+  C_BANNER=$'\e[1;38;5;208m'
 else
-  C_RESET=""; C_DIM=""; C_TITLE=""; C_STEP=""; C_OK=""; C_WARN=""; C_ERR=""
+  C_RESET=""; C_DIM=""; C_TITLE=""; C_STEP=""; C_OK=""; C_WARN=""; C_ERR=""; C_BANNER=""
 fi
 # 로그 파일로 가는 줄에서 색 코드(SGR, ESC[…m)만 지운다. 그 밖의 이스케이프는 손대지 않는다 — bash 3.2(macOS)도 되는 문자열 처리
 strip_ansi() {
@@ -1721,6 +1725,21 @@ log() {
   case "${1:-}" in title|step|ok|warn|err) [[ $# -lt 2 ]] || { lvl="$1"; shift; } ;; esac   # 메시지가 따로 있을 때만 단계로 본다
   case "$lvl" in title) c="$C_TITLE"; printf '\n' &gt;&amp;2 ;; step) c="$C_STEP" ;; ok) c="$C_OK" ;; warn) c="$C_WARN" ;; err) c="$C_ERR" ;; esac
   printf '%s[%s]%s %s%s%s\n' "$C_DIM" "$(date '+%Y-%m-%d %H:%M:%S')" "$C_RESET" "$c" "$*" "${c:+$C_RESET}" &gt;&amp;2
+}
+# 설치된 키트 버전 — "0.9.6 (435e70e)". .ticket-loop/kit.json은 설치기가 쓴다. 없으면(키트 저장소에서 돌리거나 손으로 복사) unknown
+kit_version() {
+  local kitjson="${ROOT}/.ticket-loop/kit.json" v c
+  v="$(jq -r '.version // empty' "$kitjson" 2&gt;/dev/null || true)"; c="$(jq -r '.commit // empty' "$kitjson" 2&gt;/dev/null || true)"
+  printf '%s%s' "${v:-unknown}" "${c:+ (${c:0:7})}"
+}
+# 시작 머리줄 "━━ ticket-loop-kit 0.9.6 (435e70e) ━━━…" — 실행 맨 앞에 한 줄(앞에 빈 줄). 로그는 날짜별 한 파일에 이어 쓰므로 실행의
+# 경계가 되고, /retro·멈춤 진단에서 어느 키트 버전이 낸 줄인지 가른다. 폭은 BANNER_COLS로 고정 — 좁은 워커 창에서도 접히지 않게 짧게 둔다
+BANNER_COLS=56
+kit_banner() {
+  local fill n=$(( BANNER_COLS - ${#1} - 4 ))
+  [[ $n -ge 3 ]] || n=3
+  printf -v fill '%*s' "$n" ''
+  printf '\n%s━━ %s %s%s\n' "$C_BANNER" "$1" "${fill// /━}" "${C_BANNER:+$C_RESET}" &gt;&amp;2
 }
 # 워커 화면·검증 로그 꼬리처럼 통째로 보여 주는 출력은 흐리게, 들여 써서 루프 로그와 가른다. $1은 줄 앞에 붙일 글자(선택)
 dim_lines() { local l; while IFS= read -r l || [[ -n "$l" ]]; do printf '%s%s%s%s\n' "$C_DIM" "${1:-  }" "$l" "$C_RESET" &gt;&amp;2; done; }
@@ -3365,6 +3384,8 @@ run_ticket() {
 
 # ---------- 메인 ----------
 
+KIT_VERSION="$(kit_version)"
+kit_banner "ticket-loop-kit ${KIT_VERSION}"
 backend_check
 targets="$(pick_targets)"
 log "repository ${OWNER_REPO} / backend ${BACKEND_NAME} / base branch ${BASE_BRANCH} / label ${READY_LABEL}${SCOPE_LABEL:+ + ${SCOPE_LABEL}}${PARENT:+ / sub-issues of spec #${PARENT}}"
@@ -3385,7 +3406,7 @@ fi
 log "targets (all blocking issues currently closed):"; printf '%s\n' "$targets" | dim_lines "  #"
 [[ $DRY_RUN -eq 0 ]] || exit 0
 target_count="$(grep -c . &lt;&lt;&lt;"$targets")"
-slack_post "Ticket loop started" "${target_count} ticket$([[ $target_count -eq 1 ]] || echo s) · backend ${BACKEND_NAME} · agent ${AGENT}$([[ $MAX -eq 0 ]] || echo " · max ${MAX}")
+slack_post "Ticket loop started" "${target_count} ticket$([[ $target_count -eq 1 ]] || echo s) · backend ${BACKEND_NAME} · agent ${AGENT}$([[ $MAX -eq 0 ]] || echo " · max ${MAX}") · kit ${KIT_VERSION}
 $(head -n 10 &lt;&lt;&lt;"$targets" | awk -F'\t' '{print "#" $1 " " $2}')$([[ $target_count -le 10 ]] || printf '\n+%d more' $((target_count - 10)))" start
 
 # 목록을 stdin으로 물리지 않는다 — 루프 안의 gh·백엔드 CLI·git이 stdin을 읽으면 다음 티켓이 사라진다.
@@ -3424,6 +3445,7 @@ notify "Ticket loop finished" "${done_count} done$([[ $TRIAGE_USED -eq 0 ]] || e
 <p class="small muted">3판(2026-10-12)은 두 번째 스펙의 첫 티켓 2건을 돌린 실측에서 나왔다 — 묶음 결과를 한 표로 보고 싶다는 요구와, 포트를 기다리는 루프가 멈춘 것처럼 보인 일.</p>
 <table class="dense">
   <tr><th style="width:22%">바뀐 곳</th><th>내용</th><th style="width:20%">계기</th></tr>
+  <tr><td>키트 머리줄 (6장 <code>LOG_FILE</code>·<code>SLACK_WEBHOOK_URL</code>, 9장 점검 출력, 부록 D)</td><td>루프가 실행 맨 앞에 <code>━━ ticket-loop-kit 0.9.6 (커밋) ━━…</code> 한 줄을 굵은 주황(256색 208)으로 찍는다. 버전은 설치기가 쓴 <code>.ticket-loop/kit.json</code>에서 읽고, 없으면 <code>unknown</code>. 로그 파일에는 같은 줄이 맨글자로 남는다. Slack 시작 알림에도 키트 버전이 붙는다. npx 설치기의 첫 줄도 같은 모양이다.</td><td>키트 0.9.6 — 같은 날 로그에 실행이 이어 붙어 경계와 키트 버전이 보이지 않았다(0.9.1~0.9.5 수정 전후를 가를 수 없음)</td></tr>
   <tr><td>재실행만 한 CI 수리 (6장 내부 상수, 7장 4단계, 10.6, 부록 D)</td><td>CI 수리 뒤 PR head가 그대로여도 바로 멈추지 않고 CI를 한 번 더 본다 — 재실행이 도는 중이면 끝까지 보고, 통과면 이어 간다. 새 커밋도 없고 CI도 그대로 실패일 때만 "수리 뒤 새 커밋 없음"으로 멈춘다. 수리 프롬프트에 "같은 커밋의 다른 job은 통과한 러너·네트워크 오류면 코드를 바꾸지 말고 <code>gh run rerun &lt;run-id&gt; --failed</code>" 한 줄을 더했다 — 워커가 CI를 통과시키려고 불필요한 커밋을 만들지 않게.</td><td>키트 0.9.5 — 이슈 #9: rental-portal #258(cmux)의 CI가 러너 설치 경합으로 실패했고, 워커는 재실행만 해 1분 뒤 통과했는데 루프가 멈췄다</td></tr>
   <tr><td>GitHub 일시 장애 재시도 (6장 내부 상수, 7장 4·5단계, 10.2, 10.6, R3, 부록 D)</td><td>루프의 <code>gh</code> 조회는 5xx·연결 오류면 15초·30초 쉬며 세 번까지 다시 해 본다(<code>gh</code>를 함수로 감쌌다 — 쓰기는 다시 하지 않는다). 병합은 실패할 때마다 먼저 이미 병합됐는지 보고, 일시 장애와 "Base branch was modified"만 다시 한다. 브랜치 보호 같은 거절은 전처럼 바로 멈추되 멈춤 종류를 <code>merge_failed</code>로 남기고 사유에 <code>gh</code> 오류 첫 줄을 싣는다. CI 대기의 <code>--watch</code>가 실패로 끝나면 체크 상태를 다시 읽어 실패한 체크가 있을 때만 실패로 본다. 병합 뒤 브랜치 조회가 실패해도 멈추지 않는다.</td><td>키트 0.9.4 — 이슈 #7: CI 통과 직후 병합 한 번이 공지 없는 502를 받아 루프가 멈췄다(0.9.2, cmux)</td></tr>
   <tr><td>수리 요청 직후의 묵은 대기 상태 (2.5, 6장 내부 상수, 7장 4단계, 부록 D)</td><td>cmux 보내기가 프롬프트 수락을 확인한다 — 붙여 넣은 뒤 15초(<code>SEND_ACCEPT_SEC</code>) 안에 <code>lifecycle</code>이 idle에서 벗어나거나 프롬프트가 화면에 찍혀야 한다(tmux의 <code>sent</code>→running 확인과 같은 뜻, 상한도 같은 상수). 수리 대기는 대기 상태여도 PR에 새 커밋이 아직 없으면 화면이 그대로인 대기를 연달아 3번 볼 때만 끝으로 본다.</td><td>키트 0.9.3 — rental-portal #251(cmux): CI 수리 요청 5초 뒤 "새 커밋 없음"으로 멈췄고 워커는 2분 뒤 push했다. 수습 세션이 남긴 키트 버그 보고</td></tr>

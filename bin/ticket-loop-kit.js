@@ -60,7 +60,9 @@ not yet verified on a real ticket) are needed to run the loop.
 // 터미널일 때만 칠하고, NO_COLOR(https://no-color.org)나 TERM=dumb 이면 끈다. 파이프로 받는 쪽은 맨글자만 본다.
 const COLOR = process.stdout.isTTY && !process.env.NO_COLOR && process.env.TERM !== 'dumb';
 const paint = (code) => (s) => (COLOR ? `\x1b[${code}m${s}\x1b[0m` : String(s));
-const c = { bold: paint(1), dim: paint(2), red: paint(31), green: paint(32), yellow: paint(33), blue: paint(34), cyan: paint(36), inv: paint(7) };
+const c = { bold: paint(1), dim: paint(2), red: paint(31), green: paint(32), yellow: paint(33), blue: paint(34), cyan: paint(36), inv: paint(7), orange: paint('1;38;5;208') };
+// 시작 머리줄 "━━ ticket-loop-kit 0.9.6 (435e70e) ━━━…" — 루프(ticket-loop.sh kit_banner)와 같은 모양·색(256색 주황), 폭 56칸
+const banner = (s) => console.log(`\n${c.orange(`━━ ${s} ${'━'.repeat(Math.max(3, 56 - s.length - 4))}`)}`);
 const say = (s) => console.log(`${c.green('▸')} ${c.bold(s)}`);
 const warn = (s) => console.error(c.yellow(`! ${s}`));
 const die = (s, code = 1) => { console.error(c.red(`✗ ${s}`)); process.exit(code); };
@@ -277,6 +279,8 @@ async function init(o) {
   if (process.platform === 'win32') die('Windows is not supported (the installer is bash). Run it under WSL.');
   if (!fs.existsSync(INSTALL_SH)) die(`Kit package is incomplete: ${INSTALL_SH} is missing`);
   for (const t of ['git', 'bash', 'jq']) if (!has(t)) die(`${t} is not installed.`);
+  const commit = kitCommit();
+  banner(`ticket-loop-kit ${pkg.version} (${commit.slice(0, 7)})`);
 
   const top = run('git', ['rev-parse', '--show-toplevel']);
   if (!top.ok) die('Run this inside a git repository.');
@@ -284,9 +288,8 @@ async function init(o) {
   if (path.resolve(process.cwd()) !== path.resolve(root)) warn(`Installing into the repository root (${root}).`);
 
   const interactive = !o.yes && process.stdin.isTTY && process.stdout.isTTY;
-  const commit = kitCommit();
   const prev = readJson(path.join(root, LOOP_DIR, 'kit.json')) || readJson(path.join(root, '.orca-loop', 'kit.json'));
-  say(`ticket-loop-kit ${c.cyan(pkg.version)} ${c.dim(`(${commit.slice(0, 7)})`)} → ${root}`);
+  say(`Repository: ${root}`);
   if (prev) console.log(c.dim(`  currently installed: ${prev.version || '?'} (${String(prev.commit || '').slice(0, 7)}, ${prev.installed_at || '?'}) — updating`));
 
   if (!has('gh')) warn('gh is not installed: labels, credential and Orca registration will be skipped, and the loop itself needs gh.');

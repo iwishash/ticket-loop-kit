@@ -38,7 +38,7 @@ set -euo pipefail
 # HEARTBEAT_SEC마다 "working" 한 줄을 찍는다. 지난번과 같은 내용이면 찍지 않는다.
 # 터미널·로그 파일에 찍는 문구는 영어다(워커 프롬프트·GitHub 코멘트·백엔드 상태 코멘트는 그대로).
 # 터미널에는 단계별로 색을 입힌다(티켓 제목·단계·성공·주의·오류). stderr가 터미널이 아니거나 NO_COLOR가 있으면 맨글자고,
-# 로그 파일에는 언제나 색 코드 없이 쓴다.
+# 로그 파일에는 언제나 색 코드 없이 쓴다. 실행 맨 앞에는 키트 이름·버전 머리줄을 한 줄 찍는다(.ticket-loop/kit.json — 설치기가 쓴다).
 # 티켓마다 "#N summary: …" 한 줄(벽시계·PR과 그 PR을 알아채기까지·CI 소요·수리·idle 오판·병합 뒤 검증)을 남겨 /retro가 읽는다.
 # 같은 내용 + 모델을 RECORDS_FILE(JSONL)에도 남기고, 스펙 리포트가 GitHub의 PR과 합쳐 표로 만든다.
 # 저장소별 설정은 .ticket-loop/loop.env에 둔다(있으면 읽는다). 그 파일은 `VAR="${VAR:-값}"` 꼴로 써서
@@ -270,10 +270,13 @@ done
 
 # 터미널 색 — 단계가 한눈에 갈리도록. 터미널일 때만 칠하고, NO_COLOR(https://no-color.org)나 TERM=dumb이면 끈다.
 # 아래 exec가 stderr를 tee로 바꾸기 전에 판정해야 한다. 파이프로 받는 쪽과 로그 파일은 맨글자만 본다.
+# C_BANNER(시작 머리줄)는 256색 주황(208) — 16색에는 주황이 없고, 나머지 단계 색(보라·청록·초록·노랑·빨강) 어느 것과도 겹치지 않는다.
+# 테마 팔레트가 아니라 고정 색이라 터미널 테마가 바뀌어도 같은 주황이다(macOS Terminal·iTerm2·Ghostty/cmux·tmux·Orca 모두 256색)
 if [[ -t 2 && -z "${NO_COLOR:-}" && "${TERM:-}" != dumb ]]; then
   C_RESET=$'\e[0m'; C_DIM=$'\e[2m'; C_TITLE=$'\e[1;35m'; C_STEP=$'\e[36m'; C_OK=$'\e[32m'; C_WARN=$'\e[33m'; C_ERR=$'\e[1;31m'
+  C_BANNER=$'\e[1;38;5;208m'
 else
-  C_RESET=""; C_DIM=""; C_TITLE=""; C_STEP=""; C_OK=""; C_WARN=""; C_ERR=""
+  C_RESET=""; C_DIM=""; C_TITLE=""; C_STEP=""; C_OK=""; C_WARN=""; C_ERR=""; C_BANNER=""
 fi
 # 로그 파일로 가는 줄에서 색 코드(SGR, ESC[…m)만 지운다. 그 밖의 이스케이프는 손대지 않는다 — bash 3.2(macOS)도 되는 문자열 처리
 strip_ansi() {
@@ -306,6 +309,21 @@ log() {
   case "${1:-}" in title|step|ok|warn|err) [[ $# -lt 2 ]] || { lvl="$1"; shift; } ;; esac   # 메시지가 따로 있을 때만 단계로 본다
   case "$lvl" in title) c="$C_TITLE"; printf '\n' >&2 ;; step) c="$C_STEP" ;; ok) c="$C_OK" ;; warn) c="$C_WARN" ;; err) c="$C_ERR" ;; esac
   printf '%s[%s]%s %s%s%s\n' "$C_DIM" "$(date '+%Y-%m-%d %H:%M:%S')" "$C_RESET" "$c" "$*" "${c:+$C_RESET}" >&2
+}
+# 설치된 키트 버전 — "0.9.6 (435e70e)". .ticket-loop/kit.json은 설치기가 쓴다. 없으면(키트 저장소에서 돌리거나 손으로 복사) unknown
+kit_version() {
+  local kitjson="${ROOT}/.ticket-loop/kit.json" v c
+  v="$(jq -r '.version // empty' "$kitjson" 2>/dev/null || true)"; c="$(jq -r '.commit // empty' "$kitjson" 2>/dev/null || true)"
+  printf '%s%s' "${v:-unknown}" "${c:+ (${c:0:7})}"
+}
+# 시작 머리줄 "━━ ticket-loop-kit 0.9.6 (435e70e) ━━━…" — 실행 맨 앞에 한 줄(앞에 빈 줄). 로그는 날짜별 한 파일에 이어 쓰므로 실행의
+# 경계가 되고, /retro·멈춤 진단에서 어느 키트 버전이 낸 줄인지 가른다. 폭은 BANNER_COLS로 고정 — 좁은 워커 창에서도 접히지 않게 짧게 둔다
+BANNER_COLS=56
+kit_banner() {
+  local fill n=$(( BANNER_COLS - ${#1} - 4 ))
+  [[ $n -ge 3 ]] || n=3
+  printf -v fill '%*s' "$n" ''
+  printf '\n%s━━ %s %s%s\n' "$C_BANNER" "$1" "${fill// /━}" "${C_BANNER:+$C_RESET}" >&2
 }
 # 워커 화면·검증 로그 꼬리처럼 통째로 보여 주는 출력은 흐리게, 들여 써서 루프 로그와 가른다. $1은 줄 앞에 붙일 글자(선택)
 dim_lines() { local l; while IFS= read -r l || [[ -n "$l" ]]; do printf '%s%s%s%s\n' "$C_DIM" "${1:-  }" "$l" "$C_RESET" >&2; done; }
@@ -1950,6 +1968,8 @@ run_ticket() {
 
 # ---------- 메인 ----------
 
+KIT_VERSION="$(kit_version)"
+kit_banner "ticket-loop-kit ${KIT_VERSION}"
 backend_check
 targets="$(pick_targets)"
 log "repository ${OWNER_REPO} / backend ${BACKEND_NAME} / base branch ${BASE_BRANCH} / label ${READY_LABEL}${SCOPE_LABEL:+ + ${SCOPE_LABEL}}${PARENT:+ / sub-issues of spec #${PARENT}}"
@@ -1970,7 +1990,7 @@ fi
 log "targets (all blocking issues currently closed):"; printf '%s\n' "$targets" | dim_lines "  #"
 [[ $DRY_RUN -eq 0 ]] || exit 0
 target_count="$(grep -c . <<<"$targets")"
-slack_post "Ticket loop started" "${target_count} ticket$([[ $target_count -eq 1 ]] || echo s) · backend ${BACKEND_NAME} · agent ${AGENT}$([[ $MAX -eq 0 ]] || echo " · max ${MAX}")
+slack_post "Ticket loop started" "${target_count} ticket$([[ $target_count -eq 1 ]] || echo s) · backend ${BACKEND_NAME} · agent ${AGENT}$([[ $MAX -eq 0 ]] || echo " · max ${MAX}") · kit ${KIT_VERSION}
 $(head -n 10 <<<"$targets" | awk -F'\t' '{print "#" $1 " " $2}')$([[ $target_count -le 10 ]] || printf '\n+%d more' $((target_count - 10)))" start
 
 # 목록을 stdin으로 물리지 않는다 — 루프 안의 gh·백엔드 CLI·git이 stdin을 읽으면 다음 티켓이 사라진다.

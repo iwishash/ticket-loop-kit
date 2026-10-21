@@ -508,6 +508,29 @@ out="$(cd "$G" && printf '\e[2m[t]\e[0m \e[1;35m=== #1 ===\e[0m\n\e[2J keep \e[m
 grep -q 'exec 2> >(tee >(strip_ansi >> "$LOG_FILE") >&2)' "$KIT/files/scripts/ticket-loop.sh" || fail "색을 켤 때 로그 파일 쪽에 strip_ansi 가 없음"
 echo "ok  터미널 로그 색"
 
+# 키트 머리줄: 실행 맨 앞 "━━ ticket-loop-kit <버전> (<커밋 7자>) ━━…"(56칸, 앞에 빈 줄). 버전은 설치기가 쓴 kit.json, 없거나 못 읽으면 unknown.
+# 색을 켜면 C_BANNER(256색 주황)로 감싸고, 끄면 맨글자. 메인의 첫 출력이고 Slack 시작 알림에도 버전이 붙는다
+out="$(logc 'kit_banner "ticket-loop-kit 1.2.3 (abc1234)"')" || fail "kit_banner 실패"
+[[ "$out" == $'\n'"━━ ticket-loop-kit 1.2.3 (abc1234) ━━━━━━━━━━━━━━━━━━━━━" ]] || fail "머리줄(색 없음)이 다르다: $out"
+out="$(logc "kit_banner \"ticket-loop-kit $(printf 'x%.0s' {1..60})\"")" || fail "긴 머리줄 실패"
+[[ "$out" == *"x ━━━" ]] || fail "머리줄이 폭을 넘으면 꼬리 ━ 세 개를 남겨야 한다: $out"
+out="$(logc "$paint"'C_BANNER=b; kit_banner "ticket-loop-kit 1.2.3"')" || fail "색을 켠 kit_banner 실패"
+[[ "$out" == $'\n'"b━━ ticket-loop-kit 1.2.3 ━━━━"*"━<ESC>[0m" ]] || fail "머리줄을 C_BANNER 로 감싸지 않는다: $out"
+grep -qF 'C_BANNER=$'"'"'\e[1;38;5;208m'"'"'' "$KIT/files/scripts/ticket-loop.sh" || fail "C_BANNER 가 256색 주황(1;38;5;208)이 아니다"
+K="$G/kitver"; mkdir -p "$K/full/.ticket-loop" "$K/nocommit/.ticket-loop" "$K/broken/.ticket-loop" "$K/none"
+echo '{"version":"1.2.3","commit":"abcdef0123456789"}' > "$K/full/.ticket-loop/kit.json"
+echo '{"version":"1.2.3"}' > "$K/nocommit/.ticket-loop/kit.json"
+echo 'not json' > "$K/broken/.ticket-loop/kit.json"
+[[ "$(logc "ROOT=$K/full; kit_version")" == "1.2.3 (abcdef0)" ]] || fail "kit_version(버전·커밋): $(logc "ROOT=$K/full; kit_version")"
+[[ "$(logc "ROOT=$K/nocommit; kit_version")" == "1.2.3" ]] || fail "kit_version(커밋 없음): $(logc "ROOT=$K/nocommit; kit_version")"
+[[ "$(logc "ROOT=$K/broken; kit_version")" == "unknown" && "$(logc "ROOT=$K/none; kit_version")" == "unknown" ]] || fail "kit.json 이 깨졌거나 없으면 unknown 이어야 한다"
+[[ "$(logc "ROOT=$T; kit_version")" == "$(cat "$KIT/VERSION") ($(git -C "$KIT" rev-parse HEAD | cut -c1-7))" ]] || fail "install.sh 가 쓴 kit.json 을 읽지 못함: $(logc "ROOT=$T; kit_version")"
+grep -A2 '^# ---------- 메인 ----------$' "$KIT/files/scripts/ticket-loop.sh" | tail -n 1 | grep -qx 'KIT_VERSION="$(kit_version)"' \
+  && grep -A1 '^kit_banner "ticket-loop-kit ${KIT_VERSION}"$' "$KIT/files/scripts/ticket-loop.sh" | tail -n 1 | grep -qx 'backend_check' \
+  || fail "머리줄이 메인의 첫 출력(backend_check 앞)이 아니다"
+grep -F 'slack_post "Ticket loop started"' "$KIT/files/scripts/ticket-loop.sh" | grep -qF ' · kit ${KIT_VERSION}' || fail "Slack 시작 알림에 키트 버전이 없다"
+echo "ok  키트 머리줄"
+
 # 병합 뒤 검증 로그 경로: LOG_FILE 이 상대 경로여도 post-merge-N.log 는 저장소 루트 쪽 .ticket-loop/ 에 생기고, 실패 꼬리가 비지 않는다.
 # 2026-10-15 rental-portal #101 실측 — 리다이렉트가 cd "$wt" 뒤 서브셸에서 열려 로그가 검증 워크트리 안에 생기고 tail 은 "No such file" 이었다.
 # 실제 git 저장소(origin 역할 bare + 메인 체크아웃)와 검증 워크트리를 만들어 run_post_merge 를 그대로 부른다(GitHub·백엔드 없이)
@@ -1307,8 +1330,11 @@ echo "ok  스펙 리포트 렌더(head 가 issue-N 그대로인 PR 포함)"
 # npx 껍질: 새 저장소에 --yes 로 설치하면 install.sh 결과에 더해 loop.env(BACKEND 줄)와 kit.json(커밋·ref)이 생긴다.
 # 두 번째 실행은 loop.env 를 건드리지 않고, cmux 는 아직 거절한다
 N="$T/npx"; mkdir -p "$N"; git -C "$N" init -q -b main; git -C "$N" commit -q --allow-empty -m init
-(cd "$N" && node "$KIT/bin/ticket-loop-kit.js" init --yes --no-skills --no-github --no-git-credential --no-orca >/dev/null) || fail "npx 껍질 init 실패"
+out="$(cd "$N" && node "$KIT/bin/ticket-loop-kit.js" init --yes --no-skills --no-github --no-git-credential --no-orca)" || fail "npx 껍질 init 실패"
 [[ -x "$N/scripts/ticket-loop.sh" && -f "$N/.claude/skills/setup-ticket-loop/SKILL.md" ]] || fail "npx 껍질이 install.sh 를 부르지 않음"
+# 첫 줄은 루프와 같은 머리줄(kit_banner 와 글자까지 같다)
+want="$(logc "kit_banner \"ticket-loop-kit $(cat "$KIT/VERSION") ($(git -C "$KIT" rev-parse HEAD | cut -c1-7))\"" | awk 'NF')"
+[[ "$(awk 'NF { print; exit }' <<<"$out")" == "$want" ]] || fail "npx 껍질의 첫 줄이 루프 머리줄과 다르다: $(awk 'NF { print; exit }' <<<"$out")"
 grep -qxF 'BACKEND="${BACKEND:-orca}"' "$N/.ticket-loop/loop.env" || fail "loop.env 에 BACKEND 줄 없음"
 grep -qxF 'AGENT="${AGENT:-claude}"' "$N/.ticket-loop/loop.env" || fail "loop.env 에 AGENT 줄 없음"
 [[ "$(jq -r .commit "$N/.ticket-loop/kit.json")" == "$(git -C "$KIT" rev-parse HEAD)" ]] || fail "kit.json commit 이 키트 HEAD 와 다르다"
