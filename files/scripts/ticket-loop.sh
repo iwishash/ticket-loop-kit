@@ -111,7 +111,7 @@ set -euo pipefail
 #
 # 멈추는 조건(루프 종료, 워크트리는 조사용으로 남긴다):
 #   - 워커가 PR 없이 멈춤(질문·실패) / 티켓 타임아웃 / 백엔드 터미널 끊김 / 에이전트 기동 실패
-#   - 수리 REPAIR_ROUNDS회 뒤에도 CI 실패 또는 충돌
+#   - 수리 REPAIR_ROUNDS회 뒤에도 CI 실패 또는 충돌, 수리 뒤 새 커밋이 없고 CI도 그대로 실패(재실행만 한 수리가 통과하면 이어 간다)
 #   - 병합 뒤 POST_MERGE_CMD 실패(POST_MERGE_RETRY_CMD가 있으면 재실행까지 실패), 또는 POST_MERGE_PORT가 10분 안에 비지 않음
 #     (기다리는 동안은 로그 한 줄 뒤 조용하다 — 멈춤이 아니다)
 # 자동 선택은 선행 이슈가 열렸거나, PR이 이미 있거나, 담당자가 있거나, 하위 이슈를 가진(스펙) 이슈를 건너뛴다.
@@ -128,7 +128,7 @@ set -euo pipefail
 # `/loop-triage <기록>`을 시킨 뒤 판정 파일(<id>.verdict.json — resume | halt)을 기다린다. Slack에는 "수습 시작"과 결과가 간다.
 #   - 병합 뒤 검증 실패(재실행까지 실패) → 수습 세션이 수정 PR을 내면 루프가 CI 뒤 병합하고, 병합된 기본 브랜치로 검증을 다시 돌려
 #     통과하면 이어 간다(플레이크로 판정하면 수정 없이 검증만 다시 돌린다)
-#   - 수리를 다 쓴 CI 실패·충돌·수리 뒤 새 커밋 없음 → 수습 세션이 티켓 PR 브랜치에 고쳐 push하면(또는 CI 플레이크면 실패한 job을 다시 돌리면)
+#   - 수리를 다 쓴 CI 실패·충돌, 새 커밋 없이 끝난 수리 뒤에도 CI 실패 → 수습 세션이 티켓 PR 브랜치에 고쳐 push하면(또는 CI 플레이크면 실패한 job을 다시 돌리면)
 #     CI 대기부터 이어 간다
 #   - WORKTREE_SETUP_CMD 실패(cmux·tmux) → 수정 PR을 병합하면 워크트리를 기본 브랜치로 당기고(메인 체크아웃도 기본 브랜치면 fast-forward)
 #     준비를 다시 돌린다
@@ -1242,6 +1242,20 @@ ci_passed() {
 
 pr_head_sha() { gh pr view "$1" --json headRefOid -q .headRefOid; }
 
+# CI 수리를 보내고 기다린다. 0: 충돌·CI 확인부터 다시 볼 것, 1: 새 커밋도 없고 CI도 그대로 실패. 제한 시간이면 멈춘다.
+# 코드를 바꾸지 않는 수리도 있다 — 러너·네트워크 장애로 실패한 job은 `gh run rerun --failed`로 다시 돌리면 녹색이 되고, push할 커밋이
+# 없다(2026-10-21 rental-portal #258: 같은 HOME을 나눠 쓰는 self-hosted 러너 둘의 설치 경합. 워커는 재실행만 했고 1분 뒤 통과했는데,
+# 0.9.4까지는 head가 그대로라 멈췄다). 그래서 head가 그대로면 CI를 한 번 더 본다 — 재실행이 도는 중이면 끝까지 보고, 통과면 0이다
+repair_ci() {
+  local n="$1" pr="$2" handle="$3" deadline="$4" before
+  before="$(pr_head_sha "${pr}")"
+  repair "${handle}" "PR #${pr} 의 CI가 실패했다. \`gh pr checks ${pr}\` 와 \`gh run view --log-failed\` 로 원인을 보고 고친 뒤 테스트·lint를 다시 돌리고 같은 브랜치에 push해라. 테스트를 건너뛰거나 지우지 마라. 같은 커밋의 다른 job은 통과했고 실패가 러너·네트워크 오류처럼 코드와 무관하면 코드를 바꾸지 말고 \`gh run rerun <run-id> --failed\` 로 실패한 job만 다시 돌려라(push할 커밋이 없어도 된다). 질문하지 말고 끝까지 해라." "$deadline" "${pr}" \
+    || die "#${n}: timed out while repairing CI"
+  [[ "$(pr_head_sha "${pr}")" == "$before" ]] || return 0
+  log warn "#${n}: no new commit after the repair — checking CI again (a re-run needs no commit)"
+  ci_passed "${pr}"
+}
+
 # CI가 실제로 돈 시간(초) — PR head 체크들의 가장 이른 시작부터 가장 늦은 끝까지(GitHub 시각). 루프가 CI 대기를 시작한 때부터 재면 그 전에
 # 끝난 CI가 2~3초로 찍힌다(0.9.1까지 — PR을 알아채는 게 늦으면). 못 읽으면 빈 값이고, 부르는 쪽이 루프가 잰 값을 쓴다
 ci_run_sec() {
@@ -1826,7 +1840,7 @@ run_ticket() {
 
   # 수리를 다 쓰면 멈추기 전에 무인 수습을 한 번 띄운다(ci_failed) — 수습 세션이 PR 브랜치에 고쳐 push하면 이 고리의 처음(충돌·CI 확인)부터
   # 이어 간다. 그래도 실패하면 수습 횟수를 이미 써서 그대로 멈춘다
-  local round=0 state before
+  local round=0 state
   while :; do
     state="$(mergeable_state "${pr}")"
     if [[ "$state" == "CONFLICTING" ]]; then
@@ -1857,11 +1871,8 @@ run_ticket() {
       die "${reason}${TRIAGE_NOTE}"
     fi
     round=$((round + 1)); CUR_ROUND=$round; log warn "#${n}: CI failed → asking the worker to repair (${round})"
-    before="$(pr_head_sha "${pr}")"
-    repair "${handle}" "PR #${pr} 의 CI가 실패했다. \`gh pr checks ${pr}\` 와 \`gh run view --log-failed\` 로 원인을 보고 고친 뒤 테스트·lint를 다시 돌리고 같은 브랜치에 push해라. 테스트를 건너뛰거나 지우지 마라. 질문하지 말고 끝까지 해라." "$deadline" "${pr}" \
-      || die "#${n}: timed out while repairing CI"
-    if [[ "$(pr_head_sha "${pr}")" == "$before" ]]; then
-      reason="#${n}: no new commit was pushed after the repair"
+    if ! repair_ci "${n}" "${pr}" "${handle}" "$deadline"; then
+      reason="#${n}: no new commit was pushed after the repair, and CI still fails"
       STOP_KIND=ci_failed; triage ci_failed "$reason" && continue
       die "${reason}${TRIAGE_NOTE}"
     fi

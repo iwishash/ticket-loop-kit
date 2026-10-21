@@ -36,7 +36,7 @@ GitHub 이슈 티켓을 워크트리에서 한 건씩 무인으로 구현·검�
 npx github:iwishash/ticket-loop-kit init
 ```
 
-백엔드와 설치 단계를 키보드로 고른다(`--yes`면 묻지 않고, `NO_COLOR`로 색을 끈다). 버전 고정은 `npx github:iwishash/ticket-loop-kit#v0.9.4 init`. Node 없이:
+백엔드와 설치 단계를 키보드로 고른다(`--yes`면 묻지 않고, `NO_COLOR`로 색을 끈다). 버전 고정은 `npx github:iwishash/ticket-loop-kit#v0.9.5 init`. Node 없이:
 
 ```bash
 bash <(curl -fsSL https://raw.githubusercontent.com/iwishash/ticket-loop-kit/main/install.sh)
@@ -179,7 +179,7 @@ Slack 설정(컴퓨터마다 한 번):
 | 멈출 일 | 수습 세션 | `resume`이면 루프가 |
 |---|---|---|
 | 병합 뒤 검증 실패(재실행 포함) | 실패를 병합된 PR의 diff와 대조해 테스트 기대값이나 코드를 고치고, 실패한 테스트 파일만 돌린 뒤 기본 브랜치로 수정 PR. 무관한 시간 초과면 다시 돌려 보고 플레이크로 판정 | 수정 PR에 `loop-triage` 라벨을 붙이고 CI 뒤 병합, 병합된 브랜치로 검증을 다시 돌려(`post-merge-N-after-triage.log`) 통과하면 이어 감 |
-| 수리를 다 쓴 CI 실패·충돌, 수리 뒤 새 커밋 없음 | 티켓 PR의 브랜치에 고쳐 push. 번들 크기 천장 같은 임계값은 티켓 변경으로 정당하게 늘어난 경우에만 근거를 PR 코멘트로 남기고 올린다. CI 인프라 오류면 `gh run rerun --failed` | 그 PR의 충돌·CI 확인부터 이어 감 |
+| 수리를 다 쓴 CI 실패·충돌, 새 커밋 없이 끝난 수리 뒤에도 CI 실패 | 티켓 PR의 브랜치에 고쳐 push. 번들 크기 천장 같은 임계값은 티켓 변경으로 정당하게 늘어난 경우에만 근거를 PR 코멘트로 남기고 올린다. CI 인프라 오류면 `gh run rerun --failed` | 그 PR의 충돌·CI 확인부터 이어 감 |
 | `WORKTREE_SETUP_CMD` 실패(cmux·tmux) | 준비를 재현하고 저장소 스크립트·lockfile을 고쳐 수정 PR, 일시 장애면 수정 없이 | 수정 PR을 병합하고 워커 워크트리(메인 체크아웃도 기본 브랜치면 — 로컬 변경을 덮는 merge는 git이 거부한다)를 fast-forward한 뒤 준비를 다시 돌림 |
 | 워커가 PR 없이 멈춤 | 진단만: 무엇에 막혔는지 요약한다. 워커의 질문에 답하지 않는다 | (언제나 멈춤) |
 

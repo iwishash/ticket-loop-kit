@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.9.5 — 2026-10-21
+
+CI 수리가 코드 변경 없이 녹색이 됐는데 루프가 "no new commit was pushed after the repair"로 멈췄다(이슈 #9, 0.9.2 설치본, cmux, rental-portal #258 → PR #280). CI 실패의 원인은 코드가 아니라 러너 인프라였다 — 같은 HOME을 나눠 쓰는 self-hosted 러너 둘이 `pnpm/action-setup`의 `~/setup-pnpm`을 동시에 지우고 설치했고(`ENOTEMPTY`·`ENOENT`), 같은 커밋의 세 번째 job은 통과했다. 워커는 올바르게 `gh run rerun <id> --failed`만 했고 재실행은 1분 뒤 통과했다. 이번 멈춤은 수리 요청 2초 뒤였는데, 그쪽은 0.9.3이 고친 묵은 idle이다. 이 이슈는 그 뒤에도 남는 판정 문제다. 같은 실행에서 #251이 무인 수습을 먼저 써서(`TRIAGE_MAX=1`) 수습도 뜨지 않았다.
+
+- 원인: CI 수리 결과를 PR head 비교만으로 갈랐다. 재실행형 수리는 push할 커밋이 없으니, 0.9.3 이후로도 `repair`가 새 커밋 없는 idle을 세 번 본 뒤(약 1분) 똑같이 멈춘다. 무인 수습이 남아 있으면 `loop-triage` 스킬의 "인프라 장애면 `gh run rerun --failed`만 하고 `resume`"이 살려 주지만, 그건 워커가 이미 한 일을 한 번 더 하는 것이다
+- `ticket-loop.sh` `repair_ci`: CI 수리를 함수로 뺐다. 수리 뒤 head가 그대로면 바로 멈추지 않고 "no new commit after the repair — checking CI again (a re-run needs no commit)" 한 줄을 남긴 뒤 `ci_passed`로 CI를 한 번 더 본다(0.9.4의 `--json bucket` 재확인 포함, 재실행이 도는 중이면 끝까지 본다). 통과면 충돌·CI 확인부터 다시 돌아 병합으로 간다(다음 바퀴의 `ci_passed`가 통과를 확정하고 CI 소요도 거기서 잰다). 새 커밋도 없고 CI도 그대로 실패일 때만 멈춘다 — 사유는 "no new commit was pushed after the repair, and CI still fails", 멈춤 종류는 전처럼 `ci_failed`(무인 수습 대상). 재실행만 한 수리도 수리 횟수 1로 센다
+- 수리 프롬프트에 한 줄: "같은 커밋의 다른 job은 통과했고 실패가 러너·네트워크 오류처럼 코드와 무관하면 코드를 바꾸지 말고 `gh run rerun <run-id> --failed` 로 실패한 job만 다시 돌려라(push할 커밋이 없어도 된다)". 프롬프트가 "같은 브랜치에 push해라"로 끝나 워커가 CI를 통과시키려고 불필요한 커밋(테스트 시간 한도 올리기 같은)을 만들 수 있었다
+- 이슈의 선택 항목 3(`repair`가 체크 재실행 시작도 진행으로 보기)은 넣지 않았다. 새 커밋 없는 idle을 세 번 보는 약 1분은 GitHub에서 재실행이 도는 시간과 겹친다 — 재실행이 1분보다 길면(이번 #258이 약 1분) 줄어드는 시간이 거의 없고, 그 사이 판정만 하나 더 생긴다
+- `tests/smoke.sh`: `repair_ci` 네 경우(새 커밋 → CI를 다시 보지 않고 0, 새 커밋 없음 + CI 통과 → 0과 경고 한 줄, 새 커밋 없음 + CI 실패 → 1, 수리 제한 시간 → 멈춤), 호출부가 `repair_ci`의 1에서만 멈추고 `run_ticket`에 head 비교가 남지 않았는지, 프롬프트의 재실행 안내. 넣은 결함 다섯 개(head가 그대로면 CI를 보지 않고 멈춤 — 0.9.4, 새 커밋이 있어도 CI를 봄, CI 결과를 무시, 프롬프트 줄 없음, 호출부가 head 비교로 멈춤)에서 각각 해당 검사가 실패하는 것을 확인했다
+- 가이드북 6장 내부 상수(`IDLE_STRIKES`), 7장 4단계, 10.6 표 한 칸, 부록 D 재생성, 부록 E 한 행. README 두 벌의 수습 표 한 칸. PDF 재빌드
+- 이미 설치된 저장소: `npx github:iwishash/ticket-loop-kit#v0.9.5 init`(또는 `install.sh`) 뒤 그 PR을 병합한다. 설정은 없다
+
 ## 0.9.4 — 2026-10-21
 
 CI가 통과한 티켓 PR을 병합하는 순간 GitHub API가 `502 Bad Gateway`를 한 번 돌려줬고, 루프가 그 자리에서 멈췄다(이슈 #7, 0.9.2, cmux). 앞뒤의 `gh` 호출은 모두 정상이었고 PR은 충돌 없이 병합 가능한 채로 열려 있었다 — GitHub 상태 페이지에 공지가 없는 짧은 502였다. 멈춤 종류가 `other`라 무인 수습도 뜨지 않아, 사람이 직접 병합하고 워커 워크트리를 지운 뒤 다시 실행했다.

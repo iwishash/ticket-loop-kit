@@ -1220,6 +1220,36 @@ grep -q 'repair "${handle}" "PR #${pr} 이 ${BASE_BRANCH}과 충돌한다.* "$de
   && grep -q 'repair "${handle}" "PR #${pr} 의 CI가 실패했다.* "$deadline" "${pr}"' "$KIT/files/scripts/ticket-loop.sh" || fail "수리 두 곳이 PR 번호를 넘기지 않음"
 echo "ok  수리 끝 알아채기(idle 없이 새 커밋, 새 커밋 없는 idle 은 연달아 볼 때만)"
 
+# CI 수리(repair_ci): 수리 뒤 head 가 바뀌면 0(충돌·CI 확인부터 다시), 그대로면 CI 를 한 번 더 보고 통과면 0, 실패면 1(호출부가 멈춘다).
+# 2026-10-21 rental-portal #258: 러너 설치 경합으로 실패한 job 을 워커가 `gh run rerun --failed` 로만 다시 돌려 1분 뒤 통과했는데,
+# 0.9.4 까지는 head 가 그대로라 "no new commit was pushed after the repair" 로 멈췄다
+sed -n '/^repair_ci() {/,/^}/p' "$KIT/files/scripts/ticket-loop.sh" > "$W/rci.sh"
+grep -q '^repair_ci() {' "$W/rci.sh" || fail "repair_ci 를 찾지 못함"
+rci_case() {  # $1 수리 뒤 head(수리 전은 aaa1111), $2 ci_passed 종료 코드, $3 repair 종료 코드 → "종료 코드|ci_passed 호출 수|경고 수"
+  (cd "$W" && NEWHEAD="$1" CRC="$2" RRC="${3:-0}" HC="$W/rhc" bash -c '
+    set -euo pipefail
+    echo 0 > "$HC"; n_ci=0; warns=0
+    repair() { [[ "$1" == h && "$4" == 77 ]] || { echo "repair args: $*"; exit 8; }; return "$RRC"; }
+    pr_head_sha() { local c; c=$(( $(cat "$HC") + 1 )); echo "$c" > "$HC"; [[ "$1" == 77 ]] || exit 8; [[ $c -eq 1 ]] && echo aaa1111 || echo "$NEWHEAD"; }
+    ci_passed() { [[ "$1" == 77 ]] || exit 8; n_ci=$((n_ci + 1)); return "$CRC"; }
+    log() { [[ "$1" != warn ]] || warns=$((warns + 1)); }
+    die() { echo "die $*"; exit 9; }
+    source rci.sh
+    rc=0; repair_ci 7 77 h $(( $(date +%s) + 60 )) || rc=$?
+    echo "$rc|$n_ci|$warns"')
+}
+[[ "$(rci_case bbb2222 1)" == "0|0|0" ]] || fail "repair_ci: 새 커밋이 있으면 CI 를 다시 보지 않고 0 이어야: $(rci_case bbb2222 1)"
+[[ "$(rci_case aaa1111 0)" == "0|1|1" ]] || fail "repair_ci: 새 커밋 없이 CI 가 통과(재실행만 한 수리)했는데 계속하지 않음(#258): $(rci_case aaa1111 0)"
+[[ "$(rci_case aaa1111 1)" == "1|1|1" ]] || fail "repair_ci: 새 커밋도 없고 CI 도 실패인데 멈춤(1)이 아님: $(rci_case aaa1111 1)"
+out="$(rci_case aaa1111 0 1 || true)"; [[ "$out" == "die #7: timed out while repairing CI" ]] || fail "repair_ci: 수리 제한 시간이면 멈춰야: $out"
+grep -q 'if ! repair_ci "${n}" "${pr}" "${handle}" "$deadline"; then' "$KIT/files/scripts/ticket-loop.sh" \
+  && grep -qF 'reason="#${n}: no new commit was pushed after the repair, and CI still fails"' "$KIT/files/scripts/ticket-loop.sh" \
+  || fail "CI 수리 호출부가 repair_ci 의 1 에서만 멈추지 않음"
+! grep -q 'before="$(pr_head_sha "${pr}")"' <(sed -n '/^run_ticket() {/,/^}/p' "$KIT/files/scripts/ticket-loop.sh") || fail "run_ticket 이 아직 head 비교만으로 수리 결과를 가른다"
+grep -q 'repair "${handle}" "PR #${pr} 의 CI가 실패했다.*코드와 무관하면 코드를 바꾸지 말고 \\`gh run rerun <run-id> --failed\\` 로 실패한 job만 다시 돌려라(push할 커밋이 없어도 된다)' "$KIT/files/scripts/ticket-loop.sh" \
+  || fail "CI 수리 프롬프트에 러너·네트워크 오류면 재실행만 하라는 안내가 없음"
+echo "ok  CI 수리 뒤 새 커밋이 없으면 CI 를 다시 봄(재실행만 한 수리는 통과면 계속, 실패면 멈춤)"
+
 # 기록: PR 을 알아채기까지(pr_pickup_sec) — 값이 있을 때만
 sed -n '/^idle_fp_count() /p; /^record_ticket() {/,/^}/p' "$KIT/files/scripts/ticket-loop.sh" > "$W/rec.sh"
 rec_case() {  # $1 CUR_PICKUP_SEC → 기록 한 줄

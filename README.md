@@ -36,7 +36,7 @@ From the root of the target repository:
 npx github:iwishash/ticket-loop-kit init
 ```
 
-Pick the backend and install steps with the keyboard (`--yes` skips the questions; `NO_COLOR` disables colors). Pin a version with `npx github:iwishash/ticket-loop-kit#v0.9.4 init`. Without Node:
+Pick the backend and install steps with the keyboard (`--yes` skips the questions; `NO_COLOR` disables colors). Pin a version with `npx github:iwishash/ticket-loop-kit#v0.9.5 init`. Without Node:
 
 ```bash
 bash <(curl -fsSL https://raw.githubusercontent.com/iwishash/ticket-loop-kit/main/install.sh)
@@ -179,7 +179,7 @@ Noticing a stop and getting to it usually takes longer than the fix. On rental-p
 | Stop | Triage session | On `resume` the loop |
 |---|---|---|
 | Post-merge check failed (retry included) | Compares the failure with the merged PR's diff, fixes the test expectation or the code, runs only the failing test files, opens a fix PR into the default branch. An unrelated timeout is rerun and called a flake | Labels the fix PR `loop-triage`, merges it after CI, reruns the post-merge check on the merged branch (`post-merge-N-after-triage.log`), continues if it passes |
-| CI failure or conflict after the repair rounds, or no new commit after a repair | Pushes a fix to the ticket PR's branch. A threshold such as a bundle-size ceiling is raised only when the ticket's own change justifies it, with the reason in a PR comment. A CI infrastructure error gets `gh run rerun --failed` | Continues from that PR's conflict/CI check |
+| CI failure or conflict after the repair rounds, or CI still failing after a repair that pushed no commit | Pushes a fix to the ticket PR's branch. A threshold such as a bundle-size ceiling is raised only when the ticket's own change justifies it, with the reason in a PR comment. A CI infrastructure error gets `gh run rerun --failed` | Continues from that PR's conflict/CI check |
 | `WORKTREE_SETUP_CMD` failed (cmux, tmux) | Reproduces the setup and fixes the repository script or lockfile in a fix PR, or nothing if it was transient | Merges the fix PR, fast-forwards the worker worktree (and the main checkout when it is on the default branch; git refuses a merge that would touch local changes) and reruns the setup |
 | Worker stopped without a PR | Diagnosis only: summarizes what the worker was stuck on. It does not answer the worker's question | (always stops) |
 
