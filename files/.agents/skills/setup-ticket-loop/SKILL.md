@@ -49,14 +49,14 @@ disable-model-invocation: true
 | `orca.yaml` setup | 의존성 설치 명령, 복사할 env 파일과 안전 조건 |
 | `POST_MERGE_CMD` 등 | 병합 뒤 검증 명령·복사 파일, 또는 끔 |
 | `POST_MERGE_PORT` | 그 명령이 띄우는 고정 포트(예 `next dev`의 3000). 루프가 병합마다 비기를 기다리고, 시작할 때 차 있으면 알린다. 없으면 비움 |
-| `POST_MERGE_RETRY_CMD` | `POST_MERGE_CMD`가 실패했을 때 딱 한 번 돌릴 재실행 명령. 그 스위트에 병합과 무관한 플레이크(시간 초과 등)가 있을 때만 — 사용자에게 묻는다. 같은 검증 워크트리에서 `POST_MERGE_FAILED_LOG`(첫 실행 로그 절대 경로)를 받아 돌고, 통과하면 루프는 계속 가며 이슈에 플레이크 의심 코멘트를 남긴다. 실패한 테스트만 다시 돌리는 저장소 스크립트(아래)를 만들어 커밋하고 그 스크립트를 건다. `POST_MERGE_EVERY`가 1보다 크면 묶음 실패의 원인 병합을 찾는 데도 이 명령을 지난 커밋에서 돌린다 — 설치된 의존성에 기대면 앞에 설치 명령을 붙인다. 없으면 비움 |
+| `POST_MERGE_RETRY_CMD` | `POST_MERGE_CMD`가 실패했을 때 딱 한 번 돌릴 재실행 명령. 그 스위트에 병합과 무관한 플레이크(시간 초과 등)가 있을 때만 — 사용자에게 묻는다. 같은 검증 워크트리에서 `POST_MERGE_FAILED_LOG`(첫 실행 로그 절대 경로)를 받아 돌고, 통과하면 루프는 계속 가며 이슈에 플레이크 의심 코멘트를 남긴다. 실패한 테스트만 다시 돌리는 저장소 스크립트(아래)를 만들어 커밋하고 그 스크립트를 건다. `POST_MERGE_EVERY`가 1이 아니면(기본 4) 묶음 실패의 원인 병합을 찾는 데도 이 명령을 지난 커밋에서 돌린다 — 설치된 의존성에 기대면 앞에 설치 명령을 붙인다(아래 예). 없으면 비움 |
 | `POST_MERGE_EVERY` | 병합 뒤 검증을 병합 몇 개마다 돌리나. 기본 4 — 그대로면 `loop.env`에 쓰지 않는다. 그 명령이 짧으면(몇 분) 사용자에게 묻고 1(병합마다)을 권한다 — 묶어도 아끼는 시간이 없고 어느 병합이 깨뜨렸는지만 흐려진다. 0이면 개수로는 돌리지 않고 스펙·실행이 끝날 때만 돈다(깨진 기본 브랜치 위에 스펙 전체가 쌓일 수 있다). 스펙·실행이 끝날 때는 늘 돌고, 그 사이 병합은 다음 검증이 덮는다. 묶음이 실패하면 루프가 `POST_MERGE_RETRY_CMD`로 처음 실패하는 병합을 찾으므로, 묶을 때는 재실행 명령도 두기를 권한다 |
 | `LOOP_TRIAGE` | 멈출 일(병합 뒤 검증 실패, 수리를 다 쓴 CI 실패·충돌, 워크트리 준비 실패, PR 없이 멈춘 워커)이 생기면 루프가 멈추기 전에 수습 세션을 띄워 `loop-triage` 스킬로 고쳐 보게 할지. 기본 켬(1) — `loop.env`에 쓰지 않는다. 수습 세션이 낸 수정 PR도 CI 뒤 사람 검토 없이 병합되므로, 그게 이 저장소에서 안 되는 이유가 있을 때만 사용자에게 묻고 `0`. 한 실행 횟수(`TRIAGE_MAX`, 기본 1)·제한 시간(`TRIAGE_TIMEOUT_SEC`, 기본 3600)은 바꿀 이유가 있을 때만 |
 | `REPORT_DIR` | 스펙 리포트 HTML 디렉터리. 기본 `docs/loop-reports`를 바꿀 이유가 있을 때만 |
 | `REPORT_OPEN` | 리포트를 쓴 뒤 기본 브라우저로 열기. 기본 켬(1). 끌 이유가 있을 때만 `0` — SSH 세션·화면 없는 Linux에서는 값과 무관하게 열지 않는다 |
 | `CI_SKIP_REGEX` / `CI_SKIP_CMD` | 워크플로에 경로 필터(`paths`/`paths-ignore`)가 있을 때만. 루프가 그 필터를 따라 하도록 알려 주는 값이다 — 단순 제외 목록이면 정규식, 순서 규칙이 있으면 파일 목록을 stdin으로 받아 `run`/`skip`을 찍는 저장소 스크립트. 필터가 없으면 둘 다 비움 |
 
-`POST_MERGE_RETRY_CMD`를 쓰면 무엇을 다시 돌릴지는 저장소 스크립트가 정한다(키트는 테스트 도구에 묶이지 않는다). 검증 워크트리는 병합된 기본 브랜치라 스크립트가 커밋돼 있어야 돈다. vitest 예(`scripts/post-merge-retry.sh`, `POST_MERGE_RETRY_CMD="${POST_MERGE_RETRY_CMD:-bash scripts/post-merge-retry.sh}"`) — 다른 도구면 그 도구의 실패 줄 모양에 맞게 고친다:
+`POST_MERGE_RETRY_CMD`를 쓰면 무엇을 다시 돌릴지는 저장소 스크립트가 정한다(키트는 테스트 도구에 묶이지 않는다). 검증 워크트리는 병합된 기본 브랜치라 스크립트가 커밋돼 있어야 돈다. vitest 예(`scripts/post-merge-retry.sh`, `POST_MERGE_RETRY_CMD="${POST_MERGE_RETRY_CMD:-pnpm install --frozen-lockfile --prefer-offline && bash scripts/post-merge-retry.sh}"` — 앞의 설치는 이 저장소의 패키지 매니저 명령으로 바꾼다. 이미 설치돼 있으면 몇 초면 끝나고, 묶음 실패의 원인 병합을 찾을 때 지난 커밋의 의존성을 맞춘다) — 다른 도구면 그 도구의 실패 줄 모양에 맞게 고친다:
 
 ```bash
 files=$(perl -pe 's/\e\[[0-9;]*m//g' "$POST_MERGE_FAILED_LOG" \

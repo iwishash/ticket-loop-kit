@@ -36,7 +36,7 @@ GitHub 이슈 티켓을 워크트리에서 한 건씩 무인으로 구현·검�
 npx github:iwishash/ticket-loop-kit init
 ```
 
-백엔드와 설치 단계를 키보드로 고른다(`--yes`면 묻지 않고, `NO_COLOR`로 색을 끈다). 버전 고정은 `npx github:iwishash/ticket-loop-kit#v0.9.9 init`. Node 없이:
+백엔드와 설치 단계를 키보드로 고른다(`--yes`면 묻지 않고, `NO_COLOR`로 색을 끈다). 버전 고정은 `npx github:iwishash/ticket-loop-kit#v0.9.10 init`. Node 없이:
 
 ```bash
 bash <(curl -fsSL https://raw.githubusercontent.com/iwishash/ticket-loop-kit/main/install.sh)
@@ -64,7 +64,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/iwishash/ticket-loop-kit/mai
 - 병합마다, 그리고 `--parent` 실행이 끝날 때, 스펙 이슈의 하위 이슈가 모두 닫혔으면 스펙 이슈도 닫는다.
 - 산출물: `.ticket-loop/loop-MMDD.log`, `.ticket-loop/tickets.jsonl`(기계별, 커밋하지 않음), `--parent <스펙>` 실행 뒤의 스펙 리포트 `docs/loop-reports/spec-<N>.html`(사람이 보고 PR로 커밋). 스펙이 끝나면 `/retro`를 권하는 한 줄을 남기고, 회고를 직접 돌리지는 않는다.
 - `POST_MERGE_PORT`가 있으면 포트가 차 있을 때 점유 프로세스를 적고 30초마다 다시 본다.
-- `POST_MERGE_RETRY_CMD`(기본 비움 = 재실행 없음)가 있으면 병합 뒤 검증이 실패했을 때 딱 한 번 재실행한다. 포트 대기를 다시 지나, 같은 검증 워크트리에서 `POST_MERGE_FAILED_LOG`(첫 실행 로그의 절대 경로)를 넘겨 돌리고, 출력은 같은 디렉터리의 `post-merge-N-retry.log`다. 통과하면 루프는 계속 가고 `passed on retry in Ns (first run failed in Ms)`로 기록하며, 이슈에 "플레이크 의심" 코멘트(머신·로그 파일 이름·소요 시간 — 로그 본문은 올리지 않는다)를 달고 Slack에 멘션 없이 알린다. 재실행도 실패하면 두 로그를 적고 멈춘다. 키트는 테스트 도구를 모르므로 무엇을 다시 돌릴지는 저장소가 정한다. vitest라면 스크립트를 커밋하고(검증 워크트리는 병합된 기본 브랜치다) `POST_MERGE_RETRY_CMD="${POST_MERGE_RETRY_CMD:-bash scripts/post-merge-retry.sh}"`로 건다.
+- `POST_MERGE_RETRY_CMD`(기본 비움 = 재실행 없음)가 있으면 병합 뒤 검증이 실패했을 때 딱 한 번 재실행한다. 포트 대기를 다시 지나, 같은 검증 워크트리에서 `POST_MERGE_FAILED_LOG`(첫 실행 로그의 절대 경로)를 넘겨 돌리고, 출력은 같은 디렉터리의 `post-merge-N-retry.log`다. 통과하면 루프는 계속 가고 `passed on retry in Ns (first run failed in Ms)`로 기록하며, 이슈에 "플레이크 의심" 코멘트(머신·로그 파일 이름·소요 시간 — 로그 본문은 올리지 않는다)를 달고 Slack에 멘션 없이 알린다. 재실행도 실패하면 두 로그를 적고 멈춘다. 키트는 테스트 도구를 모르므로 무엇을 다시 돌릴지는 저장소가 정한다. vitest라면 스크립트를 커밋하고(검증 워크트리는 병합된 기본 브랜치다) `POST_MERGE_RETRY_CMD="${POST_MERGE_RETRY_CMD:-pnpm install --frozen-lockfile --prefer-offline && bash scripts/post-merge-retry.sh}"`로 건다(바뀐 게 없으면 설치는 몇 초다. 묶음 실패의 원인 병합을 찾으려고 지난 커밋에서 스크립트를 다시 돌릴 때 의존성을 맞춘다 — 아래 `POST_MERGE_EVERY`).
 
   ```bash
   # scripts/post-merge-retry.sh — 첫 실행 로그에서 실패한 테스트 파일만 다시 돌린다

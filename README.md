@@ -36,7 +36,7 @@ From the root of the target repository:
 npx github:iwishash/ticket-loop-kit init
 ```
 
-Pick the backend and install steps with the keyboard (`--yes` skips the questions; `NO_COLOR` disables colors). Pin a version with `npx github:iwishash/ticket-loop-kit#v0.9.9 init`. Without Node:
+Pick the backend and install steps with the keyboard (`--yes` skips the questions; `NO_COLOR` disables colors). Pin a version with `npx github:iwishash/ticket-loop-kit#v0.9.10 init`. Without Node:
 
 ```bash
 bash <(curl -fsSL https://raw.githubusercontent.com/iwishash/ticket-loop-kit/main/install.sh)
@@ -64,7 +64,7 @@ Loop behaviour worth knowing:
 - After each merge and at the end of a `--parent` run, the loop closes the spec issue once all its sub-issues are closed.
 - Outputs: `.ticket-loop/loop-MMDD.log`, `.ticket-loop/tickets.jsonl` (per machine, not committed), and after a `--parent <spec>` run the spec report `docs/loop-reports/spec-<N>.html` (review it and commit via PR). When a spec completes, the loop suggests a `/retro` pass; it never runs one itself.
 - With `POST_MERGE_PORT` set, a busy port is logged with the occupying process and re-checked every 30 seconds.
-- `POST_MERGE_RETRY_CMD` (default empty: no retry) gives a failed post-merge check exactly one retry. The loop waits for the port again, then runs the command in the same check worktree with `POST_MERGE_FAILED_LOG` set to the first run's log (absolute path); output goes to `post-merge-N-retry.log` next to it. If the retry passes, the loop continues, records `passed on retry in Ns (first run failed in Ms)`, comments "likely flaky" on the issue (machine, log file names, durations — no log contents), and posts to Slack without a mention. If it fails too, the loop stops and names both logs. The kit is test-runner agnostic, so the repository decides what to rerun. For vitest, commit a script (the check worktree is the merged default branch) and set `POST_MERGE_RETRY_CMD="${POST_MERGE_RETRY_CMD:-bash scripts/post-merge-retry.sh}"`:
+- `POST_MERGE_RETRY_CMD` (default empty: no retry) gives a failed post-merge check exactly one retry. The loop waits for the port again, then runs the command in the same check worktree with `POST_MERGE_FAILED_LOG` set to the first run's log (absolute path); output goes to `post-merge-N-retry.log` next to it. If the retry passes, the loop continues, records `passed on retry in Ns (first run failed in Ms)`, comments "likely flaky" on the issue (machine, log file names, durations — no log contents), and posts to Slack without a mention. If it fails too, the loop stops and names both logs. The kit is test-runner agnostic, so the repository decides what to rerun. For vitest, commit a script (the check worktree is the merged default branch) and set `POST_MERGE_RETRY_CMD="${POST_MERGE_RETRY_CMD:-pnpm install --frozen-lockfile --prefer-offline && bash scripts/post-merge-retry.sh}"` (the install takes seconds when nothing changed; it keeps dependencies right when the loop reruns the script at older commits to bisect a batched failure, see `POST_MERGE_EVERY` below):
 
   ```bash
   # scripts/post-merge-retry.sh — rerun only the test files that failed in the first run
