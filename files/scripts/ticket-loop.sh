@@ -14,8 +14,8 @@ set -euo pipefail
 #      (POST_MERGE_RETRY_CMD가 있으면 멈추기 전에 한 번 재실행해 본다 — 통과하면 플레이크 의심으로 기록하고 계속 간다)
 #   6. 워크트리·브랜치를 지우고, 티켓 요약 한 줄을 로그에, 기록 한 줄을 RECORDS_FILE에 남기고, 다음 티켓으로 간다
 #      (자동 선택이면 대상 재계산)
-#   7. `--parent` 실행이 정상 종료하면 하위 이슈가 모두 닫힌 스펙 이슈를 닫고(아직 열려 있으면), 스펙 리포트 HTML(티켓별 결과·경과 시간·
-#      모델 표)을 REPORT_DIR/spec-<N>.html에 쓰고 브라우저로 연다(REPORT_OPEN=0이면 열지 않음)
+#   7. `--parent` 실행이 정상 종료하면 하위 이슈가 모두 닫힌 스펙 이슈를 닫고(아직 열려 있으면), 스펙 리포트 HTML(티켓별 결과·구현·CI·
+#      병합 뒤 검증 시간·경과 시간·모델 표)을 REPORT_DIR/spec-<N>.html에 쓰고 브라우저로 연다(REPORT_OPEN=0이면 열지 않음)
 #   8. 이번 실행에서 끝난 스펙이 있으면 회고를 권하는 안내 한 줄을 남긴다(/retro로 읽을 자료 안내). 권고일 뿐 아무것도 실행하지 않는다 —
 #      회고는 사람이 후보를 보고 고르는 단계라 무인으로 돌리지 않는다
 # 그 사이 멈출 일이 생기면(병합 뒤 검증 실패, 수리를 다 쓴 CI 실패·충돌, 워크트리 준비 실패, PR 없이 멈춘 워커) 멈추기 전에 수습 세션을
@@ -1265,13 +1265,18 @@ pr_head_sha() { gh pr view "$1" --json headRefOid -q .headRefOid; }
 # 없다(2026-10-21 rental-portal #258: 같은 HOME을 나눠 쓰는 self-hosted 러너 둘의 설치 경합. 워커는 재실행만 했고 1분 뒤 통과했는데,
 # 0.9.4까지는 head가 그대로라 멈췄다). 그래서 head가 그대로면 CI를 한 번 더 본다 — 재실행이 도는 중이면 끝까지 보고, 통과면 0이다
 repair_ci() {
-  local n="$1" pr="$2" handle="$3" deadline="$4" before
+  local n="$1" pr="$2" handle="$3" deadline="$4" before rc=0
   before="$(pr_head_sha "${pr}")"
+  phase repair
   repair "${handle}" "PR #${pr} 의 CI가 실패했다. \`gh pr checks ${pr}\` 와 \`gh run view --log-failed\` 로 원인을 보고 고친 뒤 테스트·lint를 다시 돌리고 같은 브랜치에 push해라. 테스트를 건너뛰거나 지우지 마라. 같은 커밋의 다른 job은 통과했고 실패가 러너·네트워크 오류처럼 코드와 무관하면 코드를 바꾸지 말고 \`gh run rerun <run-id> --failed\` 로 실패한 job만 다시 돌려라(push할 커밋이 없어도 된다). 질문하지 말고 끝까지 해라." "$deadline" "${pr}" \
     || die "#${n}: timed out while repairing CI"
+  phase ""
   [[ "$(pr_head_sha "${pr}")" == "$before" ]] || return 0
   log warn "#${n}: no new commit after the repair — checking CI again (a re-run needs no commit)"
-  ci_passed "${pr}"
+  phase ci   # 재실행을 기다리는 동안은 CI다
+  ci_passed "${pr}" || rc=$?
+  phase ""
+  return "$rc"
 }
 
 # CI가 실제로 돈 시간(초) — PR head 체크들의 가장 이른 시작부터 가장 늦은 끝까지(GitHub 시각). 루프가 CI 대기를 시작한 때부터 재면 그 전에
@@ -1389,11 +1394,14 @@ run_post_merge() {
   mkdir -p "$(dirname "$logfile")"
   started="$(date +%s)"
   log step "#${n}: post-merge check started (${wt}, log ${logfile})"
+  phase post   # 명령이 도는 동안만(포트 대기는 빼고) — 리포트의 병합 뒤 검증 시간
   if bg_wait bash -c 'cd "$1" && exec bash -c "$2"' _ "$wt" "$POST_MERGE_CMD" >"$logfile" 2>&1; then
+    phase ""
     POST_MERGE_RESULT="passed in $(( $(date +%s) - started ))s"
     log ok "#${n}: post-merge check ${POST_MERGE_RESULT}"
     return 0
   fi
+  phase ""
   first_sec=$(( $(date +%s) - started ))
   POST_MERGE_RESULT="failed in ${first_sec}s"
   log warn "#${n}: post-merge check failed — tail ---"; tail -n 40 "$logfile" | dim_lines || true
@@ -1406,13 +1414,16 @@ run_post_merge() {
   POST_MERGE_RETRY_LOG="$retry_log"
   started="$(date +%s)"
   log step "#${n}: retrying the post-merge check once (log ${retry_log})"
+  phase post
   if bg_wait env POST_MERGE_FAILED_LOG="$logfile" bash -c 'cd "$1" && exec bash -c "$2"' _ "$wt" "$POST_MERGE_RETRY_CMD" >"$retry_log" 2>&1; then
+    phase ""
     retry_sec=$(( $(date +%s) - started ))
     POST_MERGE_RESULT="passed on retry in ${retry_sec}s (first run failed in ${first_sec}s)"
     log warn "#${n}: post-merge check ${POST_MERGE_RESULT} — likely flaky, continuing"
     post_merge_flaky_record "$n" "$logfile" "$retry_log" "$first_sec" "$retry_sec"
     return 0
   fi
+  phase ""
   POST_MERGE_RESULT="failed on retry in $(( $(date +%s) - started ))s (first run failed in ${first_sec}s)"
   log warn "#${n}: post-merge retry failed too — tail ---"; tail -n 40 "$retry_log" | dim_lines || true
   return 1
@@ -1573,6 +1584,7 @@ triage() {
     return 1
   fi
   IFS=$'\t' read -r t_wt t_path t_branch t_handle < "$tmp"; rm -f "$tmp"
+  CUR_AGENT_PATHS+="${t_path}"$'\n'   # 수습 세션의 토큰도 그 티켓에 센다
   [[ "$BACKEND" != tmux ]] || TMUX_STATE_FILE="$TMUX_DIR/state/$(basename "$t_path")"   # tmux_* 가 보는 훅 상태 파일 — 끝나면 되돌린다
   backend_set_status "$t_wt" in-progress || true
   log step "#${n}: triage session ${t_wt} (${t_path}) / terminal ${t_handle} — waiting for a verdict (up to $((TRIAGE_TIMEOUT_SEC / 60))m)"
@@ -1633,6 +1645,27 @@ triage() {
 # (하위 이슈·PR 본문)을 합쳐 REPORT_DIR/spec-<N>.html을 만든다. 기록이 없는 티켓(다른 PC·사람 처리)은 PR 시각으로 대신한다.
 
 CUR_N=""; CUR_TITLE=""; CUR_STARTED=0; CUR_STARTED_ISO=""; CUR_PR=""; CUR_MODEL=""; CUR_CI_SEC=""; CUR_PICKUP_SEC=""; CUR_ROUND=0
+CUR_AGENT_PATHS=""   # 이 티켓의 에이전트 작업 폴더(워커·무인 수습), 한 줄에 하나 — 토큰을 셀 세션 기록을 찾는다(ticket_session_dirs)
+
+# 티켓의 경과 시간을 단계별로 센다 — 구현(에이전트가 뜬 때부터 PR이 열린 때까지), 수리(수리 프롬프트부터 수리 끝까지, 충돌·CI 모두),
+# CI(첫 회는 PR이 열린 때부터 — CI는 그때 돈다 — 수리 뒤에는 루프가 다시 보기 시작한 때부터 결과까지), 병합 뒤 검증(명령이 도는 동안,
+# 재실행 포함). 나머지(워크트리 준비, PR을 알아채기, 병합·정리, 포트 대기, 무인 수습)는 세지 않는다 — 리포트가 경과 시간에서 뺀 나머지로
+# 보인다. 0.9.7까지는 경과 시간 하나와 마지막 CI 회차만 남아, 몇 분이 구현이고 몇 분이 CI·통합 테스트인지 리포트에서 알 수 없었다.
+# 단계는 메인 셸에서만 바꾼다(bg_wait 서브셸 안에서 바꾸면 부모에 남지 않는다). 멈추면 record_ticket이 열린 단계를 그 시각에 닫는다
+PH_NAME=""; PH_AT=0; PH_IMPL=0; PH_REPAIR=0; PH_CI=0; PH_POST=0
+phase() {   # $1 새 단계(impl|repair|ci|post, 빈 값이면 세지 않음), $2 바뀐 시각(생략하면 지금 — 지금 단계가 시작된 때보다 이르면 그때)
+  local at="${2:-}" d
+  [[ -n "$at" ]] || at="$(date +%s)"
+  [[ "$at" -ge "${PH_AT:-0}" ]] || at="$PH_AT"
+  d=$(( at - ${PH_AT:-0} ))
+  case "${PH_NAME:-}" in
+    impl) PH_IMPL=$(( ${PH_IMPL:-0} + d )) ;;
+    repair) PH_REPAIR=$(( ${PH_REPAIR:-0} + d )) ;;
+    ci) PH_CI=$(( ${PH_CI:-0} + d )) ;;
+    post) PH_POST=$(( ${PH_POST:-0} + d )) ;;
+  esac
+  PH_NAME="$1"; PH_AT="$at"
+}
 
 # 워커 터미널의 에이전트 상태줄·배너에서 모델 이름을 뽑는다(Claude Code: "[Opus 5.5 | Max]", Codex: 기동 블록의 "model: gpt-5.1-codex"). 못 찾으면 빈 값.
 detect_model() { [[ -n "$MODEL_REGEX" ]] || return 0; terminal_tail "$1" 2>/dev/null | grep -oE "$MODEL_REGEX" | tail -n1 || true; }
@@ -1706,17 +1739,63 @@ suggest_retro() {
 # idle_false_positives가 늘 0이었다. 티켓마다 IDLE_FP_FILE에 한 번에 한 줄씩 쓰고 줄 수를 센다
 idle_fp_count() { if [[ -n "${IDLE_FP_FILE:-}" && -f "$IDLE_FP_FILE" ]]; then echo $(( $(wc -l < "$IDLE_FP_FILE") )); else echo 0; fi; }
 
+# 티켓에 든 에이전트 토큰 — Claude Code 세션 기록에서 더한다. 기록은 CLAUDE_CONFIG_DIR(기본 ~/.claude)의 projects/<작업 폴더 경로에서
+# 영숫자 밖 글자를 -로 바꾼 이름>/ 아래 *.jsonl이고, 서브에이전트 기록은 그 아래 subagents/에 있다. 응답마다 message.usage가 남는데 한 응답이
+# 내용 블록마다 줄로 나뉘어 같은 usage가 되풀이되므로 message.id로 하나만 센다(rental-portal #250: 394줄 → 응답 210개). 워커 세션과 그 티켓의
+# 무인 수습 세션(loop-triage-N-HHMMSS)을 더한다. Codex는 세션 기록 형식이 달라 아직 세지 않는다
+claude_project_dir() { printf '%s/projects/%s' "${CLAUDE_CONFIG_DIR:-$HOME/.claude}" "$(printf '%s' "$1" | sed 's/[^A-Za-z0-9]/-/g')"; }
+
+# $1 이슈 번호, 나머지 그 밖의 작업 폴더(Orca 워크트리 등 — WORKTREE_DIR 밖) → 있는 세션 기록 폴더, 한 줄에 하나
+ticket_session_dirs() {
+  local n="$1" d
+  shift
+  {
+    if [[ -n "${WORKTREE_DIR:-}" ]]; then
+      claude_project_dir "${WORKTREE_DIR}/${BRANCH_PREFIX}${n}"; echo
+      for d in "$(claude_project_dir "${WORKTREE_DIR}/loop-triage-${n}-")"*; do printf '%s\n' "$d"; done
+    fi
+    for d in "$@"; do [[ -z "$d" ]] || { claude_project_dir "$d"; echo; }; done
+  } | while IFS= read -r d; do [[ ! -d "$d" ]] || printf '%s\n' "$d"; done | awk '!seen[$0]++'
+}
+
+# stdin 세션 기록 폴더들, $1 이 시각부터, $2 이 시각까지(빈 값이면 끝 없음 — 둘 다 ISO, 같은 경로를 쓴 앞선 시도를 빼려고) →
+# {"input","output","cache_write","cache_read"} 한 줄. 응답이 하나도 없으면 빈 값
+session_tokens() {
+  local since="$1" upto="${2:-}" d f files=()
+  while IFS= read -r d; do
+    [[ -d "$d" ]] || continue
+    while IFS= read -r -d '' f; do files+=("$f"); done < <(find "$d" -type f -name '*.jsonl' -print0 2>/dev/null)
+  done
+  [[ ${#files[@]} -gt 0 ]] || return 0
+  cat "${files[@]}" | jq -nRc --arg since "$since" --arg upto "$upto" '
+    reduce (inputs | fromjson? | select(type == "object" and .type == "assistant" and (.message.usage | type) == "object")
+            | select((.timestamp // "") >= $since and ($upto == "" or (.timestamp // "") <= $upto))) as $m
+      ({}; .[$m.message.id // $m.uuid // "?"] = $m.message.usage)
+    | [.[]] | select(length > 0)
+    | {input: (map(.input_tokens // 0) | add), output: (map(.output_tokens // 0) | add),
+       cache_write: (map(.cache_creation_input_tokens // 0) | add), cache_read: (map(.cache_read_input_tokens // 0) | add)}' 2>/dev/null || true
+}
+
 record_ticket() {
   local result="$1" reason="${2:-}" file="$RECORDS_FILE" spec   # RECORDS_FILE은 시작 때 절대 경로로 굳혔다
   [[ "$LOG_FILE" != "/dev/null" ]] || return 0
+  phase ""   # 열린 단계(멈춘 때의 구현·CI 등)를 지금 닫는다
   mkdir -p "$(dirname "$file")"
   spec="$(spec_of_ticket "$CUR_N")"
+  local tokens="" paths=() f
+  if [[ "$AGENT" == claude ]]; then
+    while IFS= read -r f; do [[ -z "$f" ]] || paths+=("$f"); done <<<"${CUR_AGENT_PATHS:-}"
+    tokens="$(ticket_session_dirs "$CUR_N" ${paths[@]+"${paths[@]}"} | session_tokens "$CUR_STARTED_ISO")"
+  fi
   jq -cn --argjson spec "${spec:-0}" --argjson issue "$CUR_N" --arg title "$CUR_TITLE" --arg result "$result" --arg reason "$reason" \
     --arg pr "$CUR_PR" --arg pickup "${CUR_PICKUP_SEC:-}" --arg started "$CUR_STARTED_ISO" --arg finished "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" \
     --argjson wall "$(( $(date +%s) - CUR_STARTED ))" --arg ci "$CUR_CI_SEC" --argjson repairs "$CUR_ROUND" \
     --argjson idle "$(idle_fp_count)" --arg post "${POST_MERGE_RESULT:-}" --arg model "$CUR_MODEL" --arg agent "$AGENT" \
-    --arg triage "${TRIAGE_RESULT:-}" --arg log "${LOG_FILE#"$ROOT"/}" '
+    --arg triage "${TRIAGE_RESULT:-}" --arg log "${LOG_FILE#"$ROOT"/}" \
+    --argjson impl "${PH_IMPL:-0}" --argjson repair "${PH_REPAIR:-0}" --argjson ciwait "${PH_CI:-0}" --argjson postsec "${PH_POST:-0}" \
+    --arg tokens "$tokens" '
     {spec: $spec, issue: $issue, title: $title, result: $result, started: $started, finished: $finished, wall_sec: $wall,
+     impl_sec: $impl, repair_sec: $repair, ci_wait_sec: $ciwait, post_merge_sec: $postsec,
      repairs: $repairs, idle_false_positives: $idle, agent: $agent, log: $log}
     + (if $reason != "" then {reason: $reason} else {} end)
     + (if $triage != "" then {triage: $triage} else {} end)
@@ -1724,12 +1803,13 @@ record_ticket() {
     + (if $pickup != "" then {pr_pickup_sec: ($pickup | tonumber)} else {} end)
     + (if $ci != "" then {ci_sec: ($ci | tonumber)} else {} end)
     + (if $post != "" then {post_merge: $post} else {} end)
+    + (if $tokens != "" then {tokens: ($tokens | fromjson)} else {} end)
     + (if $model != "" then {model: $model} else {} end)' >> "$file" 2>/dev/null \
     || log warn "#${CUR_N}: failed to write the ticket record (${file})"
 }
 
 # 스펙 리포트 HTML — jq 하나로 그린다(의존 도구를 늘리지 않는다). 표: 이슈·티켓·상태·결과 브리프(PR 제목, 본문의
-# 인수 조건 체크 수, 중단 사유, CI·수리·병합 뒤 검증)·경과 시간·모델·마친 시각. 문자열은 전부 @html로 이스케이프한다.
+# 인수 조건 체크 수, 중단 사유, 수리·병합 뒤 검증 결과)·구현·CI·병합 뒤 검증·경과 시간(단계 막대)·모델·마친 시각. 문자열은 전부 @html로 이스케이프한다.
 # 리포트의 고정 문구는 영어, GitHub에서 가져온 값(이슈·PR 제목, 본문)과 기록의 중단 사유는 그대로(한국어면 한국어) 둔다.
 # 기록의 post_merge는 0.8.7부터 영어("passed in Ns"·"failed in Ns"·"skipped")다. 그 전 기록의 한국어 값("통과 N초"·"실패 N초"·"건너뜀")은
 # 표시할 때만 영어로 바꾼다(기록 파일은 그대로).
@@ -1747,6 +1827,11 @@ def badge: {merged: ["Merged", "ok"], "merged-after-stop": ["Merged after stop",
 def post: if . == "건너뜀" then "skipped"
           else (capture("^(?<k>통과|실패) (?<s>[0-9]+)초$") // null) as $m
           | if $m == null then . else "\(if $m.k == "통과" then "passed" else "failed" end) in \($m.s)s" end end;
+def pos: if . != null and . > 0 then . else null end;
+def tok: def d1($u; $s): (. / ($u / 10) | floor) as $d | "\($d / 10 | floor).\($d % 10)\($s)";   # 소수 한 자리(2.0M)
+         if . == null then "—" elif . >= 1e9 then d1(1e9; "B") elif . >= 1e6 then d1(1e6; "M") elif . >= 1e3 then "\(. / 1e3 | floor)k" else "\(.)" end;
+def tcell($v; $note): "<td class=\"nw\">" + (if $v == -1 then "none" else ($v | dur) end) + (if $note == "" then "" else "<div class=\"muted small\">\($note)</div>" end) + "</td>";
+def seg($v; $c; $den): if ($v // 0) > 0 then "<i class=\"\($c)\" style=\"width:\($v * 1000 / $den | floor / 10)%\"></i>" else "" end;
 ($issues | sort_by(order, .number) | map(. as $i
   | ($recs | map(select(.issue == $i.number)) | sort_by(.finished)) as $rs | ($rs | last) as $r
   | ($prefix + ($i.number | tostring)) as $b
@@ -1760,52 +1845,90 @@ def post: if . == "건너뜀" then "skipped"
               elif ($i.assignees // 0) > 0 then "in-progress" else "pending" end),
      wall: (if $r.wall_sec != null then {sec: $r.wall_sec, src: "loop"}
             elif $pr.mergedAt != null then {sec: (($pr.mergedAt | epoch) - ($pr.createdAt | epoch)), src: "pr"} else null end),
+     # 경과 시간 나누기 — 0.9.8부터 기록에 단계별 시간이 있다(record_ticket·phase). 그 전 기록은 어림한다: 구현은 PR 생성 시각 − 시작(수리
+     # 시간은 모른다), CI는 마지막 회차(ci_sec), 병합 뒤 검증은 결과 문자열의 초를 더한 값. PR 없이 멈춘 기록은 경과 전부가 구현이다
+     t: (if $r == null then null
+         elif ($r | has("impl_sec")) then
+           {impl: (($r.impl_sec // 0) + ($r.repair_sec // 0) | pos), repair: ($r.repair_sec | pos),
+            ci: (if $r.ci_sec == -1 then -1 else ($r.ci_wait_sec | pos) end), post: ($r.post_merge_sec | pos), est: false}
+         else
+           {impl: (if $r.pr == null and $r.result == "stopped" then ($r.wall_sec | pos)
+                   else (($pr.createdAt | epoch) as $c | ($r.started | epoch) as $s
+                         | if $c == null or $s == null or $c < $s then null else ([$c - $s, $r.wall_sec // ($c - $s)] | min | pos) end) end),
+            repair: null, ci: (if $r.ci_sec == -1 then -1 else ($r.ci_sec | pos) end),
+            post: ($r.post_merge // "" | post | [scan(" in ([0-9]+)s") | .[0] | tonumber] | add | pos), est: true} end),
+     # 토큰 — 기록의 tokens(0.9.8부터), 없으면 write_spec_report가 세션 기록에서 메운 값. total은 네 값의 합
+     tk: ($r.tokens | if type == "object" then . + {total: ((.input // 0) + (.output // 0) + (.cache_write // 0) + (.cache_read // 0))} else null end),
      model: ($r.model // "not recorded")})) as $rows
 | ($rows | map(select(.status == "merged" or .status == "merged-after-stop")) | length) as $merged
 | ($rows | map(select(.issue.state == "closed")) | length) as $closed
 | ($rows | map(select(.wall.src == "loop") | .wall.sec) | add // 0) as $total
+| ([$rows[].tk.total | pos] | add) as $tok_total | ([$rows[].tk.output | pos] | add) as $tok_out
+| ([$rows[].t.impl | pos] | add) as $impl_total | ([$rows[].t.ci | pos] | add) as $ci_total | ([$rows[].t.post | pos] | add) as $post_total
 | ($rows | map(.model) | map(select(. != "not recorded")) | unique | join(", ")) as $models
 | "<!doctype html>\n<html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
   + @html "<title>#\($spec.number) \($spec.title) — Loop report</title>"
   + "<style>:root{--ink:#1c1f24;--muted:#5b6270;--line:#d9dde3;--soft:#f4f6f8;--bg:#fff;--accent:#2457c5;--ok:#1f7a4d;--ok-soft:#e6f4ec;--warn:#9a6700;--warn-soft:#fff6d6;--bad:#b4441c;--bad-soft:#fbeee8}"
   + "@media (prefers-color-scheme:dark){:root{--ink:#e6e8eb;--muted:#9aa3ad;--line:#3a4047;--soft:#22262b;--bg:#15181b;--accent:#7ea2ff;--ok:#5fcf8f;--ok-soft:#1c3327;--warn:#e3b341;--warn-soft:#3a3012;--bad:#ff8a65;--bad-soft:#3b2219}}"
   + "*{box-sizing:border-box}body{margin:0;padding:24px 16px 48px;color:var(--ink);background:var(--bg);font-family:system-ui,-apple-system,\"Segoe UI\",\"Apple SD Gothic Neo\",\"Noto Sans KR\",sans-serif;font-size:14px;line-height:1.55}"
-  + "main{max-width:1200px;margin:0 auto}h1{font-size:22px;margin:0 0 4px}a{color:var(--accent);text-decoration:none}.kicker{color:var(--accent);font-weight:700;font-size:12px;letter-spacing:.06em}"
+  + "main{max-width:1360px;margin:0 auto}h1{font-size:22px;margin:0 0 4px}a{color:var(--accent);text-decoration:none}.kicker{color:var(--accent);font-weight:700;font-size:12px;letter-spacing:.06em}"
   + ".meta{color:var(--muted);font-size:13px;margin:0 0 18px}.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;margin:0 0 20px}"
   + ".kpi{background:var(--soft);border:1px solid var(--line);border-radius:8px;padding:10px 12px}.kpi .v{font-size:20px;font-weight:700}.kpi .l{color:var(--muted);font-size:12px}"
   + ".wrap{overflow-x:auto}table{width:100%;border-collapse:collapse;font-size:13px}th,td{border:1px solid var(--line);padding:8px 10px;vertical-align:top;text-align:left}th{background:var(--soft);white-space:nowrap}"
   + "td.nw{white-space:nowrap}.bits{margin-top:4px;color:var(--muted);font-size:12px}.reason{margin-top:4px;color:var(--bad);font-size:12px}.muted{color:var(--muted)}.small{font-size:12px}"
   + ".badge{display:inline-block;font-size:12px;font-weight:700;border-radius:10px;padding:0 8px;border:1px solid var(--line);white-space:nowrap}.badge.ok{color:var(--ok);background:var(--ok-soft)}"
-  + ".badge.warn{color:var(--warn);background:var(--warn-soft)}.badge.bad{color:var(--bad);background:var(--bad-soft)}.badge.muted{color:var(--muted);background:var(--soft)}footer{margin-top:20px;color:var(--muted);font-size:12px}</style></head>"
+  + ".badge.warn{color:var(--warn);background:var(--warn-soft)}.badge.bad{color:var(--bad);background:var(--bad-soft)}.badge.muted{color:var(--muted);background:var(--soft)}footer{margin-top:20px;color:var(--muted);font-size:12px}"
+  + ".bar{display:flex;height:6px;min-width:96px;margin-top:6px;border-radius:3px;overflow:hidden;background:var(--line)}.bar i{display:block;height:100%}"
+  + ".dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:5px}.s-impl{background:var(--accent)}th.tm{white-space:normal}th.tm .k{white-space:nowrap}td.tk{min-width:130px}td.br{min-width:220px}.s-ci{background:var(--warn)}.s-post{background:var(--ok)}</style></head>"
   + "<body><main><div class=\"kicker\">Unattended ticket loop · Spec report</div>"
   + @html "<h1><a href=\"\($spec.url)\">#\($spec.number)</a> \($spec.title)</h1>"
   + "<p class=\"meta\">Spec " + (if ($rows | length) > 0 and $closed == ($rows | length) then "complete (all sub-tickets closed)" else "in progress (\($closed)/\($rows | length) closed)" end)
   + " · generated \($now) · spec issue " + (if $spec.state == "CLOSED" then "closed" else "open" end) + "</p>"
   + "<div class=\"kpis\"><div class=\"kpi\"><div class=\"v\">\($rows | length)</div><div class=\"l\">Tickets</div></div><div class=\"kpi\"><div class=\"v\">\($merged)</div><div class=\"l\">Merged</div></div>"
   + "<div class=\"kpi\"><div class=\"v\">\($total | dur)</div><div class=\"l\">Total loop wall-clock (recorded tickets)</div></div>"
+  + "<div class=\"kpi\"><div class=\"v\">\($impl_total | dur)</div><div class=\"l\"><span class=\"dot s-impl\"></span>Implementation</div></div>"
+  + "<div class=\"kpi\"><div class=\"v\">\($ci_total | dur)</div><div class=\"l\"><span class=\"dot s-ci\"></span>CI</div></div>"
+  + "<div class=\"kpi\"><div class=\"v\">\($post_total | dur)</div><div class=\"l\"><span class=\"dot s-post\"></span>Post-merge check</div></div>"
+  + "<div class=\"kpi\"><div class=\"v\">\($tok_total | tok)</div><div class=\"l\">Tokens (output \($tok_out | tok))</div></div>"
   + @html "<div class=\"kpi\"><div class=\"v\">\(if $models == "" then "not recorded" else $models end)</div><div class=\"l\">Models used</div></div></div>"
-  + "<div class=\"wrap\"><table><thead><tr><th>Issue</th><th>Ticket</th><th>Status</th><th>Result brief</th><th>Elapsed</th><th>Model</th><th>Finished</th></tr></thead><tbody>"
+  + "<div class=\"wrap\"><table><thead><tr><th>Issue</th><th>Ticket</th><th>Status</th><th>Result brief</th><th class=\"tm\"><span class=\"k\"><span class=\"dot s-impl\"></span>Implementation</span></th><th class=\"tm\"><span class=\"k\"><span class=\"dot s-ci\"></span>CI</span></th><th class=\"tm\"><span class=\"k\"><span class=\"dot s-post\"></span>Post-merge</span> check</th><th>Elapsed</th><th>Tokens</th><th>Model</th><th>Finished</th></tr></thead><tbody>"
   + ($rows | map(
-      @html "<tr><td class=\"nw\"><a href=\"\(.issue.url)\">#\(.issue.number)</a></td><td>\(.issue.title)</td>"
-      + "<td><span class=\"badge \(.status | badge | .[1])\">\(.status | badge | .[0])</span></td><td>"
+      @html "<tr><td class=\"nw\"><a href=\"\(.issue.url)\">#\(.issue.number)</a></td><td class=\"tk\">\(.issue.title)</td>"
+      + "<td><span class=\"badge \(.status | badge | .[1])\">\(.status | badge | .[0])</span></td><td class=\"br\">"
       + (if .pr then @html "<div><a href=\"\(.pr.url)\">PR #\(.pr.number)</a> \(.pr.title)</div>"
                       + ((.pr.body // "" | checks) | if .total > 0 then "<div>Acceptance criteria \(.checked)/\(.total)</div>" else "" end)
          elif .rec == null then "<span class=\"muted\">no record</span>" else "" end)
       + (if .rec.result == "stopped" then @html "<div class=\"reason\">Stop reason: \(.rec.reason // "—")</div>" else "" end)
       + (if .rec then "<div class=\"bits\">" + ([
-            (if .rec.ci_sec == null then empty elif .rec.ci_sec < 0 then "no CI (path excluded from CI)" else "CI \(.rec.ci_sec | dur)" end),
             "\(.rec.repairs // 0) repair\(if (.rec.repairs // 0) == 1 then "" else "s" end)",
-            # 0.9.6까지는 병합 전에 멈춘 기록에도 "skipped"가 남았다 — 멈춘 기록의 skipped는 그리지 않는다
-            (if .rec.post_merge and (.rec.result != "stopped" or .rec.post_merge != "skipped") then @html "post-merge check \(.rec.post_merge | post)" else empty end),
+            # 0.9.6까지는 병합 전에 멈춘 기록에도 "skipped"가 남았다 — 멈춘 기록의 skipped는 그리지 않는다. 걸린 시간은 열에 있으니 결과만
+            (if .rec.post_merge and (.rec.result != "stopped" or .rec.post_merge != "skipped") then @html "post-merge check \(.rec.post_merge | post | gsub(" in [0-9]+s"; ""))" else empty end),
             (if .status == "merged-after-stop" then "merged outside the loop \(.stop_gap | dur) after the stop" else empty end),
             (if .rec.triage then @html "triage \(.rec.triage)" else empty end),
             (if .attempts > 1 then "\(.attempts) attempts" else empty end)] | join(" · ")) + "</div>" else "" end)
-      + "</td><td class=\"nw\">" + (if .wall == null then "—" else (.wall.sec | dur)
+      + "</td>"
+      + (.t as $t | .rec as $r
+         | tcell($t.impl; if $t.impl == null then "" elif $t.est then (if ($r.repairs // 0) > 0 then "excl. repairs" else "" end)
+                          elif $t.repair then "incl. repair \($t.repair | dur)" else "" end)
+         + tcell($t.ci; if $t.ci == -1 then "path excluded" elif $t.ci and $t.est and ($r.repairs // 0) > 0 then "last run only" else "" end)
+         + tcell($t.post; ""))
+      + "<td class=\"nw\">" + (if .wall == null then "—" else (.wall.sec | dur)
           + (if .wall.src == "pr" then "<div class=\"muted small\">PR created→merged</div>"
-             elif .status == "merged-after-stop" then "<div class=\"muted small\">loop, until the stop</div>" else "" end) end) + "</td>"
+             elif .status == "merged-after-stop" then "<div class=\"muted small\">loop, until the stop</div>" else "" end)
+          + (if .t == null or .wall.sec <= 0 then "" else
+               (.t.impl // 0) as $i | ([.t.ci, 0] | max) as $c | (.t.post // 0) as $p | ([.wall.sec, $i + $c + $p] | max) as $den
+               | (.wall.sec - $i - $c - $p) as $o
+               | ([if $i > 0 then "implementation \($i | dur)" else empty end, if $c > 0 then "CI \($c | dur)" else empty end,
+                   if $p > 0 then "post-merge check \($p | dur)" else empty end, if $o > 0 then "other \($o | dur)" else empty end] | join(" · ")) as $tip
+               | "<div class=\"bar\" title=\"\($tip)\">"
+                 + seg($i; "s-impl"; $den) + seg($c; "s-ci"; $den) + seg($p; "s-post"; $den) + "</div>"
+                 + (if $o >= 60 then "<div class=\"muted small\">other \($o | dur)</div>" else "" end) end) end) + "</td>"
+      + "<td class=\"nw\">" + (if .tk == null then "—" else
+          "<span title=\"input \(.tk.input // 0) · cache write \(.tk.cache_write // 0) · cache read \(.tk.cache_read // 0) · output \(.tk.output // 0)\">\(.tk.total | tok)</span>"
+          + "<div class=\"muted small\">out \(.tk.output // 0 | tok)<br>new in \((.tk.input // 0) + (.tk.cache_write // 0) | tok)<br>cached \(.tk.cache_read // 0 | tok)</div>" end) + "</td>"
       + @html "<td class=\"nw\">\(.model)</td>"
-      + "<td class=\"nw\">" + (if .status == "merged-after-stop" or .rec == null and .pr.mergedAt then (.pr.mergedAt | when) elif .rec then (.rec.finished | when) else "—" end) + "</td></tr>") | join("\n"))
-  + "</tbody></table></div><footer>Elapsed is wall-clock time from when the loop created the worktree to when merge and cleanup finished. Tickets with no loop record use PR created→merged time instead. For a ticket merged outside the loop after a stop, it is the loop's time until the stop, and Finished is the merge time.</footer></main></body></html>"
+      + "<td class=\"nw\">" + (if .status == "merged-after-stop" or .rec == null and .pr.mergedAt then (.pr.mergedAt | when) elif .rec then (.rec.finished | when) else "—" end | sub(" "; "<br>")) + "</td></tr>") | join("\n"))
+  + "</tbody></table></div><footer>Elapsed is wall-clock time from when the loop created the worktree to when merge and cleanup finished. The bar under it splits that time by the three columns before it: Implementation runs from the agent's start to the PR, plus the worker's repair rounds; CI runs from the PR to the CI result (after a repair, from when the loop looked again), over every round; Post-merge check is the time its command ran, retry included. The grey rest (\"other\") is worktree setup, noticing the PR, merge, cleanup, port waits and triage. Records from before kit 0.9.8 have no phase times, so they are estimated: Implementation is the PR's creation time minus the start, without repairs; CI is the last run only; Post-merge check is read from the result text. Tokens are the agent's usage from its Claude Code session logs, subagents and triage sessions included: out is output, new in is input not served from the prompt cache (cache writes included), cached is input served from it. Codex workers are not counted yet. Tickets with no loop record use PR created→merged time instead. For a ticket merged outside the loop after a stop, it is the loop's time until the stop, and Finished is the merge time.</footer></main></body></html>"
 JQ
 
 # 리포트를 기본 브라우저로 연다 — 리포트는 사람이 보라고 만든 것이라 경로를 찾아 여는 한 단계를 줄인다. REPORT_OPEN=0이면 끔.
@@ -1819,6 +1942,22 @@ open_report() {
   fi
 }
 
+# 기록에 tokens가 없는 티켓(0.9.7 이하, 또는 기록할 때 세션 기록을 못 찾음)은 리포트를 그릴 때 세션 기록에서 다시 센다(그 기록의 시작~끝
+# 시각). cmux·tmux의 워크트리 자리(WORKTREE_DIR)로 찾으므로 Orca로 돈 지난 티켓은 비어 있다. 기록 파일은 고치지 않는다. Claude Code는
+# 오래된 세션 기록을 지운다(cleanupPeriodDays, 기본 30일) — 그래서 새 티켓은 끝날 때 기록에 남긴다. stdin 기록 배열 → stdout 같은 배열
+report_tokens() {
+  local recs i n since upto t
+  recs="$(cat)"
+  if [[ -n "${WORKTREE_DIR:-}" ]]; then
+    while IFS=$'\t' read -r i n since upto; do
+      t="$(ticket_session_dirs "$n" | session_tokens "$since" "$upto")"
+      [[ -z "$t" ]] || recs="$(jq -c --argjson i "$i" --argjson t "$t" '.[$i].tokens = $t' <<<"$recs")"
+    done < <(jq -r 'to_entries[] | select(.value.tokens == null and (.value.agent // "claude") == "claude")
+                    | [.key, .value.issue, (.value.started // ""), (.value.finished // "")] | @tsv' <<<"$recs")
+  fi
+  printf '%s\n' "$recs"
+}
+
 # --parent 실행이 정상 종료하면 스펙 리포트 HTML을 쓰고 브라우저로 연다. 생성 실패는 루프 결과를 바꾸지 않는다(로그만).
 # 리포트는 커밋하지 않는다 — 사람이 보고 PR로 올린다(루프가 도는 동안 기본 브랜치 직접 커밋 금지).
 write_spec_report() {
@@ -1828,7 +1967,7 @@ write_spec_report() {
     && issues="$(gh api "repos/${OWNER_REPO}/issues/${PARENT}/sub_issues?per_page=100" --paginate \
          --jq '.[] | {number, title, state, url: .html_url, assignees: (.assignees | length)}' | jq -s '.')" \
     && prs="$(gh pr list --state all --limit 300 --json number,title,body,state,url,createdAt,mergedAt,headRefName)" \
-    && recs="$( { [[ -f "$records" ]] && grep '^{' "$records" || true; } | jq -s --argjson spec "$PARENT" 'map(select(.spec == $spec))')" \
+    && recs="$( { [[ -f "$records" ]] && grep '^{' "$records" || true; } | jq -s --argjson spec "$PARENT" 'map(select(.spec == $spec))' | report_tokens)" \
     && mkdir -p "$(dirname "$out")" \
     && jq -rn --argjson spec "$spec" --argjson issues "$issues" --argjson prs "$prs" --argjson recs "$recs" \
          --arg prefix "$BRANCH_PREFIX" --arg now "$(date '+%Y-%m-%d %H:%M')" "$REPORT_JQ" > "$out"; then
@@ -1850,7 +1989,8 @@ run_ticket() {
   POST_MERGE_RESULT=""; POST_MERGE_LOG=""; POST_MERGE_RETRY_LOG=""
   log title "=== #${n} ${title} ==="
   CUR_N="$n"; CUR_TITLE="$title"; CUR_STARTED="$started_at"; CUR_STARTED_ISO="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"; STOP_ISSUE="$n"
-  CUR_PR=""; CUR_MODEL=""; CUR_CI_SEC=""; CUR_PICKUP_SEC=""; CUR_ROUND=0
+  CUR_PR=""; CUR_MODEL=""; CUR_CI_SEC=""; CUR_PICKUP_SEC=""; CUR_ROUND=0; CUR_AGENT_PATHS=""
+  PH_NAME=""; PH_AT="$started_at"; PH_IMPL=0; PH_REPAIR=0; PH_CI=0; PH_POST=0
   STOP_KIND=""; STOP_RECORD=""; TRIAGE_RESULT=""
 
   git -C "$ROOT" fetch -q origin "$BASE_BRANCH"
@@ -1859,9 +1999,11 @@ run_ticket() {
   WT=""; WT_PATH=""; WT_BRANCH=""; HANDLE=""
   backend_worktree_create "${n}" "$(worker_prompt "${n}")"
   wt="$WT"; wt_path="$WT_PATH"; orca_branch="$WT_BRANCH"; handle="$HANDLE"
+  CUR_AGENT_PATHS+="${wt_path}"$'\n'
   backend_set_status "${wt}" in-progress || true
   log step "#${n}: worktree ${wt} (${wt_path}) / terminal ${handle}"
   ensure_agent_started "${n}" "${handle}"
+  phase impl
   CUR_MODEL="$(detect_model "${handle}")"
 
   local pr rc=0 model_now prfile reason
@@ -1870,6 +2012,7 @@ run_ticket() {
   bg_wait wait_for_pr "${n}" "${handle}" "$deadline" > "$prfile" || rc=$?   # 신호에 바로 깨도록(bg_wait)
   pr="$(cat "$prfile")"; rm -f "$prfile"
   if [[ $rc -ne 0 ]]; then
+    phase ""   # 구현은 여기까지 — 무인 수습 시간은 세지 않는다
     log warn "#${n}: worker output tail ---"; terminal_tail "${handle}" | dim_lines || true
     backend_set_status "${wt}" todo "" "루프 중단: PR 없이 멈춤 — 확인 필요" || true
     [[ $rc -ne 2 ]] || die "#${n}: ticket timed out (${TICKET_TIMEOUT_SEC}s)"
@@ -1884,6 +2027,7 @@ run_ticket() {
   created="$(pr_created_epoch "${pr}")"
   if [[ -n "$created" ]]; then pickup=$(( $(date +%s) - created )); [[ $pickup -ge 0 ]] || pickup=0; fi
   CUR_PICKUP_SEC="$pickup"
+  phase "" "$created"   # 구현은 PR이 열린 때까지(GitHub 시각)
   log step "#${n}: PR #${pr} opened${pickup:+ (created $(fmt_epoch "$created"), picked up after ${pickup}s)}"
   progress_sync
   CUR_PR="$pr"; model_now="$(detect_model "${handle}")"; [[ -z "$model_now" ]] || CUR_MODEL="$model_now"
@@ -1891,7 +2035,7 @@ run_ticket() {
 
   # 수리를 다 쓰면 멈추기 전에 무인 수습을 한 번 띄운다(ci_failed) — 수습 세션이 PR 브랜치에 고쳐 push하면 이 고리의 처음(충돌·CI 확인)부터
   # 이어 간다. 그래도 실패하면 수습 횟수를 이미 써서 그대로 멈춘다
-  local round=0 state
+  local round=0 state ci_from="$created"
   while :; do
     state="$(mergeable_state "${pr}")"
     if [[ "$state" == "CONFLICTING" ]]; then
@@ -1901,8 +2045,10 @@ run_ticket() {
         die "${reason}${TRIAGE_NOTE}"
       fi
       round=$((round + 1)); CUR_ROUND=$round; log warn "#${n}: conflict → asking the worker to repair (${round})"
+      phase repair
       repair "${handle}" "PR #${pr} 이 ${BASE_BRANCH}과 충돌한다. \`git fetch origin && git merge origin/${BASE_BRANCH}\`으로 충돌을 해결하고 테스트·lint를 다시 돌린 뒤 같은 브랜치에 push해라. 질문하지 말고 끝까지 해라." "$deadline" "${pr}" \
         || die "#${n}: timed out while repairing the conflict"
+      phase ""
       continue
     fi
     if ! ci_expected "${pr}"; then
@@ -1912,10 +2058,13 @@ run_ticket() {
     fi
     log step "#${n}: waiting for CI (PR #${pr})"
     ci_started="$(date +%s)"
+    phase ci "$ci_from"; ci_from=""   # 첫 회는 PR이 열린 때부터(PR을 알아채기 전에도 CI는 돈다)
     if ci_passed "${pr}"; then
+      phase ""
       ci_sec="$(ci_run_sec "${pr}")"; [[ -n "$ci_sec" ]] || ci_sec=$(( $(date +%s) - ci_started ))
       break
     fi
+    phase ""
     if [[ ${round} -ge $REPAIR_ROUNDS ]]; then
       reason="#${n}: PR #${pr} CI failed (${REPAIR_ROUNDS} repair round(s) used up). See gh pr checks ${pr}."
       STOP_KIND=ci_failed; triage ci_failed "$reason" && continue
