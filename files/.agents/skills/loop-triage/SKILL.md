@@ -31,6 +31,7 @@ disable-model-invocation: true
 | `worker_worktree` | 남아 있는 워커 워크트리(있으면) |
 | `logs.loop`, `logs.loop_from_byte` | 루프 로그와 이 실행이 쓰기 시작한 바이트. 이 실행 부분은 `tail -c +$((loop_from_byte + 1)) <loop>` |
 | `logs.post_merge`, `logs.post_merge_retry`, `post_merge_worktree` | 병합 뒤 검증 로그(첫 실행·재실행)와 검증 워크트리 |
+| `post_merge_window` | 아직 병합 뒤 검증을 통과하지 않은 병합(`POST_MERGE_EVERY`로 묶었을 때). `base`(마지막으로 통과한 커밋), `pending`(병합 순서의 `issue`·`pr`·`commit`), `bisect`(처음 실패하는 병합을 찾은 결과 문장), `first_failing_commit`. 묶지 않았거나 창이 비었으면 null |
 | `commands.*` | 이 저장소의 `POST_MERGE_CMD`, `POST_MERGE_RETRY_CMD`, `WORKTREE_SETUP_CMD` |
 | `rerun` | 루프를 같은 인자로 다시 실행하는 명령 |
 | `verdict_file` | 판정 파일을 쓸 곳 |
@@ -63,7 +64,7 @@ disable-model-invocation: true
 기본 브랜치가 깨진 상태다. 루프는 다음 티켓을 쌓지 않고 기다린다.
 
 1. 실패를 찾는다. 재실행 로그(`logs.post_merge_retry`)가 있으면 그것이 마지막 상태다. 실패한 테스트 파일과 단정, 또는 테스트가 돌기 전에 실패한 단계(설치·환경 점검)를 적어 둔다.
-2. 원인 PR(`pr`)의 diff와 대조한다.
+2. 원인 PR(`pr`)의 diff와 대조한다. `post_merge_window`가 있으면 원인 후보는 `pending`의 PR 전부다. `first_failing_commit`이 있으면 루프가 실패한 테스트만 다시 돌려 찾은 첫 실패 커밋이니 그 PR부터 본다 — 의존성이 바뀐 병합이 끼면 틀릴 수 있어 diff로 확인한다. `bisect`가 "not found"면(창의 시작에서도 실패) 플레이크나 환경을 먼저 의심한다. 수정 PR의 `Refs`에는 원인 티켓의 이슈를 적는다.
    - 원인 PR이 동작을 일부러 바꿨고(이슈의 인수 조건이나 PR 본문이 근거) 테스트가 옛 동작을 기대하면 → 테스트 기대값을 새 동작에 맞춘다.
    - 원인 PR의 코드가 인수 조건과도 어긋나면 → 코드를 고친다.
    - 원인 PR과 무관한 실패(다른 영역, 시간 초과)면 → 그 테스트 파일만 두세 번 다시 돌린다. 매번 통과하면 `flake`.

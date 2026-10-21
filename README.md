@@ -26,7 +26,7 @@ Installs and updates the **ticket loop** in other repositories: an unattended lo
 - The worker bypasses permission prompts. The real guard against a bad merge or force push is GitHub branch protection; the kit's `deny` rules (`.claude/settings.json`, `.codex/rules/ticket-loop.rules`) are a second line.
 - One loop per repository (lock directory under `.git`). GitHub (labels, assignees, PRs) is the only state.
 - Each ticket starts in a fresh worktree with an empty context, so skills, worker rules, and `AGENTS.md`/`CLAUDE.md` changes take effect only after they are merged.
-- The worker does not run heavy suites (integration, E2E). The loop runs `POST_MERGE_CMD` on the default branch after each merge and stops on failure (with `POST_MERGE_RETRY_CMD`, only after one retry also fails).
+- The worker does not run heavy suites (integration, E2E). The loop runs `POST_MERGE_CMD` on the default branch once per `POST_MERGE_EVERY` merges (default 4; 1 means every merge) and when a spec or the run ends and stops on failure (with `POST_MERGE_RETRY_CMD`, only after one retry also fails).
 
 ## Install
 
@@ -36,7 +36,7 @@ From the root of the target repository:
 npx github:iwishash/ticket-loop-kit init
 ```
 
-Pick the backend and install steps with the keyboard (`--yes` skips the questions; `NO_COLOR` disables colors). Pin a version with `npx github:iwishash/ticket-loop-kit#v0.9.8 init`. Without Node:
+Pick the backend and install steps with the keyboard (`--yes` skips the questions; `NO_COLOR` disables colors). Pin a version with `npx github:iwishash/ticket-loop-kit#v0.9.9 init`. Without Node:
 
 ```bash
 bash <(curl -fsSL https://raw.githubusercontent.com/iwishash/ticket-loop-kit/main/install.sh)
@@ -75,6 +75,7 @@ Loop behaviour worth knowing:
   ```
 
   When no failed file is found (the run broke during install or an environment check), the script fails instead of retrying, so a real break is not hidden. `perl` strips the ANSI color codes because macOS `sed` does not understand `\x1b`.
+- `POST_MERGE_EVERY` (default 4) batches the post-merge check. It runs after every fourth merged ticket, and sooner when the ticket's spec is complete or the run has no more tickets, so a three-ticket spec gets one check after its third ticket. `1` checks after every merge (use it when the suite takes a few minutes: batching saves nothing there). `0` checks only when a spec or the run ends. A check on the default branch covers every merge before it, so no merge goes unchecked; what batching gives up is knowing which merge broke the suite. When a batched check fails and its retry fails too, the loop finds the first failing merge: it runs `POST_MERGE_RETRY_CMD` (the failed tests only) at the last passed commit, then bisects the merges since. The result goes into the stop reason and into the stop record as `post_merge_window`, for triage. Without `POST_MERGE_RETRY_CMD` the loop does not bisect, because rerunning the full suite would cost what batching saved. Bisecting runs the retry command at older commits in the same check worktree, so a retry command that relies on installed dependencies should install them first (for example `pnpm install --frozen-lockfile --prefer-offline && bash scripts/post-merge-retry.sh`). Unchecked merges are kept in `.git/ticket-loop-post-merge.json`, so a loop that stops and restarts keeps the batch. The spec report puts the check's time on the ticket after which it ran and marks the others "post-merge check deferred". Background: in rental-portal the integration suite took 47–52 minutes per ticket (9.8 hours for 12 tickets of one spec) and caught no regression in the 34 runs after workers began running the related integration tests before opening their PR.
 
 ## Backends
 
@@ -221,6 +222,7 @@ Also verified: stop reporting (0.8.8) — iwishash/ticket-loop-dummy #3 on cmux,
 
 Not yet verified:
 
+- Batched post-merge checks (`POST_MERGE_EVERY` other than 1) and bisecting a batched failure on a real loop (`tests/smoke.sh` covers them with a real git repository and fake commands).
 - `POST_MERGE_PORT`, `POST_MERGE_RETRY_CMD`, `CI_SKIP_CMD`, `CI_SKIP_REGEX`, and the repair prompt on a real ticket (`POST_MERGE_CMD` ran in the triage runs above; every run had 0 repairs). rental-portal (PR #82) has them configured.
 - The label creation and Orca registration steps of `install.sh` (turned off in testing).
 - `/setup-ticket-loop` beyond one run on boiler-webapp.

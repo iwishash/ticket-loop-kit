@@ -26,7 +26,7 @@ GitHub 이슈 티켓을 워크트리에서 한 건씩 무인으로 구현·검�
 - 워커는 권한 확인을 끄고 돈다. 잘못된 병합이나 강제 push를 막는 진짜 방어선은 GitHub 브랜치 보호다. 키트의 `deny` 규칙(`.claude/settings.json`, `.codex/rules/ticket-loop.rules`)은 둘째 줄이다.
 - 저장소당 루프 하나(`.git` 아래 잠금 디렉터리). GitHub(라벨·담당자·PR)만이 상태다.
 - 티켓마다 새 워크트리와 빈 컨텍스트에서 시작하므로 스킬·워커 규칙·`AGENTS.md`/`CLAUDE.md` 변경은 병합한 뒤에야 적용된다.
-- 무거운 테스트(통합·E2E)는 워커가 돌리지 않는다. 루프가 병합마다 기본 브랜치에서 `POST_MERGE_CMD`를 돌리고 실패하면 멈춘다(`POST_MERGE_RETRY_CMD`가 있으면 한 번 재실행까지 실패했을 때).
+- 무거운 테스트(통합·E2E)는 워커가 돌리지 않는다. 루프가 `POST_MERGE_EVERY`개 병합마다(기본 4, 1이면 병합마다), 그리고 스펙·실행이 끝날 때 기본 브랜치에서 `POST_MERGE_CMD`를 돌리고 실패하면 멈춘다(`POST_MERGE_RETRY_CMD`가 있으면 한 번 재실행까지 실패했을 때).
 
 ## 설치
 
@@ -36,7 +36,7 @@ GitHub 이슈 티켓을 워크트리에서 한 건씩 무인으로 구현·검�
 npx github:iwishash/ticket-loop-kit init
 ```
 
-백엔드와 설치 단계를 키보드로 고른다(`--yes`면 묻지 않고, `NO_COLOR`로 색을 끈다). 버전 고정은 `npx github:iwishash/ticket-loop-kit#v0.9.8 init`. Node 없이:
+백엔드와 설치 단계를 키보드로 고른다(`--yes`면 묻지 않고, `NO_COLOR`로 색을 끈다). 버전 고정은 `npx github:iwishash/ticket-loop-kit#v0.9.9 init`. Node 없이:
 
 ```bash
 bash <(curl -fsSL https://raw.githubusercontent.com/iwishash/ticket-loop-kit/main/install.sh)
@@ -75,6 +75,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/iwishash/ticket-loop-kit/mai
   ```
 
   실패한 파일을 못 찾으면(설치·환경 점검 단계에서 실패) 다시 돌리지 않고 실패로 끝내는 것이 요점이다 — 진짜 깨진 기본 브랜치가 묻히지 않게. 로그에 ANSI 색 코드가 섞여 있고 macOS 기본 `sed`는 `\x1b`를 못 알아들어 `perl`을 쓴다.
+- `POST_MERGE_EVERY`(기본 4)는 병합 뒤 검증을 묶는다. 병합 네 개마다 한 번 돌리고, 티켓의 스펙이 끝나거나 이번 실행에 남은 티켓이 없으면 그 전에도 돌린다 — 티켓 세 개짜리 스펙은 세 번째 티켓 뒤에 한 번 돈다. `1`이면 병합마다 돈다(스위트가 몇 분이면 이쪽 — 묶어도 아끼는 시간이 없다). `0`이면 스펙·실행이 끝날 때만 돈다. 기본 브랜치 끝에서 도는 검증은 그 전의 병합을 모두 덮으므로 검증을 거치지 않는 병합은 없다. 잃는 것은 "어느 병합이 깨뜨렸나"다. 묶음 검증이 재실행까지 실패하면 루프가 처음 실패하는 병합을 찾는다. 마지막으로 통과한 커밋에서 `POST_MERGE_RETRY_CMD`(실패한 테스트만)를 돌려 본 뒤, 그 뒤의 병합들을 이분 탐색한다. 결과는 멈춤 사유와 멈춤 기록의 `post_merge_window`에 실려 무인 수습에 넘어간다. `POST_MERGE_RETRY_CMD`가 없으면 이분 탐색을 하지 않는다 — 전체 스위트로 탐색하면 묶어서 아낀 시간을 도로 쓴다. 이분 탐색은 같은 검증 워크트리에서 지난 커밋으로 재실행 명령을 돌리므로, 설치된 의존성에 기대는 재실행 명령이면 먼저 설치하게 한다(예: `pnpm install --frozen-lockfile --prefer-offline && bash scripts/post-merge-retry.sh`). 아직 검증하지 않은 병합은 `.git/ticket-loop-post-merge.json`에 남아 루프가 멈췄다 다시 실행돼도 묶음이 이어진다. 스펙 리포트는 검증 시간을 그 검증을 돌린 티켓에 넣고, 나머지 티켓에는 "post-merge check deferred"를 적는다. 배경: rental-portal의 통합 테스트는 티켓마다 47~52분(스펙 하나의 12티켓에서 9.8시간)이었고, 워커가 PR 전에 관련 통합 테스트를 돌리기 시작한 뒤 34회 동안 잡은 회귀가 없었다.
 
 ## 백엔드
 
@@ -221,6 +222,7 @@ Slack 설정(컴퓨터마다 한 번):
 
 아직 확인하지 않은 것:
 
+- 실제 루프에서의 묶음 검증(`POST_MERGE_EVERY`가 1이 아닐 때)과 묶음 실패의 이분 탐색(`tests/smoke.sh`가 실제 git 저장소와 가짜 명령으로 다룬다).
 - 실제 티켓에서의 `POST_MERGE_PORT`·`POST_MERGE_RETRY_CMD`·`CI_SKIP_CMD`·`CI_SKIP_REGEX`와 수리 프롬프트(`POST_MERGE_CMD`는 위 수습 실측에서 돌았다. 모든 실측이 수리 0회). rental-portal(PR #82)에 설정돼 있다.
 - `install.sh`의 라벨 생성·Orca 등록 단계(시험에서 껐다).
 - boiler-webapp 1회 이후의 `/setup-ticket-loop`.
