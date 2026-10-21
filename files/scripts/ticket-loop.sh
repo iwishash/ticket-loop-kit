@@ -1371,6 +1371,7 @@ run_post_merge() {
   local n="$1" tag="${2:-}" wt logfile retry_log started first_sec retry_sec f
   wt="$(post_merge_worktree_path)"
   POST_MERGE_WT="$wt"
+  POST_MERGE_RESULT="did not start"   # 검증 명령을 돌리기 전에 끝나면(워크트리·포트) 이 값이 남는다
   if [[ ! -d "$wt/.git" && ! -f "$wt/.git" ]]; then
     mkdir -p "$(dirname "$wt")"
     git -C "$ROOT" worktree add -q --detach "$wt" "origin/${BASE_BRANCH}" || { log warn "#${n}: failed to create the post-merge check worktree (${wt})"; return 1; }
@@ -1661,17 +1662,42 @@ close_spec_if_done() {
   fi
 }
 
+# 스펙의 티켓이 지나간 루프 로그들 — 루프가 멈췄다가 다른 날 다시 시작하면 로그 파일(loop-MMDD.log)이 여럿이 된다. 0.9.6까지 회고
+# 안내는 이번 실행의 로그만 적어, 이어 간 스펙의 회고가 끊긴 지점부터만 읽었다. 기록의 log(0.9.7부터)를 모으고, 그 필드가 없는 지난
+# 기록은 로그 디렉터리의 loop-*.log에서 그 티켓의 머리줄(=== #N)을 찾는다. 이번 실행의 로그는 늘 넣는다. 지워진 로그는 뺀다.
+# 저장소 루트 기준 경로를 기록 순서대로 한 줄에 하나씩 쓴다
+spec_logs() {
+  local spec="$1" cur n f p
+  [[ "$LOG_FILE" != "/dev/null" ]] || return 0
+  cur="$LOG_FILE"; [[ -z "${ROOT:-}" ]] || cur="${cur#"$ROOT"/}"
+  {
+    if [[ -f "${RECORDS_FILE:-}" ]]; then
+      while IFS=$'\t' read -r n f; do
+        if [[ -n "$f" ]]; then printf '%s\n' "$f"
+        else grep -lF "] === #${n} " "$(dirname "$LOG_FILE")"/loop-*.log 2>/dev/null || true; fi
+      done < <(jq -rR --argjson spec "$spec" 'fromjson? | select(.spec == $spec) | "\(.issue)\t\(.log // "")"' "$RECORDS_FILE" 2>/dev/null || true)
+    fi
+    printf '%s\n' "$LOG_FILE"
+  } | while IFS= read -r p; do
+    [[ -z "${ROOT:-}" ]] || p="${p#"$ROOT"/}"
+    if [[ "$p" == "$cur" || -f "$p" || -f "${ROOT:-.}/$p" ]]; then printf '%s\n' "$p"; fi
+  done | awk '!seen[$0]++'
+}
+
 # 끝난 스펙이 있으면 회고를 권한다 — 안내일 뿐, 아무것도 실행하지 않는다. /retro 는 사람이 후보를 보고 고르는 스킬이라 무인 단계로 두지 않는다
 suggest_retro() {
-  local spec report skill="${SKILL_PREFIX:-/}retro" log_src
+  local spec report skill="${SKILL_PREFIX:-/}retro" logs
   [[ -n "${CLOSED_SPECS// /}" ]] || return 0
   [[ -d "${ROOT:-.}/.agents/skills/retro" || -d "${ROOT:-.}/.claude/skills/retro" ]] || skill="${skill} (not in this repository yet — install it with the kit's --workflow-skills)"
-  log_src="$LOG_FILE"; [[ "$LOG_FILE" != "/dev/null" ]] || log_src="(none — logging is off)"
   for spec in $CLOSED_SPECS; do
     report="$REPORT_DIR/spec-${spec}.html"
     if [[ -f "$report" || -f "${ROOT:-.}/$report" ]]; then report="report ${report}"
     else report="the report can be generated with ticket-loop.sh --parent ${spec}"; fi
-    log "spec #${spec} complete. If you like, review this batch with ${skill} — material to read: log ${log_src}, ${report}, and the 'remaining decisions' / 'not verified' sections of the merged PR bodies. If you end up changing the environment (skills, worker-rules.md, automated checks), a PR is recommended"
+    logs="$(spec_logs "$spec" | awk 'NR > 1 { printf ", " } { printf "%s", $0 }')"
+    if [[ -z "$logs" ]]; then logs="log (none — logging is off)"
+    elif [[ "$logs" == *", "* ]]; then logs="logs ${logs}"
+    else logs="log ${logs}"; fi
+    log "spec #${spec} complete. If you like, review this batch with ${skill} — material to read: ${logs}, ${report}, and the 'remaining decisions' / 'not verified' sections of the merged PR bodies. If you end up changing the environment (skills, worker-rules.md, automated checks), a PR is recommended"
   done
 }
 
@@ -1689,9 +1715,9 @@ record_ticket() {
     --arg pr "$CUR_PR" --arg pickup "${CUR_PICKUP_SEC:-}" --arg started "$CUR_STARTED_ISO" --arg finished "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" \
     --argjson wall "$(( $(date +%s) - CUR_STARTED ))" --arg ci "$CUR_CI_SEC" --argjson repairs "$CUR_ROUND" \
     --argjson idle "$(idle_fp_count)" --arg post "${POST_MERGE_RESULT:-}" --arg model "$CUR_MODEL" --arg agent "$AGENT" \
-    --arg triage "${TRIAGE_RESULT:-}" '
+    --arg triage "${TRIAGE_RESULT:-}" --arg log "${LOG_FILE#"$ROOT"/}" '
     {spec: $spec, issue: $issue, title: $title, result: $result, started: $started, finished: $finished, wall_sec: $wall,
-     repairs: $repairs, idle_false_positives: $idle, agent: $agent}
+     repairs: $repairs, idle_false_positives: $idle, agent: $agent, log: $log}
     + (if $reason != "" then {reason: $reason} else {} end)
     + (if $triage != "" then {triage: $triage} else {} end)
     + (if $pr != "" then {pr: ($pr | tonumber)} else {} end)
@@ -1715,7 +1741,7 @@ def when: epoch | if . == null then "—" else strflocaltime("%Y-%m-%d %H:%M") e
 def order: (.title | capture("^T(?<n>[0-9]+)") | .n | tonumber) // 999999;
 # jq(Oniguruma Perl 문법)의 ^는 줄 머리가 아니라 문자열 머리다 — 앞에 \n을 붙여 줄 머리를 \n으로 잡는다
 def checks: ("\n" + .) | {checked: ([scan("\n[ \t]*[-*] \\[x\\]"; "i")] | length), total: ([scan("\n[ \t]*[-*] \\[[ x]\\]"; "i")] | length)};
-def badge: {merged: ["Merged", "ok"], "closed-without-pr": ["Closed without PR", "muted"], "pr-open": ["PR open", "warn"],
+def badge: {merged: ["Merged", "ok"], "merged-after-stop": ["Merged after stop", "warn"], "closed-without-pr": ["Closed without PR", "muted"], "pr-open": ["PR open", "warn"],
             "in-progress": ["In progress", "warn"], stopped: ["Stopped", "bad"], pending: ["Not started", "muted"]}[.];
 # 0.8.6 이하 기록의 한국어 post_merge 값을 표시용 영어로. 그 밖(이미 영어)은 그대로.
 def post: if . == "건너뜀" then "skipped"
@@ -1726,14 +1752,16 @@ def post: if . == "건너뜀" then "skipped"
   | ($prefix + ($i.number | tostring)) as $b
   | ($prs | map(select(.headRefName == $b or (.headRefName | startswith($b + "-"))))
      | (map(select(.state == "MERGED")) + .) | (map(select(.number == $r.pr)) + .) | first) as $pr
-  | {issue: $i, pr: $pr, rec: $r, attempts: ($rs | length),
-     status: (if $pr.state == "MERGED" then "merged" elif $i.state == "closed" then "closed-without-pr"
+  # 루프가 멈춘 뒤 루프 밖(사람)에서 병합된 티켓 — 마지막 기록이 stopped이고 PR이 그 뒤에 병합됐다. 루프가 병합하고 나서 멈췄으면 병합이 먼저다
+  | (if $pr.state == "MERGED" and $r.result == "stopped" then (($pr.mergedAt | epoch) // 0) - (($r.finished | epoch) // 0) else 0 end) as $gap
+  | {issue: $i, pr: $pr, rec: $r, attempts: ($rs | length), stop_gap: $gap,
+     status: (if $pr.state == "MERGED" then (if $gap > 0 then "merged-after-stop" else "merged" end) elif $i.state == "closed" then "closed-without-pr"
               elif $pr.state == "OPEN" then "pr-open" elif $r.result == "stopped" then "stopped"
               elif ($i.assignees // 0) > 0 then "in-progress" else "pending" end),
      wall: (if $r.wall_sec != null then {sec: $r.wall_sec, src: "loop"}
             elif $pr.mergedAt != null then {sec: (($pr.mergedAt | epoch) - ($pr.createdAt | epoch)), src: "pr"} else null end),
      model: ($r.model // "not recorded")})) as $rows
-| ($rows | map(select(.status == "merged")) | length) as $merged
+| ($rows | map(select(.status == "merged" or .status == "merged-after-stop")) | length) as $merged
 | ($rows | map(select(.issue.state == "closed")) | length) as $closed
 | ($rows | map(select(.wall.src == "loop") | .wall.sec) | add // 0) as $total
 | ($rows | map(.model) | map(select(. != "not recorded")) | unique | join(", ")) as $models
@@ -1763,17 +1791,21 @@ def post: if . == "건너뜀" then "skipped"
       + (if .pr then @html "<div><a href=\"\(.pr.url)\">PR #\(.pr.number)</a> \(.pr.title)</div>"
                       + ((.pr.body // "" | checks) | if .total > 0 then "<div>Acceptance criteria \(.checked)/\(.total)</div>" else "" end)
          elif .rec == null then "<span class=\"muted\">no record</span>" else "" end)
-      + (if .rec.result == "stopped" and .status != "merged" then @html "<div class=\"reason\">Stop reason: \(.rec.reason // "—")</div>" else "" end)
+      + (if .rec.result == "stopped" then @html "<div class=\"reason\">Stop reason: \(.rec.reason // "—")</div>" else "" end)
       + (if .rec then "<div class=\"bits\">" + ([
             (if .rec.ci_sec == null then empty elif .rec.ci_sec < 0 then "no CI (path excluded from CI)" else "CI \(.rec.ci_sec | dur)" end),
             "\(.rec.repairs // 0) repair\(if (.rec.repairs // 0) == 1 then "" else "s" end)",
-            (if .rec.post_merge then @html "post-merge check \(.rec.post_merge | post)" else empty end),
+            # 0.9.6까지는 병합 전에 멈춘 기록에도 "skipped"가 남았다 — 멈춘 기록의 skipped는 그리지 않는다
+            (if .rec.post_merge and (.rec.result != "stopped" or .rec.post_merge != "skipped") then @html "post-merge check \(.rec.post_merge | post)" else empty end),
+            (if .status == "merged-after-stop" then "merged outside the loop \(.stop_gap | dur) after the stop" else empty end),
             (if .rec.triage then @html "triage \(.rec.triage)" else empty end),
             (if .attempts > 1 then "\(.attempts) attempts" else empty end)] | join(" · ")) + "</div>" else "" end)
-      + "</td><td class=\"nw\">" + (if .wall == null then "—" else (.wall.sec | dur) + (if .wall.src == "pr" then "<div class=\"muted small\">PR created→merged</div>" else "" end) end) + "</td>"
+      + "</td><td class=\"nw\">" + (if .wall == null then "—" else (.wall.sec | dur)
+          + (if .wall.src == "pr" then "<div class=\"muted small\">PR created→merged</div>"
+             elif .status == "merged-after-stop" then "<div class=\"muted small\">loop, until the stop</div>" else "" end) end) + "</td>"
       + @html "<td class=\"nw\">\(.model)</td>"
-      + "<td class=\"nw\">" + (if .rec then (.rec.finished | when) elif .pr.mergedAt then (.pr.mergedAt | when) else "—" end) + "</td></tr>") | join("\n"))
-  + "</tbody></table></div><footer>Elapsed is wall-clock time from when the loop created the worktree to when merge and cleanup finished. Tickets with no loop record use PR created→merged time instead.</footer></main></body></html>"
+      + "<td class=\"nw\">" + (if .status == "merged-after-stop" or .rec == null and .pr.mergedAt then (.pr.mergedAt | when) elif .rec then (.rec.finished | when) else "—" end) + "</td></tr>") | join("\n"))
+  + "</tbody></table></div><footer>Elapsed is wall-clock time from when the loop created the worktree to when merge and cleanup finished. Tickets with no loop record use PR created→merged time instead. For a ticket merged outside the loop after a stop, it is the loop's time until the stop, and Finished is the merge time.</footer></main></body></html>"
 JQ
 
 # 리포트를 기본 브라우저로 연다 — 리포트는 사람이 보라고 만든 것이라 경로를 찾아 여는 한 단계를 줄인다. REPORT_OPEN=0이면 끔.
@@ -1814,7 +1846,8 @@ run_ticket() {
   local deadline=$(( $(date +%s) + TICKET_TIMEOUT_SEC )) started_at ci_sec=0 ci_started
   started_at="$(date +%s)"
   IDLE_FP_FILE="$(mktemp "${TMPDIR:-/tmp}/ticket-loop-idle-${n}.XXXXXX")"   # idle 오판 한 번에 한 줄(idle_fp_count)
-  POST_MERGE_RESULT="skipped"; POST_MERGE_LOG=""; POST_MERGE_RETRY_LOG=""
+  # 병합 뒤 검증 결과는 병합한 뒤에야 정한다 — 0.9.6까지는 "skipped"로 시작해, 병합 전에 멈춘 티켓의 기록이 "검증을 건너뜀"으로 남았다
+  POST_MERGE_RESULT=""; POST_MERGE_LOG=""; POST_MERGE_RETRY_LOG=""
   log title "=== #${n} ${title} ==="
   CUR_N="$n"; CUR_TITLE="$title"; CUR_STARTED="$started_at"; CUR_STARTED_ISO="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"; STOP_ISSUE="$n"
   CUR_PR=""; CUR_MODEL=""; CUR_CI_SEC=""; CUR_PICKUP_SEC=""; CUR_ROUND=0
@@ -1923,6 +1956,8 @@ run_ticket() {
   local post_rc=0
   if [[ $POST_MERGE -eq 1 && $ci_sec -ge 0 ]]; then
     run_post_merge "${n}" || post_rc=$?
+  else
+    POST_MERGE_RESULT="skipped"
   fi
 
   # 이미 병합됐다 — 조회가 실패해도 멈추지 않고 브랜치 삭제만 건너뛴다

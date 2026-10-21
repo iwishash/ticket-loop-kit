@@ -442,7 +442,8 @@ SH
 chmod +x "$S/gh"
 sed -n '/^close_spec_if_done() {/,/^}/p' "$KIT/files/scripts/ticket-loop.sh" > "$S/fn.sh"
 sed -n '/^suggest_retro() {/,/^}/p' "$KIT/files/scripts/ticket-loop.sh" >> "$S/fn.sh"
-grep -q 'gh issue close' "$S/fn.sh" && grep -q '/retro' "$S/fn.sh" || fail "close_spec_if_done·suggest_retro 를 찾지 못함"
+sed -n '/^spec_logs() {/,/^}/p' "$KIT/files/scripts/ticket-loop.sh" >> "$S/fn.sh"
+grep -q 'gh issue close' "$S/fn.sh" && grep -q '/retro' "$S/fn.sh" && grep -q '^spec_logs() {' "$S/fn.sh" || fail "close_spec_if_done·suggest_retro·spec_logs 를 찾지 못함"
 spec_case() {  # $1 하위 이슈 JSON, $2 기대(closed|kept)
   local out
   printf '%s' "$1" > "$S/subs.json"; : > "$S/gh.log"
@@ -472,7 +473,21 @@ grep -q '/retro (not in this repository yet' <<<"$out" || fail "retro 스킬이 
 out="$(retro_case "" "reports" "$S")" || fail "suggest_retro(빈) 실패"
 [[ -z "$out" ]] || fail "끝난 스펙이 없는데 회고 안내가 나옴: $out"
 grep -c -E '^suggest_retro$|; suggest_retro; ' "$KIT/files/scripts/ticket-loop.sh" | grep -qx 2 || fail "suggest_retro 호출이 두 곳(티켓 없음·정상 종료)이 아니다"
-echo "ok  회고 안내"
+# 멈췄다가 다른 날 이어 간 스펙: 그 스펙 기록이 지나간 로그를 모두 적는다 — 기록의 log(0.9.7부터), log 없는 지난 기록은 loop-*.log 의
+# 머리줄(=== #N)로 찾고, 지워진 로그와 다른 스펙의 로그는 빼고, 이번 실행의 로그는 늘 넣는다. 0.9.6까지는 이번 실행의 로그만 적었다
+mkdir -p "$S/.ticket-loop"
+printf '[2026-12-30 21:07:40] === #41 T01: 하나 ===\n' > "$S/.ticket-loop/loop-1230.log"
+printf '[2026-12-31 09:00:00] === #39 다른 스펙 ===\n' > "$S/.ticket-loop/loop-1231.log"
+printf 'x\n' > "$S/.ticket-loop/loop-1229.log"
+printf '%s\n' '{"spec":40,"issue":41,"result":"merged"}' 'not json' "{\"spec\":40,\"issue\":42,\"result\":\"stopped\",\"log\":\"$S/.ticket-loop/loop-1229.log\"}" \
+  '{"spec":39,"issue":39,"result":"merged","log":".ticket-loop/loop-1231.log"}' '{"spec":40,"issue":43,"result":"merged","log":".ticket-loop/loop-gone.log"}' \
+  '{"spec":40,"issue":44,"result":"merged","log":".ticket-loop/loop-1229.log"}' > "$S/recs.jsonl"   # 41 은 log 없는 지난 기록(머리줄로 loop-1230), 42·44 는 절대·상대 경로가 같은 파일
+out="$(cd "$S" && CLOSED_SPECS=" 40" REPORT_DIR=reports ROOT="$S" LOG_FILE=".ticket-loop/loop-0101.log" RECORDS_FILE="$S/recs.jsonl" bash -c 'set -euo pipefail; log() { echo "$*"; }; source fn.sh; suggest_retro')" || fail "suggest_retro(여러 로그) 실패"
+grep -qF 'material to read: logs .ticket-loop/loop-1230.log, .ticket-loop/loop-1229.log, .ticket-loop/loop-0101.log, report reports/spec-40.html' <<<"$out" \
+  || fail "이어 간 스펙의 회고 안내가 지난 실행의 로그를 다 적지 않음: $out"
+out="$(cd "$S" && CLOSED_SPECS=" 40" REPORT_DIR=reports ROOT="$S" LOG_FILE=/dev/null RECORDS_FILE="$S/recs.jsonl" bash -c 'set -euo pipefail; log() { echo "$*"; }; source fn.sh; suggest_retro')" || fail "suggest_retro(로그 끔) 실패"
+grep -qF 'material to read: log (none — logging is off), report' <<<"$out" || fail "로그를 끈 실행의 회고 안내가 다름: $out"
+echo "ok  회고 안내(이어 간 스펙은 지난 실행의 로그까지)"
 
 # 리포트 자동 열기 — 가짜 open·xdg-open으로 세 경우를 본다: REPORT_OPEN=0 → 안 연다, SSH 세션 → 안 연다, 켬 → 연다
 O="$T/open"; mkdir -p "$O"
@@ -594,6 +609,13 @@ out="$(postmerge_case "touch '$P/busy'; exit 1" '.ticket-loop/loop-0101.log' fai
 grep -q '^POST_MERGE_RETRY_LOG=$' <<<"$out" || fail "재실행을 못 돌렸으면 POST_MERGE_RETRY_LOG 는 비어야 한다(die 가 전 문구를 쓴다): $out"
 rm -f "$P/busy"
 grep -c '^  wait_post_merge_port "$n" || return 1$' "$KIT/files/scripts/ticket-loop.sh" | grep -qx 2 || fail "포트 대기 함수를 첫 실행·재실행 두 곳에서 부르지 않는다"
+# 검증 명령을 돌리기 전에 끝나면(포트가 끝내 안 빔) 결과는 skipped 가 아니라 did not start
+out="$(postmerge_case 'echo should-not-run' '.ticket-loop/loop-0101.log' fail '' "POST_MERGE_PORT=3999; port_in_use() { true; }; POST_MERGE_LOG=''; POST_MERGE_RETRY_LOG=''")" || fail "첫 실행 전 포트가 안 비는 경우 1 이 아님: $out"
+grep -q '^POST_MERGE_RESULT=did not start$' <<<"$out" || fail "검증 명령 전에 끝났는데 결과가 did not start 가 아님: $out"
+# 병합 전에 멈춘 티켓의 기록에 post_merge=skipped 가 남지 않게: 티켓 시작 때는 비우고, 병합 뒤 검증을 하지 않기로 할 때만 skipped(0.9.6까지의 버그)
+grep -qxF '  POST_MERGE_RESULT=""; POST_MERGE_LOG=""; POST_MERGE_RETRY_LOG=""' "$KIT/files/scripts/ticket-loop.sh" && ! grep -q 'POST_MERGE_RESULT="skipped"; ' "$KIT/files/scripts/ticket-loop.sh" \
+  && sed -n '/^run_ticket() {/,/^}/p' "$KIT/files/scripts/ticket-loop.sh" | grep -A3 'run_post_merge "${n}" || post_rc=$?' | grep -qxF '    POST_MERGE_RESULT="skipped"' \
+  || fail "POST_MERGE_RESULT 를 티켓 시작 때 skipped 로 채운다(병합 전 멈춘 기록이 '검증 건너뜀'으로 남음)"
 grep -qF 'first run ${POST_MERGE_LOG}, retry ${POST_MERGE_RETRY_LOG}' "$KIT/files/scripts/ticket-loop.sh" && grep -q 'If it looks like a flake, just rerun; otherwise rerun after a fix PR' "$KIT/files/scripts/ticket-loop.sh" \
   || fail "재실행까지 실패한 die 줄에 두 로그 경로·문구가 없다"
 grep -qF '${POST_MERGE_RETRY_CMD:+ (retry once on failure: ${POST_MERGE_RETRY_CMD})}' "$KIT/files/scripts/ticket-loop.sh" || fail "시작 줄에 재실행 설정을 보이지 않는다"
@@ -1280,12 +1302,14 @@ rec_case() {  # $1 CUR_PICKUP_SEC → 기록 한 줄
     set -euo pipefail
     spec_of_ticket() { echo 40; }; log() { :; }
     source rec.sh
-    LOG_FILE=/x/loop.log; RECORDS_FILE="$PWD/rec.jsonl"; : > "$RECORDS_FILE"
+    ROOT=/x; LOG_FILE=/x/.ticket-loop/loop.log; RECORDS_FILE="$PWD/rec.jsonl"; : > "$RECORDS_FILE"
     CUR_N=7; CUR_TITLE=t; CUR_PR=77; CUR_STARTED_ISO=s; CUR_STARTED=$(date +%s); CUR_CI_SEC=246; CUR_ROUND=0; CUR_MODEL=""; AGENT=claude; CUR_PICKUP_SEC="$P"
     record_ticket merged; cat "$RECORDS_FILE"')
 }
 [[ "$(rec_case 638 | jq -c '[.pr_pickup_sec, .ci_sec]')" == "[638,246]" ]] || fail "기록에 pr_pickup_sec 가 없음: $(rec_case 638)"
 [[ "$(rec_case "" | jq 'has("pr_pickup_sec")')" == false ]] || fail "PR 을 못 찾은 기록에 pr_pickup_sec 가 있음"
+[[ "$(rec_case "" | jq -r .log)" == .ticket-loop/loop.log ]] || fail "기록에 이 실행의 로그(저장소 루트 기준)가 없음: $(rec_case "")"
+[[ "$(rec_case "" | jq 'has("post_merge")')" == false ]] || fail "병합 뒤 검증을 정하지 않은 기록에 post_merge 가 있음"
 grep -q 'summary: wall-clock .*PR #${pr}${CUR_PICKUP_SEC:+ (picked up after ${CUR_PICKUP_SEC}s)}' "$KIT/files/scripts/ticket-loop.sh" || fail "요약 줄에 PR 을 알아채기까지가 없음"
 echo "ok  PR 을 알아채기까지(요약·기록)"
 
@@ -1308,24 +1332,40 @@ jq -rn --arg prefix issue- --arg now "2026-10-12 09:00" \
                      {"number":42,"title":"T02: 둘","state":"open","url":"https://x/42","assignees":1},
                      {"number":43,"title":"T03: 셋","state":"closed","url":"https://x/43","assignees":0},
                      {"number":44,"title":"T04: 넷","state":"closed","url":"https://x/44","assignees":0},
-                     {"number":4,"title":"T05: 다섯","state":"open","url":"https://x/4","assignees":0}]' \
+                     {"number":4,"title":"T05: 다섯","state":"open","url":"https://x/4","assignees":0},
+                     {"number":45,"title":"T06: 여섯","state":"closed","url":"https://x/45","assignees":0},
+                     {"number":46,"title":"T07: 일곱","state":"closed","url":"https://x/46","assignees":0}]' \
   --argjson prs '[{"number":50,"title":"T01 PR","body":"- [x] a\n- [ ] b","state":"MERGED","url":"https://x/p50","createdAt":"2026-10-12T00:00:00Z","mergedAt":"2026-10-12T00:30:00Z","headRefName":"issue-41-one"},
                   {"number":51,"title":"T03 PR","body":"","state":"MERGED","url":"https://x/p51","createdAt":"2026-10-11T00:00:00Z","mergedAt":"2026-10-11T01:00:00Z","headRefName":"issue-43-three"},
-                  {"number":52,"title":"T04 PR","body":"","state":"MERGED","url":"https://x/p52","createdAt":"2026-10-11T02:00:00Z","mergedAt":"2026-10-11T03:00:00Z","headRefName":"issue-44"}]' \
+                  {"number":52,"title":"T04 PR","body":"","state":"MERGED","url":"https://x/p52","createdAt":"2026-10-11T02:00:00Z","mergedAt":"2026-10-11T03:00:00Z","headRefName":"issue-44"},
+                  {"number":53,"title":"T06 PR","body":"","state":"MERGED","url":"https://x/p53","createdAt":"2026-10-12T01:50:00Z","mergedAt":"2026-10-12T03:30:00Z","headRefName":"issue-45-six"},
+                  {"number":54,"title":"T07 PR","body":"","state":"MERGED","url":"https://x/p54","createdAt":"2026-10-12T04:00:00Z","mergedAt":"2026-10-12T04:10:00Z","headRefName":"issue-46-seven"}]' \
   --argjson recs '[{"spec":40,"issue":41,"title":"T01: 하나","result":"merged","started":"2026-10-12T00:00:00Z","finished":"2026-10-12T00:31:00Z","wall_sec":1860,"repairs":1,"idle_false_positives":0,"agent":"claude","pr":50,"ci_sec":200,"post_merge":"통과 90초","model":"Opus 5.5"},
                    {"spec":40,"issue":42,"title":"T02: 둘","result":"stopped","reason":"워커가 PR 없이 멈췄습니다","started":"2026-10-12T01:00:00Z","finished":"2026-10-12T01:10:00Z","wall_sec":600,"repairs":0,"idle_false_positives":2,"agent":"claude"},
                    {"spec":40,"issue":43,"title":"T03: 셋","result":"merged","started":"2026-10-11T00:00:00Z","finished":"2026-10-11T01:01:00Z","wall_sec":3660,"repairs":0,"idle_false_positives":0,"agent":"claude","pr":51,"ci_sec":100,"post_merge":"failed in 12s","model":"Opus 5.5"},
-                   {"spec":40,"issue":44,"title":"T04: 넷","result":"merged","started":"2026-10-11T02:00:00Z","finished":"2026-10-11T03:01:00Z","wall_sec":3660,"repairs":0,"idle_false_positives":0,"agent":"claude","pr":52,"ci_sec":100,"post_merge":"passed on retry in 300s (first run failed in 2640s)","model":"Opus 5.5","triage":"resumed (project, fix PR #131 merged): 기대값 <열> 맞춤"}]' \
+                   {"spec":40,"issue":44,"title":"T04: 넷","result":"merged","started":"2026-10-11T02:00:00Z","finished":"2026-10-11T03:01:00Z","wall_sec":3660,"repairs":0,"idle_false_positives":0,"agent":"claude","pr":52,"ci_sec":100,"post_merge":"passed on retry in 300s (first run failed in 2640s)","model":"Opus 5.5","triage":"resumed (project, fix PR #131 merged): 기대값 <열> 맞춤"},
+                   {"spec":40,"issue":45,"title":"T06: 여섯","result":"stopped","reason":"수리 뒤 새 커밋 없음","started":"2026-10-12T01:00:00Z","finished":"2026-10-12T02:00:00Z","wall_sec":3600,"repairs":1,"idle_false_positives":0,"agent":"claude","pr":53,"post_merge":"skipped","model":"Opus 5.5"},
+                   {"spec":40,"issue":46,"title":"T07: 일곱","result":"stopped","reason":"정리 중 예기치 않은 종료","started":"2026-10-12T03:50:00Z","finished":"2026-10-12T04:20:00Z","wall_sec":1800,"repairs":0,"idle_false_positives":0,"agent":"claude","pr":54,"ci_sec":60,"post_merge":"passed in 30s","model":"Opus 5.5"}]' \
   "$REPORT_JQ" > "$T/report.html" || fail "스펙 리포트 jq 실패"
 for want in '<!doctype html>' '<html lang="en">' 'PR #50' 'Acceptance criteria 1/2' '>Merged<' '>Stopped<' 'Stop reason: 워커가 PR 없이 멈췄습니다' 'Opus 5.5' 'PR created→merged' 'not recorded' '1 repair ·' 'post-merge check passed in 90s' 'post-merge check failed in 12s' 'post-merge check passed on retry in 300s (first run failed in 2640s)' 'triage resumed (project, fix PR #131 merged): 기대값 &lt;열&gt; 맞춤' 'T01: 하나'; do
   grep -qF "$want" "$T/report.html" || fail "스펙 리포트에 '$want' 없음"
 done
 # head 가 정확히 issue-44 인 PR #52 는 T04 의 PR 이고(Merged 3건), 이슈 4 에는 붙지 않는다(기록도 PR 도 없는 이슈 4 는 Not started)
 [[ "$(grep -o 'PR #52' "$T/report.html" | wc -l | tr -d ' ')" == "1" ]] || fail "스펙 리포트: head 가 issue-44 인 PR #52 가 한 번 나와야 함"
-[[ "$(grep -o 'badge ok">Merged<' "$T/report.html" | wc -l | tr -d ' ')" == "3" ]] || fail "스펙 리포트: Merged 배지가 3건(41·43·44)이어야 함"
-grep -qF '<div class="v">3</div><div class="l">Merged</div>' "$T/report.html" || fail "스펙 리포트: KPI Merged 가 3 이어야 함"
+[[ "$(grep -o 'badge ok">Merged<' "$T/report.html" | wc -l | tr -d ' ')" == "4" ]] || fail "스펙 리포트: Merged 배지가 4건(41·43·44·46)이어야 함"
+grep -qF '<div class="v">5</div><div class="l">Merged</div>' "$T/report.html" || fail "스펙 리포트: KPI Merged 가 5(멈춘 뒤 병합 포함)여야 함"
+# 멈춘 뒤 루프 밖에서 병합된 티켓(#45): 배지·멈춘 사유·멈춘 뒤 병합까지 걸린 시간, 경과는 멈출 때까지라고 밝히고, 마친 시각은 병합 시각.
+# 0.9.6까지 멈춘 기록에 남던 post_merge "skipped"는 그리지 않는다. 루프가 병합하고 나서 멈춘 티켓(#46)은 Merged 에 멈춘 사유를 단다
+row45="$(grep -F 'https://x/45"' "$T/report.html")"; row46="$(grep -F 'https://x/46"' "$T/report.html")"
+for want in 'badge warn">Merged after stop<' 'Stop reason: 수리 뒤 새 커밋 없음' '1 repair · merged outside the loop 1h 30m after the stop' '1h 0m<div class="muted small">loop, until the stop</div>'; do
+  grep -qF "$want" <<<"$row45" || fail "스펙 리포트: 멈춘 뒤 병합된 행에 '$want' 없음: $row45"
+done
+! grep -q 'post-merge check' <<<"$row45" || fail "스펙 리포트: 병합 전에 멈춘 기록의 post_merge skipped 를 그림: $row45"
+grep -qF "$(jq -rn '"2026-10-12T03:30:00Z" | fromdate | strflocaltime("%Y-%m-%d %H:%M")')" <<<"$row45" || fail "스펙 리포트: 멈춘 뒤 병합된 행의 마친 시각이 병합 시각이 아님: $row45"
+grep -qF 'badge ok">Merged<' <<<"$row46" && grep -qF 'Stop reason: 정리 중 예기치 않은 종료' <<<"$row46" && grep -qF 'post-merge check passed in 30s' <<<"$row46" && ! grep -q 'after the stop' <<<"$row46" \
+  || fail "스펙 리포트: 루프가 병합한 뒤 멈춘 행이 다름: $row46"
 [[ "$(grep -o 'badge muted">Not started<' "$T/report.html" | wc -l | tr -d ' ')" == "1" ]] || fail "스펙 리포트: 이슈 4 가 Not started 여야 함(issue-44 PR 이 #4 에 붙음?)"
-echo "ok  스펙 리포트 렌더(head 가 issue-N 그대로인 PR 포함)"
+echo "ok  스펙 리포트 렌더(head 가 issue-N 그대로인 PR, 멈춘 뒤 병합된 티켓 포함)"
 
 # npx 껍질: 새 저장소에 --yes 로 설치하면 install.sh 결과에 더해 loop.env(BACKEND 줄)와 kit.json(커밋·ref)이 생긴다.
 # 두 번째 실행은 loop.env 를 건드리지 않고, cmux 는 아직 거절한다
