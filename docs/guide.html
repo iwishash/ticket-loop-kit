@@ -1510,8 +1510,8 @@ set -euo pipefail
 #   BASE_BRANCH         기준 브랜치 (기본: 저장소 기본 브랜치)
 #   ORDER_REGEX         제목에서 순번을 뽑는 정규식, 이름 있는 그룹 n (기본 ^T(?&lt;n&gt;[0-9]+))
 #   WORKER_RULES_FILE   워커가 추가로 따를 규칙 파일 (기본 .ticket-loop/worker-rules.md)
-#   AGENT               claude | codex (기본 claude). Orca가 띄울 에이전트 ID이자 기록의 agent 필드. 아래 네 값의 기본을 정하는
-#                       프리셋이다(아래 "에이전트 프리셋" 절). 다른 값이면 네 값을 직접 적어야 한다
+#   AGENT               claude | codex (기본 claude). Orca가 띄울 에이전트 ID이자 기록의 agent 필드. 기동 명령·배너·스킬 접두사·모델 정규식·
+#                       화면 분류 정규식 둘의 기본을 정하는 프리셋이다(아래 "에이전트 프리셋" 절). 다른 값이면 기동 명령·배너는 직접 적어야 한다
 #   AGENT_RESTART_CMD   에이전트를 셸에서 띄우는 명령. 프롬프트는 인자로 붙는다 (claude: claude --dangerously-skip-permissions,
 #                       codex: codex --dangerously-bypass-approvals-and-sandbox). Orca는 뜨지 않았을 때만, cmux·tmux는 처음부터 이 명령으로 띄운다(tmux는 훅 설정 인자를 뒤에 붙인다)
 #   AGENT_BANNER_REGEX  에이전트가 떴는지 확인할 화면 문구(ERE) (claude: Claude Code 배너·모델명, codex: "OpenAI Codex"·gpt- 모델명)
@@ -1550,6 +1550,12 @@ set -euo pipefail
 #   REPORT_OPEN         리포트를 쓴 뒤 브라우저로 여는지 (기본 1). 0이면 안 연다. SSH 세션·화면 없는 Linux에서는 값과 무관하게 안 연다
 #   MODEL_REGEX         워커 터미널에서 모델 이름을 뽑는 정규식(ERE) (claude: 상태줄·배너의 "Opus 5.5" 꼴, codex: "gpt-5.1-codex" 꼴).
 #                       못 찾으면 리포트에 not recorded
+#   USAGE_LIMIT_REGEX   워커 화면 끝 25줄에서 사용량 한도 문구를 찾는 정규식(ERE) (claude: "reached your .* limit|usage limit", codex·그 외: 없음).
+#                       idle인 워커의 화면에 맞으면 strike를 세지 않고 usage_limit로 바로 멈춘다 — 무인 수습은 띄우지 않는다(같은 한도에 걸린다).
+#                       비우면 감지하지 않는다. 아래 "화면 분류" 절
+#   PERMISSION_PROMPT_REGEX  워커 화면 끝에서 권한 확인 창 문구를 찾는 정규식(ERE) (claude: "Do you want to proceed\?", codex·그 외: 없음). 그 줄이 든
+#                       화면이 PROMPT_STALL_SEC(300초) 동안 글자 그대로면 idle 신호가 없어도 worker_no_pr로 멈춘다. 루프는 확인 창에 답하지 않는다.
+#                       비우면 감지하지 않는다
 #   SLACK_WEBHOOK_URL   Slack Incoming Webhook URL (기본 없음 = Slack 끔). 루프 시작·티켓 완료·멈춤·루프 종료를 그 채널에 올린다.
 #                       잠금을 잡은 실행만 보낸다(--dry-run, 이미 도는 루프와 겹친 실행은 안 보낸다). 비밀 값이다 — 커밋하는 저장소
 #                       loop.env가 아니라 ~/.config/ticket-loop/loop.env나 환경변수에 둔다
@@ -1563,7 +1569,8 @@ set -euo pipefail
 #   TRIAGE_LABEL        수습 세션이 낸 수정 PR에 붙이는 라벨 (기본 loop-triage, 없으면 만든다) — 사람이 나중에 몰아서 본다
 #
 # 멈추는 조건(루프 종료, 워크트리는 조사용으로 남긴다):
-#   - 워커가 PR 없이 멈춤(질문·실패) / 티켓 타임아웃 / 백엔드 터미널 끊김 / 에이전트 기동 실패
+#   - 워커가 PR 없이 멈춤(질문·실패, 확인 창에 PROMPT_STALL_SEC 머묾) / 워커가 사용량 한도에 걸림(usage_limit — 수습 없음) / 티켓 타임아웃 /
+#     백엔드 터미널 끊김 / 에이전트 기동 실패
 #   - 수리 REPAIR_ROUNDS회 뒤에도 CI 실패 또는 충돌, 수리 뒤 새 커밋이 없고 CI도 그대로 실패(재실행만 한 수리가 통과하면 이어 간다)
 #   - 병합 뒤 POST_MERGE_CMD 실패(POST_MERGE_RETRY_CMD가 있으면 재실행까지 실패), 또는 POST_MERGE_PORT가 10분 안에 비지 않음.
 #     여러 병합을 묶어 검증했으면(POST_MERGE_EVERY) 사유에 묶음과 이분 탐색으로 찾은 처음 실패하는 병합을 적는다
@@ -1589,7 +1596,7 @@ set -euo pipefail
 #   - 워커가 PR 없이 멈춤 → 진단만 한다. 판단이 필요한 질문이 많아 답하지 않고, 요약을 실어 멈춘다
 # 판정이 halt이거나, 판정 없이 끝나거나(제한 시간·idle), 수정 PR의 CI가 실패하거나, 이어 간 뒤 같은 곳에서 또 실패하면 진단을 사유에 붙여
 # 멈춘다(수습 세션의 워크트리는 남긴다). 한 실행에 TRIAGE_MAX번까지, 같은 멈춤에는 한 번만. 수습 세션은 기본 브랜치에 커밋된
-# loop-triage 스킬을 쓰므로 키트 설치 PR이 병합되기 전에는 띄우지 않는다. 그 밖의 멈춤(타임아웃, 터미널 끊김, 에이전트 기동 실패,
+# loop-triage 스킬을 쓰므로 키트 설치 PR이 병합되기 전에는 띄우지 않는다. 그 밖의 멈춤(사용량 한도, 타임아웃, 터미널 끊김, 에이전트 기동 실패,
 # 병합 실패, 신호, set -e)은 수습 없이 멈춘다 — 어디서든 안전하게 이어 갈 수 있는 자리가 아니다. GitHub 일시 장애(5xx·연결 오류)는
 # 읽기 호출과 병합 모두 멈추기 전에 GH_TRIES번까지 다시 해 본다. 필수 리뷰 같은 브랜치 보호의 거절은 사람에게 넘기는 자리다.
 
@@ -1658,29 +1665,38 @@ LOG_FILE="$(abs_path "$LOG_FILE")"
 RECORDS_FILE="$(abs_path "$RECORDS_FILE")"
 REPORT_DIR="$(abs_path "$REPORT_DIR")"
 # ----- 에이전트 프리셋 -----
-# AGENT가 기동 명령·배너·모델 정규식·스킬 접두사의 기본값을 정한다. loop.env나 환경변수로 준 값이 이긴다.
-#   claude  Claude Code. 스킬은 /이름. 모델명은 상태줄·배너의 "Opus 5.5" 꼴
+# AGENT가 기동 명령·배너·모델 정규식·스킬 접두사·화면 분류 정규식(사용량 한도·권한 확인 창)의 기본값을 정한다. loop.env나 환경변수로 준 값이 이긴다.
+#   claude  Claude Code. 스킬은 /이름. 모델명은 상태줄·배너의 "Opus 5.5" 꼴. 사용량 한도는 "You've reached your … limit"·"usage limit", 권한 확인 창은
+#           "Do you want to proceed?"(screen_kind — idle strike 앞에서 본다)
 #   codex   Codex CLI. 스킬은 $이름 — Codex는 .claude/skills/ 를 읽지 않고 .agents/skills/ 를 읽는다(배치는 키트 다음 단계). 배너 "OpenAI Codex",
 #           모델명 "gpt-5.1-codex" 꼴(상태줄 설정에 따라 안 보일 수 있다 → not recorded). --dangerously-bypass-approvals-and-sandbox(=--yolo)는
 #           Claude의 --dangerously-skip-permissions에 해당한다 — 더 좁은 --sandbox workspace-write는 네트워크를 막아 push·gh pr create가 안 된다.
 #           .claude/settings.json의 deny(gh pr merge)는 Codex에 안 걸린다 — 병합 금지는 프롬프트와 GitHub 브랜치 보호에 기댄다
-#   그 외   프리셋 없음. AGENT_RESTART_CMD·AGENT_BANNER_REGEX(·MODEL_REGEX·SKILL_PREFIX)를 loop.env에 적는다. 비어 있으면 시작 때 멈춘다
+#           사용량 한도·확인 창 문구는 실측 전이라 비워 둔다(감지하지 않음) — 실측 뒤 loop.env의 USAGE_LIMIT_REGEX·PERMISSION_PROMPT_REGEX로 켠다
+#   그 외   프리셋 없음. AGENT_RESTART_CMD·AGENT_BANNER_REGEX(·MODEL_REGEX·SKILL_PREFIX·USAGE_LIMIT_REGEX·PERMISSION_PROMPT_REGEX)를 loop.env에 적는다.
+#           기동 명령·배너가 비어 있으면 시작 때 멈춘다
 case "$AGENT" in
   claude)
     AGENT_RESTART_CMD="${AGENT_RESTART_CMD:-claude --dangerously-skip-permissions}"
     AGENT_BANNER_REGEX="${AGENT_BANNER_REGEX:-Claude Code|Opus|Sonnet|Fable|Haiku}"
     MODEL_REGEX="${MODEL_REGEX:-(Opus|Sonnet|Haiku|Fable|Mythos)[[:space:]]+[0-9]+(\.[0-9]+)?}"
-    SKILL_PREFIX="${SKILL_PREFIX:-/}" ;;
+    SKILL_PREFIX="${SKILL_PREFIX:-/}"
+    USAGE_LIMIT_REGEX="${USAGE_LIMIT_REGEX:-reached your .* limit|usage limit}"
+    PERMISSION_PROMPT_REGEX="${PERMISSION_PROMPT_REGEX:-Do you want to proceed\?}" ;;
   codex)
     AGENT_RESTART_CMD="${AGENT_RESTART_CMD:-codex --dangerously-bypass-approvals-and-sandbox}"
     AGENT_BANNER_REGEX="${AGENT_BANNER_REGEX:-OpenAI Codex|gpt-[0-9]}"
     MODEL_REGEX="${MODEL_REGEX:-gpt-[0-9]+(\.[0-9]+)?(-[[:alnum:]]+)*}"
-    SKILL_PREFIX="${SKILL_PREFIX:-\$}" ;;
+    SKILL_PREFIX="${SKILL_PREFIX:-\$}"
+    USAGE_LIMIT_REGEX="${USAGE_LIMIT_REGEX:-}"
+    PERMISSION_PROMPT_REGEX="${PERMISSION_PROMPT_REGEX:-}" ;;
   *)
     AGENT_RESTART_CMD="${AGENT_RESTART_CMD:-}"
     AGENT_BANNER_REGEX="${AGENT_BANNER_REGEX:-}"
     MODEL_REGEX="${MODEL_REGEX:-}"
-    SKILL_PREFIX="${SKILL_PREFIX:-/}" ;;
+    SKILL_PREFIX="${SKILL_PREFIX:-/}"
+    USAGE_LIMIT_REGEX="${USAGE_LIMIT_REGEX:-}"
+    PERMISSION_PROMPT_REGEX="${PERMISSION_PROMPT_REGEX:-}" ;;
 esac
 # ----- 에이전트 프리셋 끝 -----
 IDLE_WAIT_MS=600000       # idle 1회 대기 상한(Orca: terminal wait 한 번, cmux: 폴링 한 바퀴). PR·수리 대기는 PROGRESS_SEC(진행 로그)마다 돌아온다
@@ -1691,6 +1707,8 @@ TERMINAL_RETRY_SEC=10
 IDLE_STRIKES=3            # PR 없이 연속 idle이면 멈춤으로 본다
 IDLE_RECHECK_SEC=30
 SESSION_LOG_FRESH_SEC=30  # idle로 보여도 Claude Code 세션 기록(*.jsonl)이 이 안에 갱신됐으면 아직 일하는 중 — strike를 세지 않는다(session_active_recently)
+PROMPT_STALL_SEC=300      # 권한 확인 창 문구(PERMISSION_PROMPT_REGEX)가 든 화면이 이만큼 글자 그대로면 idle 신호가 없어도 확인 창에 멈춘 워커로 보고
+                          # worker_no_pr로 멈춘다(screen_check). 화면이 바뀌면 다시 센다. 2026-10 실측(#3, tmux): idle 신호가 비어 27분을 조용히 기다렸다
 STARTUP_GRACE_SEC=120     # 기동 직후에는 프롬프트 처리 전에도 idle로 잡힌다
 AGENT_START_WAIT_SEC=90   # 에이전트 배너가 보이기까지 기다리는 상한(1회), 넘기면 한 번 다시 띄운다
 CI_APPEAR_TIMEOUT_SEC=900
@@ -1790,7 +1808,7 @@ dim_lines() { local l; while IFS= read -r l || [[ -n "$l" ]]; do printf '%s%s%s%
 # 알림은 데스크톱(자리에 있을 때)과 Slack(SLACK_WEBHOOK_URL — 자리를 비웠을 때) 두 곳으로 간다. 어느 쪽이 실패해도 루프 결과는 바뀌지 않는다.
 # STOP_ISSUE: 멈추면 GitHub 기록을 남길 티켓. CUR_N(티켓 기록)은 병합 기록을 쓰면 비지만, 그 뒤 병합 뒤 검증이 실패해도 그 티켓의 멈춤이다
 REPO_URL=""; STOP_ISSUE=""; STOP_REPORTED=0; LOCK_HELD=0; BG_PID=""
-# STOP_KIND: 멈춤 기록의 종류(post_merge_failed·ci_failed·setup_failed·worker_no_pr·merge_failed·signal·unexpected_exit, 그 밖은 비워 other).
+# STOP_KIND: 멈춤 기록의 종류(post_merge_failed·ci_failed·setup_failed·worker_no_pr·usage_limit·merge_failed·signal·unexpected_exit, 그 밖은 비워 other).
 # STOP_RECORD: 이번 멈춤에 이미 쓴 멈춤 기록(무인 수습이 쓴 것) — stop_report가 같은 멈춤을 두 번 기록하지 않게
 STOP_KIND=""; STOP_RECORD=""
 fmt_epoch() { date -r "$1" '+%H:%M:%S' 2&gt;/dev/null || date -d "@$1" '+%H:%M:%S'; }   # macOS / Linux
@@ -1883,7 +1901,9 @@ stop_report() {
     tail="$(run_log | tail -n 12)"
   fi
   [[ -z "$STOP_ISSUE" ]] || github_stop_record "$STOP_ISSUE" "$reason"
-  notify "Ticket loop stopped" "$reason" "$kind" "$tail"
+  local title="Ticket loop stopped"
+  [[ "$STOP_KIND" != usage_limit ]] || title="Ticket loop stopped — worker hit the usage limit"   # 수습 없이 멈춘 한도 — 제목에서 바로 보이게
+  notify "$title" "$reason" "$kind" "$tail"
 }
 
 # 멈춘 티켓의 GitHub 기록 — 이슈에 코멘트(사유·머신·PR·워크트리·루프 로그 끝)를 달고 STOPPED_LABEL을 붙인다. 알림이 아니라 기록이다:
@@ -1951,6 +1971,7 @@ on_exit() {
     stop_report "${STOP_ISSUE:+#${STOP_ISSUE}: }unexpected exit (status ${rc}) at: ${cmd}"
   fi
   [[ $LOCK_HELD -eq 0 ]] || rmdir "$LOCK_DIR" 2&gt;/dev/null
+  [[ -z "${WAIT_STOP_FILE:-}" ]] || rm -f "$WAIT_STOP_FILE"
 }
 
 # 신호로 끝날 때 — 터미널 창을 닫음(HUP), Ctrl-C(INT), kill(TERM), 로그를 받던 tee가 죽은 뒤 stderr 쓰기(PIPE). bash는 신호에도 EXIT trap을
@@ -2654,6 +2675,107 @@ session_active_recently() {
   [[ "$SESSION_LOG_AGE" -le "$SESSION_LOG_FRESH_SEC" ]]
 }
 
+# ----- 화면 분류 -----
+# 세 대기(wait_for_pr·repair·wait_for_verdict)가 strike를 세기 직전 — session_active_recently 가드 뒤(일하는 중이면 분류할 필요가 없다) — 와
+# 백엔드 idle 대기가 타임아웃으로 돌아온 바퀴마다 워커 화면 끝 25줄(terminal_tail)을 본다. 두 가지를 가른다:
+#   usage_limit        사용량 한도 문구(USAGE_LIMIT_REGEX). idle이면 strike 없이 바로 멈춘다. 무인 수습은 띄우지 않는다 — 수습 세션도 같은 한도에
+#                      걸린다(2026-10 실측 rental-portal #262: 한도 문구를 일반 idle로 보고 strike 셋 뒤 worker_no_pr로 멈춰 수습 세션까지 헛돌았다).
+#                      사람이 터미널에서 잇거나, 한도가 풀린 뒤 루프를 다시 돌려 새 워커로 시작한다
+#   permission_prompt  권한 확인 창 문구(PERMISSION_PROMPT_REGEX). 그 문구가 든 화면이 PROMPT_STALL_SEC 동안 글자 그대로(체크섬)면 idle 신호와 무관하게
+#                      확인 창에 멈춘 워커로 보고 worker_no_pr(진단만 하는 수습)로 멈춘다. idle 신호가 살아 있어 strike가 먼저 차면 전과 같은 경로다.
+#                      idle 신호가 빈 값으로 이어지는 백엔드 상태(#2)에서도 닿는 경로다 — 2026-10 실측(#3, tmux)에서 bypass 모드의 워커(서브에이전트의
+#                      Bash)가 "Do you want to proceed?"에 27분 멈춰 있는 동안 루프 로그는 한 줄도 없었다. 루프는 확인 창에 답하지 않는다(승인·거부
+#                      둘 다) — bypass 모드에서도 물었다는 것은 deny 규칙 때문일 수 있다
+# 빈 정규식은 그 종류를 감지하지 않는다(codex 프리셋 — 실측 전). 분류 결과는 멈춤 기록의 kind와 사유에만 남는다(새 필드 없음).
+#
+# 대기 함수가 "멈춤"의 종류·사유를 호출부에 넘기는 길: wait_for_pr·wait_for_verdict는 bg_wait 서브셸에서 돌아 변수가 부모에 남지 않으므로
+# WAIT_STOP_FILE("종류&lt;탭&gt;사유" 한 줄)을 거친다. 호출부는 대기 전에 wait_stop_reset(파일은 부모가 만든다), 대기 뒤 wait_stop_read로
+# WAIT_STOP_KIND·WAIT_STOP_REASON을 채운다. 비어 있으면 전처럼 idle strike로 멈춘 것이다
+WAIT_STOP_KIND=""; WAIT_STOP_REASON=""; WAIT_STOP_FILE=""
+wait_stop_reset() {
+  WAIT_STOP_KIND=""; WAIT_STOP_REASON=""
+  [[ -n "$WAIT_STOP_FILE" ]] || WAIT_STOP_FILE="$(mktemp "${TMPDIR:-/tmp}/ticket-loop-stop.XXXXXX")"
+  : &gt; "$WAIT_STOP_FILE"
+}
+wait_stop() { WAIT_STOP_KIND="$1"; WAIT_STOP_REASON="$2"; [[ -z "$WAIT_STOP_FILE" ]] || printf '%s\t%s\n' "$1" "$2" &gt; "$WAIT_STOP_FILE"; }
+wait_stop_read() {
+  [[ -n "$WAIT_STOP_FILE" &amp;&amp; -s "$WAIT_STOP_FILE" ]] || return 0
+  IFS=$'\t' read -r WAIT_STOP_KIND WAIT_STOP_REASON &lt; "$WAIT_STOP_FILE" || true
+  : &gt; "$WAIT_STOP_FILE"
+}
+
+# screen_kind 터미널 → usage_limit | permission_prompt | 빈 값을 stdout에 쓰고 SCREEN_KIND에도 둔다(커맨드 치환 없이 불러야 아래 값이 남는다).
+# 맞은 줄은 SCREEN_LINE(앞뒤 공백을 지운 것 — 멈춤 사유에 싣는다), 화면 체크섬은 SCREEN_SUM(확인 창 체류 시간용), 사용량 한도면 화면의
+# 재설정 시각 문구("resets at …", "try again at …")를 SCREEN_RESET에 둔다(맞은 줄 안에 이미 있으면 비운다). 두 문구가 다 있으면 한도가 먼저다
+SCREEN_KIND=""; SCREEN_LINE=""; SCREEN_SUM=""; SCREEN_RESET=""
+screen_trim() { sed -e 's/^[[:space:]]*\(│\)\{0,1\}[[:space:]]*//' -e 's/[[:space:]]*\(│\)\{0,1\}[[:space:]]*$//'; }   # 앞뒤 공백과 TUI 상자 테두리(│)
+screen_kind() {
+  local tail line
+  SCREEN_KIND=""; SCREEN_LINE=""; SCREEN_SUM=""; SCREEN_RESET=""
+  [[ -n "${USAGE_LIMIT_REGEX:-}" || -n "${PERMISSION_PROMPT_REGEX:-}" ]] || return 0
+  tail="$(terminal_tail "$1" 2&gt;/dev/null)" || true
+  [[ -n "$tail" ]] || return 0
+  SCREEN_SUM="$(cksum &lt;&lt;&lt;"$tail" | cut -d' ' -f1)"
+  if [[ -n "${USAGE_LIMIT_REGEX:-}" ]]; then
+    line="$(grep -E "$USAGE_LIMIT_REGEX" &lt;&lt;&lt;"$tail" | tail -n 1 || true)"
+    if [[ -n "$line" ]]; then
+      SCREEN_KIND=usage_limit; SCREEN_LINE="$(screen_trim &lt;&lt;&lt;"$line")"
+      SCREEN_RESET="$(grep -iEo '(resets?|try again)( at| in| on)?[[:space:]]+[^|]*' &lt;&lt;&lt;"$tail" | head -n 1 | screen_trim || true)"
+      [[ -n "$SCREEN_RESET" &amp;&amp; "$SCREEN_LINE" != *"$SCREEN_RESET"* ]] || SCREEN_RESET=""
+    fi
+  fi
+  if [[ -z "$SCREEN_KIND" &amp;&amp; -n "${PERMISSION_PROMPT_REGEX:-}" ]]; then
+    line="$(grep -E "$PERMISSION_PROMPT_REGEX" &lt;&lt;&lt;"$tail" | tail -n 1 || true)"
+    [[ -z "$line" ]] || { SCREEN_KIND=permission_prompt; SCREEN_LINE="$(screen_trim &lt;&lt;&lt;"$line")"; }
+  fi
+  printf '%s' "$SCREEN_KIND"
+}
+
+# 확인 창 체류 시간 — $1 지금 화면의 체크섬. 처음 본 시각(PROMPT_AT)과 그때의 화면(PROMPT_SUM)을 두고, 화면이 바뀌면 다시 센다.
+# 같은 화면이 PROMPT_STALL_SEC 이상 머물렀으면 0. 대기 함수가 시작할 때 PROMPT_SUM=""로 비운다
+PROMPT_SUM=""; PROMPT_AT=0
+prompt_stalled() {
+  local now; now="$(date +%s)"
+  if [[ "$1" != "$PROMPT_SUM" ]]; then PROMPT_SUM="$1"; PROMPT_AT="$now"; return 1; fi
+  [[ $(( now - PROMPT_AT )) -ge $PROMPT_STALL_SEC ]]
+}
+
+# 대기 한 바퀴의 화면 확인 — $1 터미널, $2 사유의 주어(worker | triage session), $3 idle 판정이면 1(세션 기록 가드 뒤에서만 부른다), 타임아웃으로
+# 돌아온 바퀴면 0. 멈출 일이면 wait_stop을 채우고 0을 돌려준다(대기 함수는 "멈춤"으로 돌아간다). 아니면 1 — 대기 함수는 전처럼 간다
+screen_check() {
+  local handle="$1" who="$2" idle="${3:-0}"
+  screen_kind "$handle" &gt;/dev/null
+  case "$SCREEN_KIND" in
+    usage_limit)
+      [[ $idle -eq 1 ]] || return 1   # 한도는 idle로 확인된 화면에서만 — 일하는 워커의 화면에 그 낱말이 지나갈 수 있다
+      wait_stop usage_limit "${who} hit the usage limit: ${SCREEN_LINE}${SCREEN_RESET:+ — ${SCREEN_RESET}}"; return 0 ;;
+    permission_prompt)
+      prompt_stalled "$SCREEN_SUM" || return 1
+      wait_stop worker_no_pr "${who} is waiting at a confirmation prompt: ${SCREEN_LINE} (screen unchanged for $(( $(date +%s) - PROMPT_AT ))s)"; return 0 ;;
+    *) PROMPT_SUM=""; return 1 ;;   # 확인 창이 사라졌다 — 다시 보이면 처음부터 센다
+  esac
+}
+
+# 대기가 화면 분류로 멈췄으면 여기서 멈춘다(die) — $1 티켓, $2 사유에 덧붙일 맥락(선택, 예 " while repairing PR #34"). 사용량 한도는 수습 없이
+# usage_limit로(수습 세션도 같은 한도에 걸린다 — 멈춤 기록은 stop_report가 manual로 쓴다), 확인 창은 전의 worker_no_pr처럼 진단만 하는 수습 뒤
+# 멈춘다. 분류가 없으면 0 — 호출부가 전처럼 간다(idle strike → worker_no_pr, 수리 끝 → head 비교)
+screen_stop_check() {
+  local n="$1" ctx="${2:-}" reason
+  wait_stop_read
+  case "$WAIT_STOP_KIND" in
+    usage_limit)
+      STOP_KIND=usage_limit
+      die "#${n}: ${WAIT_STOP_REASON}${ctx}. No triage (it would hit the same limit) — rerun the loop after the limit resets. The ${BRANCH_PREFIX}${n} worktree is kept in ${BACKEND_NAME}." ;;
+    worker_no_pr)
+      reason="#${n}: ${WAIT_STOP_REASON}${ctx}. The loop does not answer prompts — check the ${BRANCH_PREFIX}${n} worktree in ${BACKEND_NAME}."
+      STOP_KIND=worker_no_pr
+      triage worker_no_pr "$reason" || true   # 진단만 — 요약을 사유에 붙여 멈춘다
+      die "${reason}${TRIAGE_NOTE}" ;;
+  esac
+  return 0
+}
+# ----- 화면 분류 끝 -----
+
 # PR을 찾은 뒤 워커가 이슈 정리(implement 스킬의 마지막 단계 — 체크박스, 맨 끝에 IN_REVIEW_LABEL)를 마치기를 기다린다. 이슈에 그 라벨이
 # 붙었거나 워커가 idle이면 끝, 아니면 PR_SETTLE_SEC에서 넘어간다. 기다림은 남긴다 — CI 경로 필터로 체크 없이 바로 병합하는 PR은 워커보다
 # 먼저 병합·이슈 닫힘·라벨 제거가 일어난다. 0.9.1까지는 idle 하나만 IDLE_WAIT_MS(10분)까지 기다렸다 — rental-portal 스펙 #141(cmux)에서
@@ -2677,7 +2799,7 @@ pr_settle() {
 # PR이 열려 있음"을 다 셌는데, 대개 일을 마친 워커였다(PR을 연 뒤 idle) — 폴링 순서의 부산물이지 오판이 아니다
 wait_for_pr() {
   local n="$1" handle="$2" deadline="$3" strikes=0 pending=0 pr started idle idle_at created last_screen="" screen wait_ms active_said=0
-  started="$(date +%s)"; wait_ms="$(idle_wait_ms)"
+  started="$(date +%s)"; wait_ms="$(idle_wait_ms)"; PROMPT_SUM=""; PROMPT_AT=0
   while :; do
     pr="$(open_pr_for "${n}")"
     if [[ -n "${pr}" ]]; then
@@ -2713,12 +2835,15 @@ wait_for_pr() {
         sleep "$IDLE_RECHECK_SEC"; continue
       fi
       active_said=0
+      # 화면 분류(screen_check): 사용량 한도면 strike 없이 바로, 확인 창에 PROMPT_STALL_SEC 머물렀으면 worker_no_pr로 — 둘 다 PR 없이 멈춤(1)
+      ! screen_check "${handle}" worker 1 || return 1
       strikes=$((strikes + 1)); pending=$((pending + 1))
       log warn "#${n}: worker idle, no PR (${strikes}/${IDLE_STRIKES})"
       [[ ${strikes} -lt $IDLE_STRIKES ]] || return 1   # 정말 멈췄다 — 이 연속 idle은 오판이 아니다
       sleep "$IDLE_RECHECK_SEC"
     else
       idle_fp_add "$pending"; pending=0; strikes=0; active_said=0   # 워커가 계속 일한다 — 앞서 센 idle은 오판
+      ! screen_check "${handle}" worker 0 || return 1   # idle 신호가 없어도 확인 창에 멈춘 워커는 여기서 잡는다(타임아웃으로 돌아온 바퀴)
     fi
   done
 }
@@ -2733,7 +2858,7 @@ wait_for_pr() {
 #     0.9.1까지는 티켓 제한 시간까지 기다렸다
 repair() {
   local handle="$1" text="$2" deadline="$3" pr="${4:-}" idle wait_ms before="" head="" seen="" seen_at=0 strikes=0 last_screen="" screen active_said=0
-  wait_ms="$(idle_wait_ms)"
+  wait_ms="$(idle_wait_ms)"; PROMPT_SUM=""; PROMPT_AT=0
   [[ -z "$pr" ]] || before="$(pr_head_sha "$pr" 2&gt;/dev/null || true)"
   send_prompt "${handle}" "$text"
   while :; do
@@ -2751,6 +2876,7 @@ repair() {
         strikes=0; active_said=1
       else
         active_said=0
+        ! screen_check "${handle}" worker 1 || return 0   # 사용량 한도·확인 창 — 호출부(screen_stop_check)가 종류대로 멈춘다
         strikes=$((strikes + 1))
         log warn "#${CUR_N}: worker idle after the repair prompt, no new commit on PR #${pr} yet (${strikes}/${IDLE_STRIKES})"
         [[ ${strikes} -lt $IDLE_STRIKES ]] || return 0
@@ -2758,6 +2884,7 @@ repair() {
       sleep "$IDLE_RECHECK_SEC"
     else
       strikes=0; active_said=0   # 워커가 다시 일한다
+      ! screen_check "${handle}" worker 0 || return 0   # idle 신호가 없어도 확인 창에 멈춘 워커는 여기서 잡는다
       if [[ -n "$head" &amp;&amp; "$head" != "$before" ]]; then
         [[ "$head" == "$seen" ]] || { seen="$head"; seen_at="$(date +%s)"; }
         if [[ $(( $(date +%s) - seen_at )) -ge $REPAIR_SETTLE_SEC &amp;&amp; -z "$(progress_dirty)" ]]; then
@@ -2810,6 +2937,7 @@ repair_ci() {
   repair "${handle}" "PR #${pr} 의 CI가 실패했다. \`gh pr checks ${pr}\` 와 \`gh run view --log-failed\` 로 원인을 보고 고친 뒤 테스트·lint를 다시 돌리고 같은 브랜치에 push해라. 테스트를 건너뛰거나 지우지 마라. 같은 커밋의 다른 job은 통과했고 실패가 러너·네트워크 오류처럼 코드와 무관하면 코드를 바꾸지 말고 \`gh run rerun &lt;run-id&gt; --failed\` 로 실패한 job만 다시 돌려라(push할 커밋이 없어도 된다). 질문하지 말고 끝까지 해라." "$deadline" "${pr}" \
     || die "#${n}: timed out while repairing CI"
   phase ""
+  screen_stop_check "${n}" " while repairing PR #${pr}"   # 수리 중 사용량 한도·확인 창이면 여기서 멈춘다
   [[ "$(pr_head_sha "${pr}")" == "$before" ]] || return 0
   log warn "#${n}: no new commit after the repair — checking CI again (a re-run needs no commit)"
   phase ci   # 재실행을 기다리는 동안은 CI다
@@ -3224,7 +3352,7 @@ verdict_written() { jq -e '.verdict == "resume" or .verdict == "halt"' "$1" &gt;
 # 반환: 0 판정 있음, 1 판정 없이 멈춤, 2 시간 초과, 3 터미널 끊김
 wait_for_verdict() {
   local n="$1" handle="$2" vfile="$3" deadline="$4" wt_path="$5" strikes=0 started idle last_screen="" screen wait_ms active_said=0
-  started="$(date +%s)"; wait_ms="$(idle_wait_ms)"
+  started="$(date +%s)"; wait_ms="$(idle_wait_ms)"; PROMPT_SUM=""; PROMPT_AT=0
   [[ "$PROGRESS_SEC" -le 0 ]] || progress_reset "$wt_path"
   while :; do
     if verdict_written "$vfile"; then
@@ -3246,6 +3374,7 @@ wait_for_verdict() {
         strikes=0; active_said=1
       else
         active_said=0
+        ! screen_check "$handle" "triage session" 1 || return 1   # 수습 세션도 같은 한도에 걸린다 — "판정 없이 멈춤"이 아니라 usage_limit로
         strikes=$((strikes + 1))
         log warn "#${n}: triage session idle, no verdict (${strikes}/${IDLE_STRIKES})"
         [[ ${strikes} -lt $IDLE_STRIKES ]] || return 1
@@ -3253,6 +3382,7 @@ wait_for_verdict() {
       sleep "$IDLE_RECHECK_SEC"
     else
       strikes=0; active_said=0
+      ! screen_check "$handle" "triage session" 0 || return 1
     fi
   done
 }
@@ -3320,6 +3450,7 @@ triage() {
   local t_wt="" t_path="" t_branch="" t_handle="" saved_state="${TMUX_STATE_FILE:-}"
   local verdict category summary fix_pr pushed kit_bug action action_ko
   TRIAGE_NOTE=""; TRIAGE_FIX_PR=""
+  # usage_limit는 띄우지 않는 쪽(*) — 수습 세션도 같은 한도에 걸린다. 사람이 터미널에서 잇거나 한도가 풀린 뒤 루프를 다시 돌린다
   case "$kind" in post_merge_failed|ci_failed|setup_failed) resumable=1 ;; worker_no_pr) ;; *) return 1 ;; esac
   [[ "$LOOP_TRIAGE" == 1 &amp;&amp; $LOCK_HELD -eq 1 ]] || return 1
   key="${kind}#${n}"
@@ -3354,9 +3485,13 @@ triage() {
   backend_set_status "$t_wt" in-progress || true
   log step "#${n}: triage session ${t_wt} (${t_path}) / terminal ${t_handle} — waiting for a verdict (up to $((TRIAGE_TIMEOUT_SEC / 60))m)"
   deadline=$(( $(date +%s) + TRIAGE_TIMEOUT_SEC ))
+  wait_stop_reset
   bg_wait wait_for_verdict "$n" "$t_handle" "$vfile" "$deadline" "$t_path" || rc=$?
   if [[ $rc -ne 0 ]]; then
+    wait_stop_read
     case $rc in 2) why="timed out after $((TRIAGE_TIMEOUT_SEC / 60))m" ;; 3) why="lost the session terminal" ;; *) why="the session stopped without a verdict" ;; esac
+    [[ -z "$WAIT_STOP_REASON" ]] || why="$WAIT_STOP_REASON"   # 화면 분류로 멈춤 — 사용량 한도(usage_limit로 끝낸다) 또는 확인 창에 멈춘 세션
+    [[ "$WAIT_STOP_KIND" != usage_limit ]] || STOP_KIND=usage_limit
     log warn "#${n}: triage: ${why} — session output tail ---"; terminal_tail "$t_handle" | dim_lines || true
     TMUX_STATE_FILE="$saved_state"
     backend_set_status "$t_wt" todo "" "무인 수습: 판정 없이 끝남 — 확인 필요" || true
@@ -3774,6 +3909,7 @@ run_ticket() {
   local pr rc=0 model_now prfile reason
   progress_reset "${wt_path}"
   prfile="$(mktemp "${TMPDIR:-/tmp}/ticket-loop-pr-${n}.XXXXXX")"
+  wait_stop_reset   # 대기가 화면 분류로 멈추면 종류·사유가 여기로 온다(서브셸을 넘어)
   bg_wait wait_for_pr "${n}" "${handle}" "$deadline" &gt; "$prfile" || rc=$?   # 신호에 바로 깨도록(bg_wait)
   pr="$(cat "$prfile")"; rm -f "$prfile"
   if [[ $rc -ne 0 ]]; then
@@ -3782,6 +3918,7 @@ run_ticket() {
     backend_set_status "${wt}" todo "" "루프 중단: PR 없이 멈춤 — 확인 필요" || true
     [[ $rc -ne 2 ]] || die "#${n}: ticket timed out (${TICKET_TIMEOUT_SEC}s)"
     [[ $rc -ne 3 ]] || die "#${n}: cannot reach ${BACKEND_NAME} terminal ${handle} (${BACKEND_NAME} app closed?). The worktree is still on disk."
+    screen_stop_check "${n}"   # 사용량 한도(usage_limit — 수습 없음)·확인 창(worker_no_pr)에 멈춘 워커면 여기서 멈춘다. 아니면 전처럼 idle strike
     reason="#${n}: worker stopped without a PR (a question or a failure?). Check the ${BRANCH_PREFIX}${n} worktree in ${BACKEND_NAME}."
     STOP_KIND=worker_no_pr
     triage worker_no_pr "$reason" || true   # 진단만 — 요약을 사유에 붙여 멈춘다
@@ -3814,6 +3951,7 @@ run_ticket() {
       repair "${handle}" "PR #${pr} 이 ${BASE_BRANCH}과 충돌한다. \`git fetch origin &amp;&amp; git merge origin/${BASE_BRANCH}\`으로 충돌을 해결하고 테스트·lint를 다시 돌린 뒤 같은 브랜치에 push해라. 질문하지 말고 끝까지 해라." "$deadline" "${pr}" \
         || die "#${n}: timed out while repairing the conflict"
       phase ""
+      screen_stop_check "${n}" " while repairing PR #${pr}"   # 수리 중 사용량 한도·확인 창이면 여기서 멈춘다
       continue
     fi
     if ! ci_expected "${pr}"; then
