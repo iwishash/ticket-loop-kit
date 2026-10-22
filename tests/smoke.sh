@@ -644,6 +644,73 @@ grep -qF 'first run ${POST_MERGE_LOG}, retry ${POST_MERGE_RETRY_LOG}' "$KIT/file
 grep -qF '${POST_MERGE_RETRY_CMD:+ (retry once on failure: ${POST_MERGE_RETRY_CMD})}' "$KIT/files/scripts/ticket-loop.sh" || fail "시작 줄에 재실행 설정을 보이지 않는다"
 echo "ok  병합 뒤 검증 재실행(포트 대기·첫 실행 로그·딱 한 번·결과 문자열)"
 
+# GitHub 조회 실패(#8): 조회 넷(blocked_by·sub_issue_count·open_pr_for·candidates)은 gh 가 실패하면 출력 없이 비0 이고 성공 출력은 전과 같다.
+# pick_targets 는 목록 조회가 실패하면 비0, 후보 하나의 검사가 실패하면 그 티켓만 "could not check" 로 건너뛴다(다른 티켓은 고른다).
+# 가짜 gh 는 FAIL_* 로 고른 조회만 502 로 끝낸다(issue list 는 호출 차례 LIST_FAIL_FROM~LIST_FAIL_TO 에서, 나머지는 all 또는 이슈 번호).
+# 메인 고리의 재시도·멈춤은 알림·멈춤 보고 검사 뒤에 같은 가짜 gh 로 본다
+GF="$(cd "$T" && pwd -P)/ghfail"; mkdir -p "$GF/bin"
+sed -n '/^# ---------- GitHub 조회 ----------/,/^# ---------- 백엔드 ----------/p' "$KIT/files/scripts/ticket-loop.sh" > "$GF/fn.sh"
+for f in blocked_by sub_issue_count open_pr_for candidates pick_targets issue_title; do grep -q "^${f}() " "$GF/fn.sh" || fail "GitHub 조회 절에 ${f} 가 없음"; done
+cat > "$GF/bin/gh" <<'GH'
+#!/usr/bin/env bash
+[[ -z "${CALLS:-}" ]] || printf "%s\x1e" "$@" | jq -Rsc '{cmd: "gh", args: (split("\u001e")[:-1])}' >> "$CALLS"
+boom() { echo "gh: HTTP 502: Bad Gateway (https://api.github.com/x)" >&2; exit 1; }
+hit() { [[ "${!1:-}" == all || "${!1:-}" == "$2" ]]; }   # $1 FAIL_* 변수 이름(all 또는 이슈 번호), $2 이 호출의 이슈 번호
+case "$1 ${2:-}" in
+  "issue list") c=$(( $(cat "$GF/n" 2>/dev/null || echo 0) + 1 )); echo "$c" > "$GF/n"
+                [[ $c -lt ${LIST_FAIL_FROM:-9999} || $c -gt ${LIST_FAIL_TO:-9999} ]] || boom
+                cat "$GF/issues.json" ;;
+  "pr list")    [[ "${FAIL_PR:-0}" == 0 ]] || boom; cat "$GF/prs.json" ;;
+  "issue view") echo "T$3" ;;
+  "api "*) n="${2#repos/o/r/issues/}"; n="${n%%/*}"
+    case "$2" in
+      */dependencies/blocked_by) ! hit FAIL_BLOCKED "$n" || boom; printf '%b\n' "${BLOCKED_OUT:-0}" ;;
+      */sub_issues) [[ "${FAIL_KIDS:-0}" == 0 ]] || boom; printf '%s\n' "${KIDS_OUT:-[]}" ;;
+      repos/o/r/issues/*) ! hit FAIL_SUBS "$n" || boom; printf '%s\n' "${SUBS_OUT:-0}" ;;
+    esac ;;
+esac
+GH
+chmod +x "$GF/bin/gh"
+echo '[{"number":12,"title":"T12","labels":[],"assignees":[]},{"number":11,"title":"T11","labels":[],"assignees":[]}]' > "$GF/issues.json"
+echo '[]' > "$GF/prs.json"
+qf() {  # $1 함수 호출(bash 문장), 나머지: 환경(VAR=값) → "종료 코드|stdout(줄 사이 ,)|skip 로그(줄 사이 ;)"
+  local call="$1"; shift; rm -f "$GF/n"; : > "$GF/log"
+  (cd "$GF" && env PATH="$GF/bin:$PATH" GF="$GF" CALL="$call" "$@" bash -c '
+    set -euo pipefail
+    OWNER_REPO=o/r; BRANCH_PREFIX=issue-; READY_LABEL=ready-for-agent; SCOPE_LABEL=""; PARENT="${PARENT:-}"; IN_REVIEW_LABEL=in-review; ORDER_REGEX="^T(?<n>[0-9]+)"; TICKETS=()
+    log() { case "${1:-}" in title|step|ok|warn|err) [[ $# -lt 2 ]] || shift ;; esac; echo "$*" >> "$GF/log"; }
+    source fn.sh
+    rc=0; out="$(eval "$CALL" 2>/dev/null)" || rc=$?
+    printf "%s|%s|%s\n" "$rc" "$(paste -sd , - <<<"$out")" "$(paste -sd ";" - < "$GF/log")"')
+}
+# 성공 출력은 전과 같다: blocked_by 는 페이지 합계, sub_issue_count 는 수, open_pr_for 는 PR 번호(없으면 빈 값), candidates 는 번호·담당자 수·제목
+[[ "$(qf 'blocked_by 12' BLOCKED_OUT='1\n1')" == "0|2|" && "$(qf 'blocked_by 12')" == "0|0|" ]] || fail "blocked_by 성공 출력: $(qf 'blocked_by 12' BLOCKED_OUT='1\n1') / $(qf 'blocked_by 12')"
+[[ "$(qf 'sub_issue_count 12' SUBS_OUT=3)" == "0|3|" ]] || fail "sub_issue_count 성공 출력: $(qf 'sub_issue_count 12' SUBS_OUT=3)"
+echo '[{"number":120,"headRefName":"issue-12"}]' > "$GF/prs.json"
+[[ "$(qf 'open_pr_for 12')" == "0|120|" && "$(qf 'open_pr_for 11')" == "0||" ]] || fail "open_pr_for 성공 출력: $(qf 'open_pr_for 12') / $(qf 'open_pr_for 11')"
+echo '[]' > "$GF/prs.json"
+[[ "$(qf candidates)" == $'0|11\t0\tT11,12\t0\tT12|' ]] || fail "candidates 성공 출력: $(qf candidates)"
+[[ "$(qf candidates PARENT=40 KIDS_OUT='[12]')" == $'0|12\t0\tT12|' ]] || fail "candidates(--parent) 성공 출력: $(qf candidates PARENT=40 KIDS_OUT='[12]')"
+# gh 가 실패하면 출력 없이 비0 — blocked_by 가 awk 합계 0 으로, open_pr_for·candidates 가 빈 값으로 읽히던 것
+[[ "$(qf 'blocked_by 12' FAIL_BLOCKED=12)" == "1||" ]] || fail "blocked_by: gh 실패가 0 으로 읽힘: $(qf 'blocked_by 12' FAIL_BLOCKED=12)"
+[[ "$(qf 'sub_issue_count 12' FAIL_SUBS=12)" == "1||" ]] || fail "sub_issue_count: gh 실패가 성공으로 읽힘: $(qf 'sub_issue_count 12' FAIL_SUBS=12)"
+[[ "$(qf 'open_pr_for 12' FAIL_PR=1)" == "1||" ]] || fail "open_pr_for: gh 실패가 'PR 없음'으로 읽힘: $(qf 'open_pr_for 12' FAIL_PR=1)"
+[[ "$(qf candidates LIST_FAIL_FROM=1)" == "1||" ]] || fail "candidates: issue list 실패가 빈 목록으로 읽힘: $(qf candidates LIST_FAIL_FROM=1)"
+[[ "$(qf candidates PARENT=40 FAIL_KIDS=1)" == "1||" ]] || fail "candidates(--parent): 하위 이슈 조회 실패가 빈 목록으로 읽힘: $(qf candidates PARENT=40 FAIL_KIDS=1)"
+# pick_targets: 성공 출력 그대로, 목록 조회 실패는 비0, 후보 검사 실패는 그 티켓만 could not check(다른 티켓은 고른다), 기존 건너뛰기 문구는 그대로
+grep -qF 'list="$(candidates)" || return 1' "$GF/fn.sh" || fail "pick_targets 가 candidates 의 종료 코드를 보지 않는다"
+[[ "$(qf pick_targets)" == $'0|11\tT11,12\tT12|' ]] || fail "pick_targets 성공 출력: $(qf pick_targets)"
+[[ "$(qf pick_targets LIST_FAIL_FROM=1)" == "1||" ]] || fail "pick_targets: 목록 조회 실패가 빈 목록으로 읽힘: $(qf pick_targets LIST_FAIL_FROM=1)"
+[[ "$(qf pick_targets FAIL_BLOCKED=11)" == $'0|12\tT12|skip #11 (T11): could not check (GitHub)' ]] || fail "pick_targets: blocked_by 실패인 티켓을 골랐거나 다른 티켓까지 버림: $(qf pick_targets FAIL_BLOCKED=11)"
+[[ "$(qf pick_targets FAIL_SUBS=12)" == $'0|11\tT11|skip #12 (T12): could not check (GitHub)' ]] || fail "pick_targets: sub_issue_count 실패인 티켓을 골랐거나 다른 티켓까지 버림: $(qf pick_targets FAIL_SUBS=12)"
+[[ "$(qf pick_targets FAIL_PR=1)" == "0||skip #11 (T11): could not check (GitHub);skip #12 (T12): could not check (GitHub)" ]] || fail "pick_targets: pr list 실패인데 티켓을 고름: $(qf pick_targets FAIL_PR=1)"
+[[ "$(qf pick_targets BLOCKED_OUT=1)" == "0||skip #11 (T11): blocked by an open issue;skip #12 (T12): blocked by an open issue" ]] || fail "pick_targets: 막힌 티켓 건너뛰기 문구가 바뀜: $(qf pick_targets BLOCKED_OUT=1)"
+[[ "$(qf pick_targets SUBS_OUT=2)" == "0||skip #11 (T11): spec issue with sub-issues;skip #12 (T12): spec issue with sub-issues" ]] || fail "pick_targets: 스펙 이슈 건너뛰기 문구가 바뀜: $(qf pick_targets SUBS_OUT=2)"
+echo '[{"number":120,"headRefName":"issue-12"}]' > "$GF/prs.json"
+[[ "$(qf pick_targets)" == $'0|11\tT11|skip #12 (T12): PR already open' ]] || fail "pick_targets: PR 열린 티켓 건너뛰기 문구가 바뀜: $(qf pick_targets)"
+echo '[]' > "$GF/prs.json"
+echo "ok  GitHub 조회 실패 — 조회 넷은 비0, pick_targets 는 목록 실패 비0·후보 검사 실패 could not check(성공 출력 그대로)"
+
 # 묶어 돌리는 병합 뒤 검증(POST_MERGE_EVERY): 창(아직 검증하지 않은 병합)의 저장·읽기, 언제 돌릴지(pm_due), 묶음 검증의 결과 문자열과
 # 창 닫기, 묶음이 재실행까지 실패하면 실패한 테스트만 다시 돌리는 명령으로 처음 실패하는 병합을 이분 탐색, 멈춤 사유, 루프 끝의 검증.
 # 실제 git 저장소(origin 역할 bare + 메인 체크아웃)에 병합 커밋 넷(#11~#14)을 쌓고 셋째(#13)가 테스트를 깨뜨린다(broken 파일)
@@ -712,7 +779,11 @@ due() { pmw "PM_PENDING=\"\$(printf '%s\n' \"$WIN4\" | awk 'NR <= $1')\"; $2; rc
   || fail "pm_due(--max·번호 지정의 마지막): $(due 2 'MAX=3; done_count=2') / $(due 2 'TICKETS=(11 12 13); done_count=2')"
 [[ "$(due 2 'TICKETS=(11 12 13); done_count=1')" == 'DUE=1 WHY= SET=0' ]] || fail "pm_due(번호 지정 중간 — 대상을 계산하지 않고 미룸): $(due 2 'TICKETS=(11 12 13); done_count=1')"
 [[ "$(due 0 'CLOSED_SPECS=" 40"' 12 40)" == 'DUE=1 WHY= SET=0' ]] || fail "pm_due(창이 비면 돌리지 않음): $(due 0 'CLOSED_SPECS=" 40"' 12 40)"
-[[ "$(due 2 'pick_targets() { return 1; }')" == 'DUE=1 WHY= SET=0' ]] || fail "pm_due(다음 대상 조회 실패 → 죽지 않고 미룸): $(due 2 'pick_targets() { return 1; }')"
+# 다음 대상 조회가 실제로 실패할 때(가짜 gh 의 issue list 가 502 — $GF) 미룬다. pick_targets 를 통째로 가짜로 바꾸지 않고 candidates 까지 실제 함수로
+# (0.9.9 의 이 분기는 pick_targets 가 실패를 돌려주지 못해 닿지 않았다 — #8). 같은 길로 성공하면 다음 대상(#11)을 메인 고리에 넘긴다
+PMQ="PATH=$GF/bin:\$PATH; export GF=$GF; rm -f $GF/n; BRANCH_PREFIX=issue-; READY_LABEL=ready-for-agent; SCOPE_LABEL=; PARENT=; IN_REVIEW_LABEL=in-review; ORDER_REGEX='^T(?<n>[0-9]+)'; source $GF/fn.sh"
+[[ "$(due 2 "$PMQ; export LIST_FAIL_FROM=1")" == $'gh: HTTP 502: Bad Gateway (https://api.github.com/x)\nDUE=1 WHY= SET=0' ]] || fail "pm_due(다음 대상 조회 실패 → 죽지 않고 미룸): $(due 2 "$PMQ; export LIST_FAIL_FROM=1")"
+[[ "$(due 2 "$PMQ")" == 'DUE=1 WHY= SET=1' ]] || fail "pm_due(실제 조회로 다음 대상 있음 → 미루고 목록을 넘김): $(due 2 "$PMQ")"
 echo "ok  묶어 돌리는 검증 — 언제 돌리나(창이 참·스펙 끝·실행의 마지막)"
 
 # 묶음 검증: 통과·재실행 통과면 결과에 덮은 병합을 적고 창을 닫는다(시작 = 검증한 커밋)
@@ -1083,6 +1154,86 @@ grep -A3 "trap on_exit EXIT; trap 'on_signal HUP' HUP; trap 'on_signal INT' INT;
 [[ "$(grep -c 'trap .* EXIT' "$KIT/files/scripts/ticket-loop.sh")" == 1 ]] || fail "EXIT trap 이 on_exit 하나가 아님"
 grep -q 'STOP_ISSUE="$n"$' "$KIT/files/scripts/ticket-loop.sh" && grep -qF -- '--remove-label "$STOPPED_LABEL"' "$KIT/files/scripts/ticket-loop.sh" || fail "run_ticket 이 STOP_ISSUE 를 두거나 병합 뒤 멈춤 라벨을 떼지 않음"
 echo "ok  알림·멈춤 보고(Slack·GitHub 기록, die·set -e·신호, 긴 대기 중 신호, 잠금)"
+
+# 메인 고리의 GitHub 조회 실패(#8): 시작 전 첫 계산이 실패하면 die, 티켓 사이의 재계산이 실패하면 PICK_RETRY_SEC 동안 PICK_RETRY_EVERY_SEC 마다
+# 다시 해 보고(그 사이 회복하면 이어 간다) 그래도 실패하면 "could not list tickets (GitHub)" 로 멈춘다 — 처리 중인 티켓이 없으니 티켓 기록·이슈
+# 코멘트 없이 알림(stopped — finished 가 아님)과 멈춤 기록(other)만. 번호를 직접 준 실행은 사전 검사의 조회가 실패하면 die(통과시키지 않음).
+# 메인 고리(done_count=0 부터 끝까지)를 가짜 run_ticket·조회 gh($GF)·알림(curl·osascript — $M)으로 그대로 돌린다
+ML="$(cd "$T" && pwd -P)/mainloop"; mkdir -p "$ML/bin"
+cp "$M/bin/curl" "$M/bin/osascript" "$GF/bin/gh" "$ML/bin/"; cp "$GF/issues.json" "$GF/prs.json" "$ML/"
+{ sed -n '/^# ----- 알림 · 멈춤 보고 -----/,/^# ----- 알림 · 멈춤 보고 끝 -----/p' "$KIT/files/scripts/ticket-loop.sh"; cat "$GF/fn.sh"; } > "$ML/fn.sh"
+sed -n '/^targets="$(pick_targets)"/p' "$KIT/files/scripts/ticket-loop.sh" > "$ML/prestart.sh"
+sed -n '/^done_count=0$/,$p' "$KIT/files/scripts/ticket-loop.sh" > "$ML/loop.sh"
+grep -q 'pick_targets' "$ML/prestart.sh" && grep -q '^while :; do' "$ML/loop.sh" && grep -q 'notify "Ticket loop finished"' "$ML/loop.sh" || fail "메인 고리를 찾지 못함"
+cat > "$ML/run.sh" <<'EOF'
+set -euo pipefail
+ROOT="$PWD"; MAIN_WT="$PWD"; OWNER_REPO=o/r; BASE_BRANCH=main; BACKEND=cmux; BACKEND_NAME=cmux; AGENT=claude; PARENT=""
+SLACK_WEBHOOK_URL=https://hooks.example/x; SLACK_MENTION="<@U1>"; STOPPED_LABEL=loop-stopped
+BRANCH_PREFIX=issue-; READY_LABEL=ready-for-agent; SCOPE_LABEL=""; IN_REVIEW_LABEL=in-review; ORDER_REGEX="^T(?<n>[0-9]+)"
+LOG_FILE="$PWD/loop.log"; : > "$LOG_FILE"; LOCK_DIR="$PWD/lock"
+PICK_RETRY_SEC="${PICK_RETRY_SEC:-2}"; PICK_RETRY_EVERY_SEC=1; MAX=0; NEXT_TARGETS_SET=0; NEXT_TARGETS=""; TRIAGE_USED=0; CLOSED_SPECS=""
+# shellcheck disable=SC2206
+TICKETS=(${TICKETS_IN:-})
+log() { case "$1" in title|step|ok|warn|err) shift ;; esac; printf '[2026-10-22 10:00:00] %s\n' "$*" >> "$LOG_FILE"; }
+record_ticket() { echo "record $1" >> ev; }
+run_ticket() { echo "run $1 $2" >> ev; }
+pm_flush_end() { :; }; close_spec_if_done() { :; }; write_spec_report() { :; }; suggest_retro() { :; }
+source fn.sh
+REPO_URL=https://github.com/o/r
+trap on_exit EXIT; trap 'on_signal HUP' HUP; trap 'on_signal INT' INT; trap 'on_signal TERM' TERM; trap 'on_signal PIPE' PIPE
+mkdir "$LOCK_DIR"; LOCK_HELD=1
+CUR_N=""; STOP_ISSUE=""
+if [[ "${MODE:-loop}" == prestart ]]; then source prestart.sh; printf '%s\n' "$targets" >> ev; exit 0; fi
+targets=$'11\tT11'   # 시작 전 첫 계산의 결과 — 그 다음부터는 고리가 다시 계산한다
+source loop.sh
+EOF
+mlcase() {  # 환경(VAR=값 …) → 종료 코드. 결과는 $ML/{ev,loop.log,calls.jsonl,.ticket-loop/stops}
+  rm -rf "$ML/lock" "$ML/.ticket-loop" "$ML/n"; : > "$ML/calls.jsonl"; : > "$ML/ev"
+  local rc=0
+  (cd "$ML" && env PATH="$ML/bin:$PATH" CALLS="$ML/calls.jsonl" HOME="$ML/home" GF="$ML" "$@" bash run.sh 2>"$ML/err") || rc=$?
+  echo "$rc"
+}
+mlgh() { jq -rs '[.[] | select(.cmd == "gh") | .args[0:2] | join(" ")] | join(",")' "$ML/calls.jsonl"; }
+mlnotify() { jq -rs '[.[] | select(.cmd == "osascript") | .args[-2]] | join(",")' "$ML/calls.jsonl"; }   # 데스크톱 알림 제목들
+mlslack() { jq -rs '[.[] | select(.cmd == "curl")][0].args as $a | $a[($a | index("--data")) + 1] | fromjson | .text' "$ML/calls.jsonl"; }
+mlstops() { ls "$ML/.ticket-loop/stops/"*.json 2>/dev/null | grep -v '\.verdict\.json$' || true; }
+mlretries() { grep -c 'could not list tickets (GitHub) — retrying in 1s (for up to' "$ML/loop.log" || true; }
+# 조회가 성공하면 전과 같다: 티켓마다 다시 계산해 #11·#12 를 돌고 "No more tickets" 로 끝난다(finished 알림, 멈춤 기록 없음, 재시도 줄 없음)
+rc="$(mlcase)"
+[[ "$rc" == 0 && "$(cat "$ML/ev")" == $'run 11 T11\nrun 12 T12' && "$(mlnotify)" == "Ticket loop finished" && -z "$(mlstops)" && "$(mlretries)" == 0 ]] \
+  && grep -q 'No more tickets to process.' "$ML/loop.log" || fail "메인 고리(조회 성공): rc $rc / $(cat "$ML/ev") / $(mlnotify) / $(cat "$ML/loop.log")"
+# 티켓 사이의 재계산이 두 번 실패하고 회복하면 이어 간다(재시도 줄 둘, finished)
+rc="$(mlcase LIST_FAIL_FROM=1 LIST_FAIL_TO=2 PICK_RETRY_SEC=60)"
+[[ "$rc" == 0 && "$(cat "$ML/ev")" == $'run 11 T11\nrun 12 T12' && "$(mlretries)" == 2 && "$(mlnotify)" == "Ticket loop finished" && -z "$(mlstops)" ]] \
+  || fail "메인 고리(조회가 잠깐 실패 뒤 회복): rc $rc / $(cat "$ML/ev") / 재시도 $(mlretries) / $(mlnotify) / $(cat "$ML/loop.log")"
+# 재계산이 PICK_RETRY_SEC 내내 실패하면 멈춘다 — 사유 "could not list tickets (GitHub)", 알림은 stopped(멘션 있음), 티켓 기록·GitHub 코멘트 없음,
+# 멈춤 기록은 other(이슈 없음), 잠금은 푼다. 전에는 빈 목록으로 읽어 "No more tickets" 로 정상 종료하고 finished 알림을 보냈다
+t0="$(date +%s)"; rc="$(mlcase LIST_FAIL_FROM=1 PICK_RETRY_SEC=2)"; t1="$(date +%s)"
+[[ "$rc" == 1 && "$(cat "$ML/ev")" == "run 11 T11" && "$(mlretries)" -ge 1 && $((t1 - t0)) -ge 2 && $((t1 - t0)) -le 20 ]] \
+  && grep -q 'ERROR: could not list tickets (GitHub)$' "$ML/loop.log" && ! grep -q 'No more tickets' "$ML/loop.log" \
+  || fail "메인 고리(조회 실패가 이어짐): rc $rc / $(cat "$ML/ev") / 재시도 $(mlretries) / $((t1 - t0))초 / $(cat "$ML/loop.log")"
+[[ "$(mlnotify)" == "Ticket loop stopped" ]] && [[ "$(mlslack)" == ":octagonal_sign: *Ticket loop stopped* · o/r · "*$'\n'"<@U1> could not list tickets (GitHub)"* ]] \
+  || fail "조회 실패 멈춤의 알림: $(mlnotify) / $(mlslack)"
+[[ "$(mlgh)" != *"issue comment"* && "$(mlgh)" != *"issue edit"* && "$(mlgh)" != *"label create"* ]] || fail "조회 실패 멈춤이 이슈에 코멘트·라벨을 남김(처리 중인 티켓이 없다): $(mlgh)"
+rec="$(mlstops)"; [[ "$(grep -c . <<<"$rec")" == 1 ]] || fail "조회 실패 멈춤 기록이 하나가 아님: $rec"
+jq -e '.kind == "other" and .mode == "manual" and .issue == null and .pr == null and .reason == "could not list tickets (GitHub)"' "$rec" >/dev/null || fail "조회 실패 멈춤 기록 내용: $(cat "$rec")"
+[[ ! -e "$ML/lock" ]] || fail "조회 실패 멈춤이 잠금을 풀지 않음"
+# 시작 전 첫 계산이 실패하면 바로 die(재시도 없이 — 사람이 앞에 있다). 성공하면 목록 그대로
+rc="$(mlcase MODE=prestart)"; [[ "$rc" == 0 && "$(cat "$ML/ev")" == $'11\tT11\n12\tT12' ]] || fail "시작 전 첫 계산(성공): rc $rc / $(cat "$ML/ev")"
+rc="$(mlcase MODE=prestart LIST_FAIL_FROM=1)"
+[[ "$rc" == 1 && -z "$(cat "$ML/ev")" && "$(mlretries)" == 0 && "$(mlnotify)" == "Ticket loop stopped" ]] && grep -q 'ERROR: could not list tickets (GitHub)$' "$ML/loop.log" \
+  || fail "시작 전 첫 계산(실패 → die): rc $rc / $(cat "$ML/ev") / $(mlnotify) / $(cat "$ML/loop.log")"
+# 번호를 직접 준 실행: 사전 검사의 blocked_by·open_pr_for 가 실패하면 die(통과시키지 않는다). 막힘·PR 열림·통과는 전과 같다
+rc="$(mlcase TICKETS_IN=12)"; [[ "$rc" == 0 && "$(cat "$ML/ev")" == "run 12 T12" ]] || fail "번호 지정(통과): rc $rc / $(cat "$ML/ev")"
+for c in "FAIL_BLOCKED=12|#12: could not check blocking issues (GitHub)" "FAIL_PR=1|#12: could not check for an open PR (GitHub)" "BLOCKED_OUT=1|#12: blocked by an open issue"; do
+  rc="$(mlcase TICKETS_IN=12 "${c%%|*}")"
+  [[ "$rc" == 1 && -z "$(cat "$ML/ev")" && "$(mlnotify)" == "Ticket loop stopped" ]] && grep -qF "ERROR: ${c#*|}" "$ML/loop.log" \
+    || fail "번호 지정(${c%%|*}): 멈추지 않거나 사유가 다름(rc $rc): $(cat "$ML/ev") / $(cat "$ML/loop.log")"
+done
+cp "$ML/prs.json" "$ML/prs.bak"; echo '[{"number":120,"headRefName":"issue-12"}]' > "$ML/prs.json"
+rc="$(mlcase TICKETS_IN=12)"; [[ "$rc" == 1 ]] && grep -qF 'ERROR: #12: a PR is already open' "$ML/loop.log" || fail "번호 지정(PR 열림): rc $rc / $(cat "$ML/loop.log")"
+mv "$ML/prs.bak" "$ML/prs.json"
+echo "ok  메인 고리의 GitHub 조회 실패 — 시작 전 die, 티켓 사이 재시도 뒤 멈춤(could not list tickets, 코멘트 없이 알림·멈춤 기록만), 번호 지정은 die"
 
 # 무인 수습(0.9): triage 를 가짜 백엔드·gh·CI 로 그대로 부른다. 실제 git 저장소(bare origin 에 loop-triage 스킬 커밋)를 쓴다.
 # 가짜 backend_worktree_create 는 프롬프트에서 판정 파일 경로를 읽어 VERDICT 를 써 둔다(빈 값이면 판정 없이 idle 로 남는다)

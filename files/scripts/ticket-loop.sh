@@ -251,6 +251,8 @@ AGENT_START_WAIT_SEC=90   # 에이전트 배너가 보이기까지 기다리는 
 CI_APPEAR_TIMEOUT_SEC=900
 GH_TRIES=3                # GitHub 일시 장애(5xx·연결 오류)에 걸린 gh 읽기 호출(gh 함수)과 병합(merge_pr)을 다시 해 보는 횟수(첫 시도 포함).
 GH_RETRY_SEC=15           # 그 사이 GH_RETRY_SEC×회차씩 쉰다(15초·30초)
+PICK_RETRY_SEC=300        # 티켓 사이의 다음 대상 조회(pick_targets)가 gh 재시도까지 실패할 때 다시 해 보는 총 시간. 넘기면 멈춘다(could not list tickets)
+PICK_RETRY_EVERY_SEC=60   # 그 사이 다시 해 보는 간격
 PORT_WAIT_SEC=600         # POST_MERGE_PORT가 비기를 기다리는 상한. 기다리는 동안은 30초마다 다시 본다(멈춤이 아니다)
 REOPEN_WATCH_SEC=2        # 수습 수정 PR을 병합한 뒤 티켓 이슈가 닫히는지 다시 보는 간격(5번 — triage_keep_issue_open)
 PR_SETTLE_SEC=120         # PR을 찾은 뒤 워커의 이슈 정리(체크박스·IN_REVIEW_LABEL)를 기다리는 상한. 라벨이 붙거나 idle이면 바로 넘어간다(pr_settle)
@@ -610,23 +612,33 @@ REPO_URL="$(gh repo view --json url -q .url 2>/dev/null || true)"   # Slack 본�
 
 # ---------- GitHub 조회 ----------
 
+# 조회 넷(blocked_by·sub_issue_count·open_pr_for·candidates)은 gh가 실패하면(GH_TRIES번 재시도 뒤에도) 출력 없이 비0으로 끝난다 — 실패를
+# "선행 이슈 0개"·"PR 없음"·"빈 목록"으로 읽어 막힌 티켓을 시작하거나 "No more tickets"로 끝나지 않게(이슈 #8). 출력을 변수에 먼저 받는다 —
+# 파이프 뒤의 awk·jq가 종료 코드를 덮지 않게
 # 열린 선행 이슈 수. issue_dependencies_summary.blocked_by는 선행 이슈가 닫힌 뒤에도
 # 최대 ~20분 옛 값을 돌려준 실측이 있어, 목록에서 열린 것만 센다.
 blocked_by() {
-  gh api "repos/${OWNER_REPO}/issues/$1/dependencies/blocked_by" --paginate \
-    --jq '[.[] | select(.state == "open")] | length' 2>/dev/null | awk '{s += $1} END {print s + 0}'
+  local counts
+  counts="$(gh api "repos/${OWNER_REPO}/issues/$1/dependencies/blocked_by" --paginate \
+    --jq '[.[] | select(.state == "open")] | length')" || return 1
+  awk '{s += $1} END {print s + 0}' <<<"$counts"
 }
 
 # 하위 이슈 수 — 스펙 이슈(/to-spec이 ready-for-agent를 붙인다)를 티켓처럼 집지 않게 한다
-sub_issue_count() { gh api "repos/${OWNER_REPO}/issues/$1" --jq '.sub_issues_summary.total // 0'; }
+sub_issue_count() {
+  local total
+  total="$(gh api "repos/${OWNER_REPO}/issues/$1" --jq '.sub_issues_summary.total // 0')" || return 1
+  printf '%s\n' "$total"
+}
 
 # 티켓 N의 열린 PR — head 브랜치가 `<BRANCH_PREFIX>N`과 같거나 `<BRANCH_PREFIX>N-`로 시작하는 것.
 # 워커는 implement 스킬대로 issue-N-<slug>를 만들지만, 루프가 만든 워크트리 브랜치 issue-N에 그대로 커밋해 PR을 연 실측이 있다
 # (rental-portal #102 → PR #120, 0.8.5). 접두 `N-`만 보면 그 PR을 못 찾아 "PR 없이 멈춤"으로 죽었다.
 # `N`만 접두로 보면 issue-1020이 #102에 걸리므로 정확히 같거나 `N-`로 시작할 때만이다
 open_pr_for() {
-  gh pr list --state open --json number,headRefName \
-    | jq -r --arg b "${BRANCH_PREFIX}$1" 'map(select(.headRefName == $b or (.headRefName | startswith($b + "-")))) | .[0].number // empty'
+  local prs
+  prs="$(gh pr list --state open --json number,headRefName)" || return 1
+  jq -r --arg b "${BRANCH_PREFIX}$1" 'map(select(.headRefName == $b or (.headRefName | startswith($b + "-")))) | .[0].number // empty' <<<"$prs"
 }
 
 issue_title() { gh issue view "$1" --json title -q .title; }
@@ -640,9 +652,10 @@ candidates() {
   local list kids
   local args=(--label "$READY_LABEL" --state open --limit 200 --json number,title,labels,assignees)
   [[ -z "$SCOPE_LABEL" ]] || args+=(--label "$SCOPE_LABEL")
-  list="$(gh issue list "${args[@]}")"
+  list="$(gh issue list "${args[@]}")" || return 1
   if [[ -n "$PARENT" ]]; then
-    kids="$(gh api "repos/${OWNER_REPO}/issues/${PARENT}/sub_issues" --paginate --jq '[.[].number]' | jq -s 'add // []')"
+    kids="$(gh api "repos/${OWNER_REPO}/issues/${PARENT}/sub_issues" --paginate --jq '[.[].number]')" || return 1
+    kids="$(jq -s 'add // []' <<<"$kids")"
     list="$(jq --argjson kids "$kids" 'map(select(.number as $n | $kids | index($n)))' <<<"$list")"
   fi
   jq -r --arg re "$ORDER_REGEX" --arg rv "$IN_REVIEW_LABEL" '
@@ -652,20 +665,27 @@ candidates() {
       | .[] | "\(.number)\t\(.assignees | length)\t\(.title)"' <<<"$list"
 }
 
+# 대상 목록("번호<TAB>제목" 줄들). 목록 조회(candidates)가 실패하면 비0 — 부르는 쪽이 정한다(시작 전이면 die, 티켓 사이면 PICK_RETRY_SEC 동안
+# 다시, pm_due는 검증을 미룬다). 후보 하나의 검사(sub_issue_count·blocked_by·open_pr_for)가 실패하면 그 티켓만 고르지 않는다 — 막혔거나
+# PR이 열렸을 수 있으니 안전한 쪽으로. 명령 치환 안에서 돌므로(set -e 없음) 실패는 종료 코드로만 알 수 있다
 pick_targets() {
   if [[ ${#TICKETS[@]} -gt 0 ]]; then
     for n in "${TICKETS[@]}"; do printf '%s\t%s\n' "${n}" "$(issue_title "${n}")"; done
     return
   fi
-  local n assignees title
+  local n assignees title list subs blocked pr
+  list="$(candidates)" || return 1
   while IFS=$'\t' read -r n assignees title; do
     [[ -n "${n}" ]] || continue
     if [[ "${assignees}" != "0" ]]; then log "skip #${n} (${title}): has an assignee (in progress or taken by a person)"; continue; fi
-    if [[ "$(sub_issue_count "${n}")" != "0" ]]; then log "skip #${n} (${title}): spec issue with sub-issues"; continue; fi
-    if [[ "$(blocked_by "${n}")" != "0" ]]; then log "skip #${n} (${title}): blocked by an open issue"; continue; fi
-    if [[ -n "$(open_pr_for "${n}")" ]]; then log "skip #${n} (${title}): PR already open"; continue; fi
+    subs="$(sub_issue_count "${n}")" || { log "skip #${n} (${title}): could not check (GitHub)"; continue; }
+    if [[ "$subs" != "0" ]]; then log "skip #${n} (${title}): spec issue with sub-issues"; continue; fi
+    blocked="$(blocked_by "${n}")" || { log "skip #${n} (${title}): could not check (GitHub)"; continue; }
+    if [[ "$blocked" != "0" ]]; then log "skip #${n} (${title}): blocked by an open issue"; continue; fi
+    pr="$(open_pr_for "${n}")" || { log "skip #${n} (${title}): could not check (GitHub)"; continue; }
+    if [[ -n "$pr" ]]; then log "skip #${n} (${title}): PR already open"; continue; fi
     printf '%s\t%s\n' "${n}" "${title}"
-  done < <(candidates)
+  done <<<"$list"
 }
 
 # ---------- 백엔드 ----------
@@ -2440,7 +2460,7 @@ KIT_VERSION="$(kit_version)"
 kit_banner "ticket-loop-kit ${KIT_VERSION}"
 backend_check
 pm_load
-targets="$(pick_targets)"
+targets="$(pick_targets)" || die "could not list tickets (GitHub)"   # 시작 전에는 사람이 앞에 있다 — 바로 멈춘다
 log "repository ${OWNER_REPO} / backend ${BACKEND_NAME} / base branch ${BASE_BRANCH} / label ${READY_LABEL}${SCOPE_LABEL:+ + ${SCOPE_LABEL}}${PARENT:+ / sub-issues of spec #${PARENT}}"
 log "post-merge check: $([[ $POST_MERGE -eq 1 ]] && echo "on$(case "$POST_MERGE_EVERY" in 1) ;; 0) echo ", when a spec or the run ends" ;; *) echo ", every ${POST_MERGE_EVERY} merged tickets and when a spec or the run ends" ;; esac) — ${POST_MERGE_CMD}${POST_MERGE_RETRY_CMD:+ (retry once on failure: ${POST_MERGE_RETRY_CMD})}" || echo "off")"
 if [[ -n "$PM_PENDING" ]]; then
@@ -2473,11 +2493,22 @@ while :; do
   if [[ ${#TICKETS[@]} -gt 0 ]]; then
     [[ $done_count -lt ${#TICKETS[@]} ]] || break
     n="${TICKETS[$done_count]}"; title="$(issue_title "${n}")"
-    [[ "$(blocked_by "${n}")" == "0" ]] || die "#${n}: blocked by an open issue"
-    [[ -z "$(open_pr_for "${n}")" ]] || die "#${n}: a PR is already open"
+    blocked="$(blocked_by "${n}")" || die "#${n}: could not check blocking issues (GitHub)"   # 조회 실패를 통과시키지 않는다
+    [[ "$blocked" == "0" ]] || die "#${n}: blocked by an open issue"
+    pr="$(open_pr_for "${n}")" || die "#${n}: could not check for an open PR (GitHub)"
+    [[ -z "$pr" ]] || die "#${n}: a PR is already open"
   else
     if [[ $NEXT_TARGETS_SET -eq 1 ]]; then targets="$NEXT_TARGETS"; NEXT_TARGETS_SET=0   # 병합 뒤 검증을 미룰 때 pm_due가 계산해 둔 것
-    elif [[ $done_count -ne 0 ]]; then targets="$(pick_targets </dev/null)"; fi
+    elif [[ $done_count -ne 0 ]]; then
+      # 목록 조회가 gh 재시도까지 실패하면(GitHub 장애가 길다) PICK_RETRY_SEC 동안 PICK_RETRY_EVERY_SEC마다 다시 해 보고, 그래도 안 되면
+      # 멈춘다. 처리 중인 티켓이 없으므로(CUR_N·STOP_ISSUE 비어 있음) 이슈 코멘트·무인 수습 없이 알림과 멈춤 기록(other)만 남는다
+      pick_deadline=$(( $(date +%s) + PICK_RETRY_SEC ))
+      until targets="$(pick_targets </dev/null)"; do
+        [[ $(date +%s) -lt $pick_deadline ]] || { STOP_KIND=""; die "could not list tickets (GitHub)"; }
+        log warn "could not list tickets (GitHub) — retrying in ${PICK_RETRY_EVERY_SEC}s (for up to $((PICK_RETRY_SEC / 60))m)"
+        sleep "$PICK_RETRY_EVERY_SEC"
+      done
+    fi
     # 이번 실행에서 이미 처리한 티켓은 다시 집지 않는다(이슈 닫힘 반영이 늦는 경우 대비)
     n=""
     while IFS=$'\t' read -r cand ctitle; do
