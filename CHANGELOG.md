@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.9.14 — 2026-10-23
+
+스킬 동기화 결함 하나(#20)를 PR #21로 고쳤다. 루프 판정에 영향을 주는 변경은 없다. rental-portal에서 0.9.10 → 0.9.12 `init --yes`를 돌리자 손으로 검사 셋을 더해 둔 `.agents/skills/ticket-review/SKILL.md`가 upstream `code-review` 그대로로 되돌아갔다 — `PROJECT_OWNED=(implement pr)`가 키트 관리 파일인 sync 스크립트 안에 고정돼 있어 저장소가 다른 스킬을 소유로 표시할 길이 없었고, 설치기 출력에도 덮어쓴 흔적이 없었다.
+
+- **`sync-mattpocock-skills.sh`가 매니페스트의 `project_owned`를 읽는다(#20).** `.agents/skills/.mattpocock.json`의 `project_owned`를 `PROJECT_OWNED`에 더한다. 저장소에 놓이는 이름(`ticket-review`)으로 적고, `code-review`라고 적으면 `ticket-review`로 읽는다(그대로 두면 skip한 뒤 "not in this kit's skill set"으로 지웠다). 소유 스킬은 이름을 바꾼 뒤에 검사하고, 매니페스트 `skills`에 싣지 않으며, `--check`의 `foreign`으로 알리지 않고, 링크만 챙긴다. 다음 매니페스트에도 남는다. 요약의 `project-owned (update by hand)`에 함께 보인다.
+- **덮어쓴 로컬 수정을 알린다.** 덮어쓰기 전에 지난 동기화의 upstream 커밋(매니페스트 `commit`, 임시 클론의 worktree) 사본에 같은 치환을 한 것과 비교한다. 다르면 로컬 수정(커밋 여부 무관)으로 보고 덮어쓴 뒤 요약에 `overwrote local edits: <이름>`을 낸다 — git에서 되돌리고 `project_owned`에 적으라는 안내와 함께. 지난 `skills`에 없던 디렉터리(방금 소유를 푼 것, foreign)도 같은 잣대. `.DS_Store`는 무시. 그 커밋을 받지 못하면 `note    could not compare with the previous sync's upstream commit (…)` 한 줄을 내고 조용히 넘어가지 않는다.
+- 치환 루프를 `rename_refs()`로, 복사·링크·치환을 `vendor()`로 뽑았고 `path_in()`을 현재·지난 plugin.json이 같이 쓴다. kept 스킬도 같은 길을 탄다. `loop.env` 변수 대안은 만들지 않았다(매니페스트에 이미 필드가 있다). README 두 벌에 `project_owned`와 덮어쓴 안내를 적었다.
+- 스모크: 가짜 upstream을 한 커밋 더 올려 "upstream 변경"과 "로컬 수정"을 가른다 — 소유 스킬 보존·요약 표시·`--check` 침묵, `tdd` 갱신(치환 포함)과 `overwrote` 없음, 커밋된 로컬 수정 덮어쓰기와 `overwrote local edits: grilling`, 매니페스트 `project_owned`·`skills`, 재동기화 무안내, 소유 해제 뒤 다시 들임과 안내, `code-review` 별칭, 모르는 커밋의 `could not compare`.
+- 이미 설치된 저장소: 키트를 올린 뒤 손으로 고쳐 쓰는 들인 스킬 이름을 `.agents/skills/.mattpocock.json`의 `project_owned`에 적는다(rental-portal은 `ticket-review`). 0.9.12 설치로 되돌아간 파일은 git에서 되돌린다. 가이드북·PDF는 바뀐 것이 없다.
+
 ## 0.9.13 — 2026-10-23
 
 0.9.12 실측에서 나온 결함 하나(#22)를 PR #23으로 고쳤다. 루프의 판정에 닿는다 — 티켓 사이의 다음 대상 조회가 *성공하면서* 빈 목록을 줄 때.
