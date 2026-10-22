@@ -40,7 +40,9 @@ set -euo pipefail
 #        commands        .claude/commands/<이름>.md 가 있다 → 스킬이 우선하지만 둘이 남는다                                      알림
 #        kept            지난 설치가 들였지만 이번 묶음에 없는 스킬이 있다 → 유지·동기화한다(--prune 이면 지운다)                알림
 #   2. upstream .claude-plugin/plugin.json 에서 core(+workflow, +kept) 스킬 경로를 찾아 복사한다
-#   3. PROJECT_OWNED 스킬(implement·pr)은 건드리지 않는다(이 저장소가 직접 관리)
+#   3. PROJECT_OWNED 스킬(implement·pr, 그리고 매니페스트 project_owned 에 저장소가 더 적은 이름 — 예: 손으로 고쳐 쓰는 ticket-review)은
+#      건드리지 않는다(이 저장소가 직접 관리). 그 밖의 스킬은 덮어쓰되, 지난 동기화의 upstream 커밋 사본과 달랐으면(커밋된 로컬 수정 포함)
+#      요약에 `overwrote local edits: <이름>` 을 낸다 — git 에서 되돌리고 project_owned 에 적으라는 뜻이다
 #   4. code-review → ticket-review 로 이름을 바꾼다. Claude Code 내장 /code-review 와 이름이 겹치기 때문이다.
 #      다른 스킬 본문의 code-review 참조와, 들이지 않는 /setup-matt-pocock-skills 안내(→ /setup-ticket-loop)도 같이 바꾼다
 #   5. 지운다(.agents/skills/.mattpocock.json 기준 — 0.6 이하는 .claude/skills/.mattpocock.json): --no-workflow 로 뺀 workflow 묶음, setup-matt-pocock-skills, --prune 일 때 kept 전부.
@@ -108,6 +110,17 @@ unlink_claude() { [[ -L "$CLAUDE_SKILLS/$1" ]] && rm "$CLAUDE_SKILLS/$1" || true
 
 has_name() { local n s; n="$1"; shift; for s in "$@"; do [[ "$s" == "$n" ]] && return 0; done; return 1; }
 is_owned() { has_name "$1" "${PROJECT_OWNED[@]}"; }
+
+# 매니페스트 project_owned: 저장소가 손으로 고쳐 쓰는 스킬을 더 적어 둔 것(예: 이름을 바꿔 들인 ticket-review 에 검사를 보탠 저장소).
+# 여기 적힌 이름은 implement·pr 처럼 건드리지 않고, 다음 매니페스트에도 그대로 남긴다. 저장소에 놓이는 이름(ticket-review)으로 적는다 —
+# upstream 이름(code-review)으로 적었으면 그렇게 읽는다(그대로 두면 skip 한 뒤 "not in this kit's skill set" 으로 지운다)
+if [[ -f "$MANIFEST" ]]; then
+  while IFS= read -r n; do
+    [[ -n "$n" ]] || continue
+    [[ "$n" == "$RENAME_FROM" ]] && n="$RENAME_TO"
+    has_name "$n" "${PROJECT_OWNED[@]}" || PROJECT_OWNED+=("$n")
+  done < <(jq -r '(.project_owned // [])[] | strings' "$MANIFEST" 2>/dev/null)
+fi
 
 # workflow 묶음: 명시 플래그 > 지난 매니페스트(workflow 값, 없으면 to-tickets 가 들어 있었는지) > 끔
 if [[ "$WORKFLOW" == auto ]]; then
@@ -198,7 +211,7 @@ check_conflicts() {
       "rm -rf $where/$RENAME_FROM"
   fi
   for n in "${DEST_NAMES[@]}"; do
-    if skill_dir_exists "$n"; then
+    if skill_dir_exists "$n" && ! is_owned "$n"; then
       if [[ ! -f "$MANIFEST" ]] || ! jq -e --arg n "$n" '(.skills // []) | index($n) != null' "$MANIFEST" >/dev/null 2>&1; then
         where=".agents/skills"; [[ -d "$DEST/$n" && ! -L "$DEST/$n" ]] || where=".claude/skills"
         add_finding info foreign "$where/$n exists but was not placed by this script — it will be overwritten" ""
@@ -286,44 +299,14 @@ PENDING="$(find "$WORK/src/.changeset" -maxdepth 1 -name '*.md' ! -name 'README.
 # 이름으로 upstream 경로를 찾는다(디렉터리가 옮겨져도 plugin.json 의 목록을 따른다). macOS 기본 bash 3.2 에는 mapfile 이 없다
 UP_PATHS=()
 while IFS= read -r p; do UP_PATHS+=("$p"); done < <(jq -r '.skills[]' "$WORK/src/.claude-plugin/plugin.json" | sed 's#^\./##')
-path_of() { local p; for p in "${UP_PATHS[@]}"; do [[ "$(basename "$p")" == "$1" ]] && { echo "$p"; return 0; }; done; return 1; }
-
-mkdir -p "$DEST"
-installed=()
-for s in "${WANTED[@]}"; do
-  p="$(path_of "$s")" || { echo "upstream plugin.json has no skill named $s" >&2; exit 1; }
-  src="$WORK/src/$p"
-  [[ -f "$src/SKILL.md" ]] || { echo "upstream has no $p/SKILL.md" >&2; exit 1; }
-  name="$s"
-  is_owned "$name" && { echo "  skip    $name (project-owned)"; continue; }
-  [[ "$name" == "$RENAME_FROM" ]] && name="$RENAME_TO"
-  rm -rf "${DEST:?}/$name"
-  cp -R "$src" "$DEST/$name"
-  link_claude "$name"
-  installed+=("$name")
-done
-
-# kept 스킬도 같은 upstream 커밋으로 맞춘다. upstream 에서 사라진 것은 받아올 곳이 없으니 그대로 둔다(--prune 으로만 지운다)
-n_sets=${#installed[@]}
-kept_stale=()
-if [[ $PRUNE -eq 0 ]]; then
-  for name in "${KEPT[@]+"${KEPT[@]}"}"; do
-    if p="$(path_of "$name")" && [[ -f "$WORK/src/$p/SKILL.md" ]]; then
-      rm -rf "${DEST:?}/$name"
-      cp -R "$WORK/src/$p" "$DEST/$name"
-      link_claude "$name"
-      installed+=("$name")
-    else
-      link_claude "$name"
-      kept_stale+=("$name"); echo "  kept    $name (no longer in upstream — left as is)"
-    fi
-  done
-fi
+path_in() { local n p; n="$1"; shift; for p in "$@"; do [[ "$(basename "$p")" == "$n" ]] && { echo "$p"; return 0; }; done; return 1; }
+path_of() { path_in "$1" "${UP_PATHS[@]}"; }
 
 # code-review 스킬 이름과 그 참조를 ticket-review로 바꾼다. 스킬 이름으로 쓰인 자리만 바꾼다
 # (`code-review` 백틱, "code-review" 따옴표, /code-review, name: 줄, ./code-review/ 경로).
 # 들이지 않는 /setup-matt-pocock-skills 를 부르라는 안내는 /setup-ticket-loop 로(이 키트가 docs/agents/issue-tracker.md 를 놓는다).
-for name in "${installed[@]}"; do
+rename_refs() {   # <디렉터리>
+  local f
   while IFS= read -r -d '' f; do
     sed -i.bak -E \
       -e "s#^name: ${RENAME_FROM}\$#name: ${RENAME_TO}#" \
@@ -333,8 +316,76 @@ for name in "${installed[@]}"; do
       -e "s#/setup-matt-pocock-skills#/setup-ticket-loop#g" \
       "$f"
     rm -f "$f.bak"
-  done < <(find "$DEST/$name" -name '*.md' -print0)
+  done < <(find "$1" -name '*.md' -print0)
+}
+
+# 로컬 수정 판정: 덮어쓸 디렉터리는 지난 동기화의 upstream 커밋(매니페스트 commit)에 같은 치환을 한 사본과 같아야 한다.
+# 다르면 저장소가 손으로 고친 것이다(커밋했어도 잡힌다 — HEAD 와 비교하면 커밋된 수정은 못 본다). 덮어쓰되 요약에 알린다.
+# 지난 매니페스트의 skills 에 없던 디렉터리(project_owned 에서 방금 뺀 것, foreign)도 같은 잣대로 본다.
+# 그 커밋을 받지 못했거나(이력 재작성) 그때의 plugin.json 에 그 이름이 없으면 판정하지 않는다
+PREV_COMMIT=""
+if [[ -f "$MANIFEST" ]]; then
+  PREV_COMMIT="$(jq -r '.commit // empty' "$MANIFEST" 2>/dev/null)" || PREV_COMMIT=""
+fi
+PREV_PATHS=()
+if [[ -n "$PREV_COMMIT" ]]; then
+  if git -C "$WORK/src" cat-file -e "$PREV_COMMIT^{commit}" 2>/dev/null \
+     && git -C "$WORK/src" worktree add -q --detach "$WORK/prev" "$PREV_COMMIT" 2>/dev/null && [[ -f "$WORK/prev/.claude-plugin/plugin.json" ]]; then
+    while IFS= read -r p; do PREV_PATHS+=("$p"); done < <(jq -r '.skills[]' "$WORK/prev/.claude-plugin/plugin.json" | sed 's#^\./##')
+  else
+    echo "  note    could not compare with the previous sync's upstream commit (${PREV_COMMIT:0:7}) — local edits to vendored skills are overwritten without notice this time"
+  fi
+fi
+locally_edited() {   # <저장소 이름> — 0: 지난 동기화 사본과 다르다(로컬 수정)
+  local name="$1" up p
+  up="$name"; [[ "$name" == "$RENAME_TO" ]] && up="$RENAME_FROM"
+  [[ -d "$DEST/$name" && ! -L "$DEST/$name" ]] || return 1
+  p="$(path_in "$up" "${PREV_PATHS[@]+"${PREV_PATHS[@]}"}")" || return 1
+  [[ -f "$WORK/prev/$p/SKILL.md" ]] || return 1
+  rm -rf "$WORK/expect"; mkdir -p "$WORK/expect"
+  cp -R "$WORK/prev/$p" "$WORK/expect/$name"
+  rename_refs "$WORK/expect/$name"
+  ! diff -rq -x .DS_Store "$WORK/expect/$name" "$DEST/$name" >/dev/null 2>&1   # Finder 가 둔 .DS_Store 는 수정이 아니다
+}
+overwrote=()
+vendor() {   # <upstream 경로> <저장소 이름>: 덮어쓰고 링크하고 참조를 바꾼다. 로컬 수정이 있었으면 적어 둔다
+  local src="$1" name="$2"
+  if locally_edited "$name"; then overwrote+=("$name"); fi
+  rm -rf "${DEST:?}/$name"
+  cp -R "$src" "$DEST/$name"
+  link_claude "$name"
+  rename_refs "$DEST/$name"
+  installed+=("$name")
+}
+
+mkdir -p "$DEST"
+installed=()
+for s in "${WANTED[@]}"; do
+  p="$(path_of "$s")" || { echo "upstream plugin.json has no skill named $s" >&2; exit 1; }
+  src="$WORK/src/$p"
+  [[ -f "$src/SKILL.md" ]] || { echo "upstream has no $p/SKILL.md" >&2; exit 1; }
+  name="$s"
+  [[ "$name" == "$RENAME_FROM" ]] && name="$RENAME_TO"
+  if is_owned "$name"; then
+    [[ -d "$DEST/$name" && ! -L "$DEST/$name" ]] && link_claude "$name"   # 링크만 챙긴다 — 본문은 저장소 것
+    echo "  skip    $name (project-owned)"; continue
+  fi
+  vendor "$src" "$name"
 done
+
+# kept 스킬도 같은 upstream 커밋으로 맞춘다. upstream 에서 사라진 것은 받아올 곳이 없으니 그대로 둔다(--prune 으로만 지운다)
+n_sets=${#installed[@]}
+kept_stale=()
+if [[ $PRUNE -eq 0 ]]; then
+  for name in "${KEPT[@]+"${KEPT[@]}"}"; do
+    if p="$(path_of "$name")" && [[ -f "$WORK/src/$p/SKILL.md" ]]; then
+      vendor "$WORK/src/$p" "$name"
+    else
+      link_claude "$name"
+      kept_stale+=("$name"); echo "  kept    $name (no longer in upstream — left as is)"
+    fi
+  done
+fi
 
 # 지난 동기화 목록에 있었지만 이번에 들이지도 kept 로 남기지도 않은 스킬을 지운다: --no-workflow 로 뺀 묶음, SUPERSEDED, --prune 일 때 kept 전부.
 # 프로젝트 소유 스킬과 매니페스트 밖 디렉터리는 건드리지 않는다
@@ -374,3 +425,6 @@ if [[ ${#kept_now[@]} -gt 0 ]]; then
 fi
 echo "  mattpocock/skills ${VERSION} + ${PENDING} unreleased changesets (${COMMIT:0:7}) → ${n_sets} skills synced (core$([[ $WORKFLOW -eq 1 ]] && echo ' + workflow'))${kept_note}"
 echo "  project-owned (update by hand): ${PROJECT_OWNED[*]} — check the upstream CHANGELOG for changes to carry over"
+if [[ ${#overwrote[@]} -gt 0 ]]; then
+  echo "  overwrote local edits: ${overwrote[*]} — these differed from the previous sync's upstream copy. Restore them from git (git checkout HEAD -- .agents/skills/<name>) and list the name under project_owned in .agents/skills/.mattpocock.json to keep them next time"
+fi

@@ -125,7 +125,7 @@ Skills are vendored as files rather than installed as a plugin so that every wor
 | workflow | `grill-with-docs`, `to-spec`, `to-tickets`, `retro`, plus `grilling`, `domain-modeling`, `writing-for-agents` | Off. `--workflow-skills` or the checklist; kept if a previous install had them |
 | kept | Skills an earlier install (0.5 and before vendored all 26) placed outside the two sets | Kept and synced, never added to a fresh install. `--prune-skills` removes them |
 
-The manifest `.agents/skills/.mattpocock.json` records all three. A skill you deleted by hand is not restored; one upstream dropped is left alone. Other upstream skills come from the plugin (`claude plugin install mattpocock-skills@claude-plugins-official`).
+The manifest `.agents/skills/.mattpocock.json` records all three. A skill you deleted by hand is not restored; one upstream dropped is left alone. Its `project_owned` list names the skills the repository maintains by hand (`implement` and `pr` by default): add a vendored name such as `ticket-review` there and the sync leaves that directory alone and lists it under `project-owned (update by hand)`. Any other vendored skill is overwritten; when it differed from the previous sync's upstream copy (committed edits included), the summary adds `overwrote local edits: <name>` so you can restore it from git and mark it `project_owned`. Other upstream skills come from the plugin (`claude plugin install mattpocock-skills@claude-plugins-official`).
 
 Before changing anything, the installer looks for the same skills installed another way (`bash scripts/sync-mattpocock-skills.sh --check` runs it alone):
 
