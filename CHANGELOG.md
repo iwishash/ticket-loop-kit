@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.9.12 — 2026-10-22
+
+트리아지에서 ready-for-agent로 분류한 나머지 셋(#8 #11 #10)을 PR #18 #17 #19로 고쳤다. 셋 다 루프의 판정에 닿는다 — 티켓 고르기의 GitHub 조회 실패, idle 오판, 그리고 사용량 한도·확인 창 감지.
+
+- **다음 티켓 고르기가 GitHub 조회 실패를 빈 목록·"막히지 않음"·"PR 없음"으로 읽지 않는다(#8).** `blocked_by`·`sub_issue_count`·`open_pr_for`·`candidates`는 `gh`가 재시도(`GH_TRIES`)까지 실패하면 출력 없이 비0으로 끝나고, `pick_targets`는 목록 조회가 실패하면 비0, 후보 하나의 검사가 실패하면 그 티켓만 `could not check (GitHub)`로 건너뛴다. 시작 전 첫 계산이 실패하면 바로 멈추고, 티켓 사이의 재계산이 실패하면 5분(`PICK_RETRY_SEC`, 1분 간격 `PICK_RETRY_EVERY_SEC`) 다시 해 본 뒤 `could not list tickets (GitHub)`로 멈춘다 — 처리 중인 티켓이 없으므로 이슈 코멘트·무인 수습 없이 알림과 멈춤 기록(`other`)만 남는다. 번호를 직접 준 실행은 사전 검사의 조회가 실패하면 멈춘다. 전에는 장애가 45초를 넘기면 "No more tickets to process."로 정상 종료하고 finished 알림을 보내거나, 막힌 티켓·PR이 열린 티켓을 시작할 수 있었다. 0.9.9의 `pm_due` "조회 실패 → 미룸" 분기도 이제 실제로 닿는다. 단, `blocked_by`가 일시 장애가 아닌 404(Not Found)를 받으면 이슈 의존성 API가 없는 환경(옛 GHES)으로 보고 "막힘 없음"(0)으로 읽는다 — `dependencies API not available (HTTP 404) — treating tickets as not blocked` 경고를 실행당 한 번 남긴다.
+- **idle 판정 가드(#11):** 백엔드가 idle을 돌려주고 화면이 지난 idle 때와 같으면 PR 대기·수리 대기·수습 대기가 strike를 하나 셌는데, cmux에서 백그라운드 작업 알림으로 시작되는 턴 전후에 lifecycle이 잠깐 idle로 보이는 것으로 추정된다 — rental-portal #266에서 strike 3회 중 앞의 2회는 워커가 도구를 7번 호출하던 중이었다. 새 헬퍼 `session_active_recently <작업 폴더>`: `AGENT=claude`일 때 `claude_project_dir`(토큰 집계와 같은 변환)로 세션 기록 폴더를 찾아 `*.jsonl`(하위 `subagents/` 포함) 중 가장 최근 것이 `SESSION_LOG_FRESH_SEC`(새 상수, 기본 30초) 안에 갱신됐으면 아직 일하는 중으로 본다. 세 대기는 strike를 세기 직전에 이를 보고, 활성이면 strike를 세지 않고 연속 횟수를 0으로 되돌리며(앞의 strike는 오판 집계에 더한다) `idle reported, but the session log was written Ns ago — still working` 한 줄을 연속된 idle에서 한 번만 남긴다. claude가 아니거나 폴더·파일이 없거나 창 밖이면 전과 같다 — strike를 줄이기만 하고 늘리지 않는다. mtime은 `stat`(macOS `-f %m`, Linux `-c %Y`)로 읽는다. Codex 세션 기록은 아직 보지 않는다.
+- **화면 분류(#10, #3의 화면 감지 부분 포함):** 실측 둘. rental-portal #262에서 워커가 `You've reached your … limit`로 멈추자 루프가 일반 idle로 보고 strike 셋 뒤 `worker_no_pr`로 멈춰 무인 수습 세션을 띄웠는데 그 세션도 같은 한도에 걸려 헛돌았다. #3(0.9.2, tmux)에서는 bypass 모드의 워커(서브에이전트의 Bash)가 `Do you want to proceed?`에 27분 멈춰 있는 동안 idle 신호가 비어 루프 로그가 한 줄도 없었다.
+  - `screen_kind`: 세 대기(PR·수리·수습)가 #11의 가드 뒤, strike 직전에 화면 끝 25줄을 `usage_limit` · `permission_prompt` · 빈 값으로 가른다. 문구는 프리셋 변수 `USAGE_LIMIT_REGEX`(claude `reached your .* limit|usage limit`)·`PERMISSION_PROMPT_REGEX`(claude `Do you want to proceed\?`)이고 `loop.env`로 덮어쓴다. codex·그 외는 실측 전이라 빈 값 = 감지하지 않는다.
+  - `usage_limit`(새 멈춤 종류): strike 없이 바로 멈춘다. 사유 `worker hit the usage limit: <그 줄>`에 화면의 재설정 시각 문구(`resets at …`, `try again at …`)가 있으면 붙인다. 무인 수습은 띄우지 않고(같은 한도에 걸린다), 알림 제목은 `Ticket loop stopped — worker hit the usage limit`, 이슈 코멘트·Slack·멈춤 기록은 `worker_no_pr`과 같은 길이다. 수습 세션 자체가 한도에 걸려도 `usage_limit`로 끝낸다. `loop-triage` 스킬의 종류 표에 더했다. 폴백 모델로 자동 전환은 #12(실측 뒤).
+  - 확인 창 체류(`PROMPT_STALL_SEC`, 기본 300): 확인 창 문구가 든 화면이 그 시간 동안 글자 그대로면 idle 신호와 무관하게 `worker_no_pr`(진단만 하는 수습)로 멈춘다. 사유 `worker is waiting at a confirmation prompt: <그 줄> (screen unchanged for Ns)`. 백엔드 idle 대기가 타임아웃으로 돌아온 바퀴마다 보므로 idle 신호가 전혀 없어도 닿는다. 화면이 바뀌면 다시 세고, idle 신호가 살아 있어 strike가 먼저 차면 전과 같다. 루프는 확인 창에 답하지 않는다.
+  - 대기 함수는 종류·사유를 `WAIT_STOP_FILE`로 호출부에 넘기고(bg_wait 서브셸), 호출부 세 곳이 `screen_stop_check`로 종류대로 멈춘다. `tickets.jsonl`에 새 필드는 없다. 한도 문구는 idle로 확인된 화면에서만 분류하므로 idle 신호가 아예 없는 상태(#2)에서 한도에 걸리면 여전히 타임아웃까지 간다.
+- 스모크: 세 변경 각각에 가짜 `gh`·가짜 백엔드·가짜 시계로 수용 기준 전부와 결함 주입을 본다. 부록 D·PDF 재빌드.
+- 이미 설치된 저장소: 키트를 올리면 claude 프리셋의 두 정규식과 세션 기록 가드가 바로 켜진다. codex나 문구가 다른 설치본은 실측 뒤 `loop.env`에 `USAGE_LIMIT_REGEX="${USAGE_LIMIT_REGEX:-…}"` 꼴로 적는다.
+
 ## 0.9.11 — 2026-10-22
 
 이슈 트리아지에서 ready-for-agent로 분류한 작은 결함 셋(#5 #4 #6)을 고쳤다. 저장소에 CI가 없어 PR에 체크가 붙지 않던 것도 이번에 넣었다. 루프 판정에 영향을 주는 변경은 없다.
