@@ -203,6 +203,50 @@ for sk in wizard ask-matt gone; do [[ ! -e "$W/.claude/skills/$sk" && ! -e "$W/.
 grep -q 'removed wizard (--prune)' <<<"$out" || fail "--prune 제거 로그 없음"
 echo "ok  스킬 동기화(가짜 upstream)"
 
+# #20: 매니페스트 project_owned 에 적은 스킬(이름을 바꿔 들인 ticket-review 포함)은 덮어쓰지 않고 요약의 project-owned 목록에 나온다.
+# 그 밖의 스킬에 로컬 수정이 있으면 전처럼 덮어쓰되 요약에 `overwrote local edits: <이름>` 을 낸다 — 지난 동기화의 upstream 커밋 사본과 비교하므로
+# 커밋된 수정도 잡고, upstream 만 바뀐 스킬(tdd)은 잡지 않는다
+jq '.project_owned += ["ticket-review"]' "$M" > "$M.tmp" && mv "$M.tmp" "$M"
+echo 'local spec brief' >> "$W/.agents/skills/ticket-review/SKILL.md"
+echo 'local tweak' >> "$W/.agents/skills/grilling/SKILL.md"
+git -C "$W" add -A >/dev/null; git -C "$W" -c user.name=t -c user.email=t@t commit -q -m "local edits"
+printf -- '---\nname: tdd\ndescription: x\n---\nnew upstream body. Uses the `code-review` skill.\n' > "$U/skills/engineering/tdd/SKILL.md"
+git -C "$U" add -A >/dev/null; git -C "$U" -c user.name=t -c user.email=t@t commit -q -m up2
+rc=0; out="$(sync_run --check)" || rc=$?
+[[ $rc -eq 0 ]] && ! grep -q 'ticket-review' <<<"$out" || fail "--check 가 project_owned 인 ticket-review 를 알림(rc=$rc): $out"
+out="$(sync_run)" || fail "project_owned 동기화 실패: $out"
+grep -q 'local spec brief' "$W/.agents/skills/ticket-review/SKILL.md" || fail "매니페스트 project_owned 의 ticket-review 가 덮어써짐"
+[[ -L "$W/.claude/skills/ticket-review" ]] || fail "project_owned 인 ticket-review 의 링크가 사라짐"
+grep -q 'new upstream body' "$W/.agents/skills/tdd/SKILL.md" && grep -q '`ticket-review` skill' "$W/.agents/skills/tdd/SKILL.md" || fail "project_owned 가 아닌 tdd 가 upstream 으로 갱신(치환 포함)되지 않음"
+! grep -q 'local tweak' "$W/.agents/skills/grilling/SKILL.md" || fail "project_owned 가 아닌 grilling 의 로컬 수정이 덮어써지지 않음"
+grep -q 'project-owned (update by hand): implement pr ticket-review' <<<"$out" || fail "요약의 project-owned 목록에 ticket-review 가 없음: $out"
+grep -q 'overwrote local edits: grilling' <<<"$out" || fail "덮어쓴 로컬 수정 안내가 없음: $out"
+! grep -q 'overwrote local edits:.*tdd' <<<"$out" || fail "upstream 만 바뀐 tdd 를 로컬 수정으로 봄: $out"
+grep -q '8 skills synced (core + workflow)' <<<"$out" || fail "project_owned 를 뺀 수가 아님: $out"
+[[ "$(jq -c '.project_owned' "$M")" == '["implement","pr","ticket-review"]' ]] || fail "매니페스트가 project_owned 를 잃음: $(jq -c .project_owned "$M")"
+[[ "$(jq -c '.skills' "$M")" == '["domain-modeling","grill-with-docs","grilling","retro","tdd","to-spec","to-tickets","writing-for-agents"]' ]] || fail "매니페스트 skills 에 project_owned 가 남음: $(jq -c .skills "$M")"
+out="$(sync_run)" || fail "project_owned 재동기화 실패: $out"
+! grep -q 'overwrote local edits' <<<"$out" || fail "로컬 수정이 없는데 덮어쓴 안내가 남: $out"
+grep -q 'local spec brief' "$W/.agents/skills/ticket-review/SKILL.md" || fail "재동기화가 project_owned 의 ticket-review 를 덮어씀"
+# project_owned 에서 빼면 다시 들이되, 지난 매니페스트 skills 에 없던 디렉터리라도 upstream 사본과 달랐으면 알린다
+jq '.project_owned -= ["ticket-review"]' "$M" > "$M.tmp" && mv "$M.tmp" "$M"
+out="$(sync_run)" || fail "project_owned 해제 뒤 동기화 실패: $out"
+! grep -q 'local spec brief' "$W/.agents/skills/ticket-review/SKILL.md" || fail "project_owned 에서 뺀 ticket-review 가 다시 들여지지 않음"
+grep -q 'overwrote local edits: ticket-review' <<<"$out" || fail "project_owned 에서 뺀 ticket-review 를 덮어쓴 안내가 없음: $out"
+[[ "$(jq -c '.project_owned' "$M")" == '["implement","pr"]' && "$(jq -r '.skills | length' "$M")" == 9 ]] || fail "project_owned 해제가 매니페스트에 반영되지 않음: $(jq -c '{project_owned, skills}' "$M")"
+# upstream 이름(code-review)으로 적어도 저장소 이름(ticket-review)으로 읽는다 — 그대로 두면 skip 뒤 "not in this kit's skill set" 으로 지워졌다
+jq '.project_owned += ["code-review"]' "$M" > "$M.tmp" && mv "$M.tmp" "$M"
+echo 'local again' >> "$W/.agents/skills/ticket-review/SKILL.md"
+out="$(sync_run)" || fail "project_owned=code-review 동기화 실패: $out"
+grep -q 'local again' "$W/.agents/skills/ticket-review/SKILL.md" && [[ -d "$W/.agents/skills/ticket-review" ]] || fail "project_owned 의 code-review 가 ticket-review 로 읽히지 않음: $out"
+[[ "$(jq -c '.project_owned' "$M")" == '["implement","pr","ticket-review"]' ]] || fail "매니페스트 project_owned 가 저장소 이름으로 정규화되지 않음: $(jq -c .project_owned "$M")"
+# 매니페스트 commit 을 받지 못하면(이력 재작성) 판정할 수 없다고 알린다 — 조용히 덮어쓰지 않는다
+jq '.project_owned = ["implement","pr"] | .commit = "0000000000000000000000000000000000000000"' "$M" > "$M.tmp" && mv "$M.tmp" "$M"
+out="$(sync_run)" || fail "모르는 commit 으로 동기화 실패: $out"
+grep -q 'could not compare with the previous sync' <<<"$out" && grep -q '0000000' <<<"$out" || fail "비교 불가 안내가 없음: $out"
+! grep -q 'overwrote local edits' <<<"$out" || fail "비교하지 못했는데 로컬 수정이라고 알림: $out"
+echo "ok  매니페스트 project_owned · 덮어쓴 로컬 수정 안내(#20)"
+
 # 0.6 이하 설치본의 동기화: 매니페스트가 .claude/skills/.mattpocock.json 에 있고 스킬이 실제 디렉터리로 커밋돼 있다
 # → --check 는 옛 매니페스트를 읽어 kept 를 알리고(바꾸지 않음), 동기화는 git mv 로 옮기고 링크·새 매니페스트를 둔다
 W6="$T/sync06"; mkdir -p "$W6/.claude/skills"; git -C "$W6" init -q -b main

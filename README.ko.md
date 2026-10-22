@@ -125,7 +125,7 @@ Claude Code는 새 워크트리의 신뢰를 메인 체크아웃 경로로 판�
 | workflow | `grill-with-docs`, `to-spec`, `to-tickets`, `retro`와 `grilling`, `domain-modeling`, `writing-for-agents` | 꺼짐. `--workflow-skills` 또는 체크리스트. 지난 설치가 들였으면 유지 |
 | kept | 지난 설치(0.5 이하는 26개 전부)가 두 묶음 밖에 놓은 것 | 유지·동기화하고 새 설치에는 들이지 않는다. `--prune-skills`로 지운다 |
 
-세 묶음은 매니페스트 `.agents/skills/.mattpocock.json`에 기록된다. 손으로 지운 스킬은 다시 들이지 않고, upstream에서 사라진 스킬은 그대로 둔다. 나머지 upstream 스킬은 플러그인(`claude plugin install mattpocock-skills@claude-plugins-official`)으로 쓴다.
+세 묶음은 매니페스트 `.agents/skills/.mattpocock.json`에 기록된다. 손으로 지운 스킬은 다시 들이지 않고, upstream에서 사라진 스킬은 그대로 둔다. 매니페스트의 `project_owned`는 저장소가 손으로 고쳐 쓰는 스킬 목록이다(기본 `implement`·`pr`). 들인 스킬의 이름(예: `ticket-review`)을 거기 더하면 동기화가 그 디렉터리를 건드리지 않고 `project-owned (update by hand)`에 함께 보여 준다. 그 밖의 들인 스킬은 덮어쓰되, 지난 동기화의 upstream 사본과 달랐으면(커밋된 수정 포함) 요약에 `overwrote local edits: <이름>`을 내어 git에서 되돌리고 `project_owned`에 적을 수 있게 한다. 나머지 upstream 스킬은 플러그인(`claude plugin install mattpocock-skills@claude-plugins-official`)으로 쓴다.
 
 설치기는 바꾸기 전에 같은 스킬이 다른 경로로 이미 있는지 본다(`bash scripts/sync-mattpocock-skills.sh --check`로 따로 돌릴 수 있다):
 
