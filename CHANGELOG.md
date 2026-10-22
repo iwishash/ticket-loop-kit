@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.9.11 — 2026-10-22
+
+이슈 트리아지에서 ready-for-agent로 분류한 작은 결함 셋(#5 #4 #6)을 고쳤다. 저장소에 CI가 없어 PR에 체크가 붙지 않던 것도 이번에 넣었다. 루프 판정에 영향을 주는 변경은 없다.
+
+- **CI(#13):** `.github/workflows/smoke.yml` — PR과 main push에서 `bash tests/smoke.sh`를 돌린다. GitHub 러너는 SIGPIPE를 무시한 채로 단계를 시작하고 bash는 시작 때 무시된 신호를 trap할 수 없어 루프의 SIGPIPE 멈춤 검사가 종료 코드 0으로 실패했다. 워크플로가 python3로 SIGPIPE 처리를 기본값으로 되돌린 뒤 bash를 exec한다.
+- **`implement` 템플릿 주석(#5):** 머리 주석의 `__PLACEHOLDERS__`라는 낱말이 `setup-ticket-loop` 5절의 `grep -rn '__[A-Z_]*__' …` 검사에 걸려, 자리표를 다 채운 설치본에서도 한 줄이 늘 남았다. "filled in the placeholders"로 바꿨다(검사가 옳고 템플릿이 틀린 것이라 정규식은 그대로). 스모크: 첫 설치본에서 `setup-ticket-loop` 스킬의 자리표 표에 적힌 이름을 모두 임의 값으로 채운 뒤 5절 검사를 그대로 돌려 결과가 비어야 통과한다. 이미 설치된 저장소: `implement` 스킬은 프로젝트 소유라 키트를 올려도 주석은 바뀌지 않는다. 5절 검사에 그 줄만 남으면 낱말을 손으로 고치면 된다.
+- **`init` 기본값(#4):** `--backend`/`--agent` 없이 돌면 기존 `.ticket-loop/loop.env`를 무시하고 orca/claude를 기본값으로 잡아, tmux 설치본에 키트를 올릴 때마다 Orca 등록 실패 경고와 Orca 안내가 나왔다. 이제 플래그가 없을 때의 기본값은 `loop.env`의 `BACKEND`·`AGENT` → 없으면 orca/claude이고, `--yes`의 값과 대화형 선택의 미리 골라진 항목 둘 다에 적용한다. 명시한 플래그는 그대로 이기고 값이 다를 때만 전처럼 "Keeping …" 경고가 난다. `loop.env`의 값이 모르는 이름이거나 쓸 수 없는 백엔드면 `Ignoring BACKEND=… ; defaulting to orca.` 한 줄을 내고 기본값으로 간다. 배너에 `Backend: tmux (from .ticket-loop/loop.env)`처럼 출처를 표시한다. 스모크: tmux 설치본 `init --yes`(가짜 `ORCA_CLI` 호출 없음·Orca 안내 없음·"Keeping" 없음), `--backend orca`가 이김, `AGENT=codex` 기본, `loop.env` 없음, 모르는 값.
+- **진행 로그(#6):** 워커가 `git fetch origin && git checkout -b issue-N-<slug> origin/<base>`를 했을 때 기본 브랜치가 그 사이 앞서 있었으면, 그 사이 병합된 남의 커밋이 `PROG_HEAD..HEAD` 범위에 들어 워커 커밋처럼 `commit` 줄로 찍혔다(판정에는 영향 없음). `progress_check`는 `origin/<BASE_BRANCH>`에서 닿는 커밋을 빼고(`--not`), HEAD가 기본 브랜치 안에서만 옮겨 갔으면 `#N: base moved to <sha>` 한 줄을 찍는다. 범위가 비어 HEAD 하나를 찍던 대체 경로도 이때는 찍지 않는다. 원격 추적 ref가 없으면 전과 글자까지 같다. 루프가 fetch를 더 하지는 않는다. 스모크: bare origin + 클론으로 "base A → origin/main이 두 커밋 앞섬 → 워커가 거기서 브랜치 → D 커밋 → amend"에서 `base moved to` 한 줄과 `commit D` 한 줄만 나오는지 본다.
+- 부록 D·PDF 재빌드.
+
 ## 0.9.10 — 2026-10-22
 
 문서만 바뀌었다. 0.9.9의 묶음 검증은 실패하면 원인 병합을 찾으려고 `POST_MERGE_RETRY_CMD`를 지난 커밋에서 돌린다. 그 사이 의존성이 바뀌었으면 재실행 명령이 먼저 설치해야 하는데, `/setup-ticket-loop`가 따라 쓰는 예시 줄은 스크립트만 불렀다.
