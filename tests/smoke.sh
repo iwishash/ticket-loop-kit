@@ -1138,6 +1138,18 @@ for want in $'12\n**ticket-loop 무인 수습 — 이어 감**' '- 멈춘 이유
 done
 ! grep -qF "$M/home" <<<"$out" || fail "수습 이어 감 코멘트에 홈 경로가 그대로 실림: $out"
 out="$(slack_text)"; [[ "$out" == ":recycle: *Triage fixed it — loop continues* · o/r · "*$'\n'"$L/12|#12>: 기대값을 새 열에 맞췄다 (fix PR $L/131|#131> merged)" ]] || fail "수습 이어 감 Slack(아이콘·멘션 없음): $out"
+# #10 사용량 한도 멈춤: 종류 usage_limit 가 멈춤 기록(manual — 수습 없이 멈춤)에 남고, Slack 제목에 "worker hit the usage limit", 본문·GitHub 코멘트·
+# 데스크톱 알림에 사유(그 줄·재설정 문구)가 worker_no_pr 과 같은 길로 실린다
+UL_REASON="#12: worker hit the usage limit: You've hit the usage limit — Try again at 15:00. No triage (it would hit the same limit) — rerun the loop after the limit resets. The issue-12 worktree is kept in Orca."
+rc="$(stop_case ok 'STOP_KIND=usage_limit; die "'"$UL_REASON"'"')"; rec="$(stops)"
+[[ "$rc" == 1 && "$(cat "$M/rec")" == "stopped|$UL_REASON" ]] || fail "usage_limit: 종료 코드·티켓 기록(rc $rc): $(cat "$M/rec")"
+out="$(slack_text)"
+[[ "$out" == ":octagonal_sign: *Ticket loop stopped — worker hit the usage limit* · o/r · "* ]] && grep -qF "<@U1> $L/12|#12>: worker hit the usage limit: You've hit the usage limit — Try again at 15:00." <<<"$out" \
+  || fail "usage_limit: Slack 제목·본문: $out"
+[[ "$(jq -rs '[.[] | select(.cmd == "osascript")][0].args[-2]' "$M/calls.jsonl")" == "Ticket loop stopped — worker hit the usage limit" ]] || fail "usage_limit: 데스크톱 알림 제목"
+grep -qF $'12\n**ticket-loop 중단** — #12: worker hit the usage limit: You\'ve hit the usage limit — Try again at 15:00.' <<<"$(gh_comment)" || fail "usage_limit: GitHub 코멘트: $(gh_comment)"
+[[ "$(grep -c . <<<"$rec")" == 1 ]] && jq -e --arg r "$UL_REASON" '.kind == "usage_limit" and .mode == "manual" and .issue == 12 and .reason == $r' "$rec" >/dev/null || fail "usage_limit: 멈춤 기록: $(cat "$rec")"
+rc="$(stop_case die 'STOP_KIND=worker_no_pr')"; grep -qF ':octagonal_sign: *Ticket loop stopped* · o/r' <<<"$(slack_text)" || fail "worker_no_pr 제목이 바뀜: $(slack_text)"
 # 오래 기다리는 중(bg_wait)에 루프 pid 에만 온 신호도 바로 처리하고 기다리던 자식을 끝낸다. 포그라운드 자식이면 bash 가 trap 을 미뤄
 # PR 대기 내내 먹히지 않았다(0.8.8 실측: 더미 저장소·cmux 에서 SIGHUP 이 2분 뒤 처리). bg_wait 는 종료 코드를 돌려주고 set +e 로 돈다
 rm -rf "$M/calls.jsonl" "$M/rec" "$M/lock"; : > "$M/calls.jsonl"; : > "$M/loop.log"
@@ -1254,8 +1266,9 @@ sed -n '/^# ----- 알림 · 멈춤 보고 -----/,/^# ----- 알림 · 멈춤 보�
 sed -n '/^# ---------- 무인 수습 ----------/,/^# ---------- 티켓 기록 · 스펙 리포트 ----------/p' "$KIT/files/scripts/ticket-loop.sh" >> "$TG/fn.sh"
 sed -n '/^idle_wait_ms() /p; /^GH_TRANSIENT_RE=/p; /^merge_pr() {/,/^}/p' "$KIT/files/scripts/ticket-loop.sh" >> "$TG/fn.sh"
 sed -n '/^session_active_recently() {/,/^}/p; /^claude_project_dir() /p' "$KIT/files/scripts/ticket-loop.sh" >> "$TG/fn.sh"   # wait_for_verdict 의 idle 가드(#11)
+sed -n '/^# ----- 화면 분류 -----/,/^# ----- 화면 분류 끝 -----/p' "$KIT/files/scripts/ticket-loop.sh" >> "$TG/fn.sh"   # 사용량 한도·확인 창(#10)
 grep -q '^triage() {' "$TG/fn.sh" && grep -q '^wait_for_verdict() {' "$TG/fn.sh" && grep -q '^idle_wait_ms() ' "$TG/fn.sh" && grep -q '^merge_pr() {' "$TG/fn.sh" \
-  && grep -q '^session_active_recently() {' "$TG/fn.sh" && grep -q '^claude_project_dir() ' "$TG/fn.sh" \
+  && grep -q '^session_active_recently() {' "$TG/fn.sh" && grep -q '^claude_project_dir() ' "$TG/fn.sh" && grep -q '^screen_kind() {' "$TG/fn.sh" \
   || fail "무인 수습 블록을 찾지 못함"
 for b in curl osascript; do cp "$M/bin/$b" "$TG/bin/$b"; done
 cat > "$TG/bin/gh" <<'EOF'
@@ -1278,7 +1291,8 @@ PROGRESS_SEC=0; IDLE_WAIT_MS=1; STARTUP_GRACE_SEC=0; IDLE_RECHECK_SEC=0; IDLE_ST
 log() { case "$1" in title|step|ok|warn|err) shift ;; esac; printf '[2026-10-16 15:43:17] %s\n' "$*" >> "$LOG_FILE"; }
 dim_lines() { sed 's/^/  /' >> "$LOG_FILE"; }
 record_ticket() { :; }
-terminal_idle() { return 0; }; terminal_tail() { echo same-screen; }
+terminal_idle() { return 0; }; terminal_tail() { printf '%s\n' "${SCREEN:-same-screen}"; }
+USAGE_LIMIT_REGEX="${USAGE_LIMIT_REGEX:-}"; PERMISSION_PROMPT_REGEX="${PERMISSION_PROMPT_REGEX:-}"; PROMPT_STALL_SEC=300
 ensure_agent_started() { echo "started $1 $2" >> ev; }
 backend_set_status() { echo "status $1 $2 ${4:-}" >> ev; }
 backend_worktree_remove() { echo "remove $1 $2" >> ev; }
@@ -1342,7 +1356,7 @@ tcase KIND=post_merge_failed VERDICT="$V_FIX" PR_VIEW_JSON="$PRV" AGAIN=ci_faile
 tcase KIND=post_merge_failed VERDICT="$V_FIX" PR_VIEW_JSON="$PRV" AGAIN=post_merge_failed TRIAGE_MAX=2
 [[ "$(o .a_rc)" == 1 && "$(o .a_note)" == " (triage already ran for this stop)" ]] || fail "같은 멈춤에 두 번: $(cat "$TG/repo/out.json")"
 # 5) 띄우지 않는 경우: LOOP_TRIAGE=0, 잠금 없음, 대상이 아닌 종류(사유에 덧붙일 말 없음, 기록·알림 없음), 기본 브랜치에 스킬 없음
-for env in LOOP_TRIAGE=0 LOCK=0 KIND=timeout; do
+for env in LOOP_TRIAGE=0 LOCK=0 KIND=timeout KIND=usage_limit; do   # usage_limit(#10): 수습 세션도 같은 한도에 걸린다 — 띄우지 않는다
   tcase KIND=post_merge_failed "$env" VERDICT="$V_FIX"
   [[ "$(o .rc)" == 1 && "$(o .note)" == "" && ! -d "$TG/repo/.ticket-loop/stops" && "$(ncurl)" == 0 && ! -e "$TG/repo/ev" ]] || fail "$env: 수습을 띄우면 안 됨: $(cat "$TG/repo/out.json")"
 done
@@ -1357,6 +1371,17 @@ tcase KIND=post_merge_failed TRIAGE_TIMEOUT_SEC=0
 tcase KIND=post_merge_failed SPAWN_FAIL=1 VERDICT="$V_FIX"
 [[ "$(o .rc)" == 1 && "$(o .note)" == " (triage session did not start — see the loop log)" ]] && grep -q 'triage session did not start — fake create failed' "$TG/repo/.ticket-loop/loop.log" \
   && [[ "$(ncurl)" == 1 && -z "$(tcalls)" ]] || fail "세션이 안 뜸: 원래 사유로 멈춰야 함(멈춤 보고는 die 가 한 번): $(cat "$TG/repo/out.json") / $(tcalls)"
+# 6b) #10: 수습 세션 자체가 사용량 한도에 걸리면(idle + 한도 문구 화면) strike 없이 "판정 없이 멈춤"이 아니라 usage_limit 로 끝낸다 — STOP_KIND 가
+#     usage_limit 이고 사유에 그 줄이 있다. 같은 화면이라도 USAGE_LIMIT_REGEX 가 비어 있으면(codex) 전처럼 idle 세 번
+LIMIT_SCREEN=$'│ > /loop-triage …\n│\n│  You\'ve reached your Fable limit · resets 3pm (Asia/Seoul)\n│'
+tcase KIND=ci_failed PR=34 SCREEN="$LIMIT_SCREEN" USAGE_LIMIT_REGEX='reached your .* limit|usage limit'
+[[ "$(o .rc)" == 1 && "$(o .kind)" == usage_limit && "$(o .note)" == " — triage: triage session hit the usage limit: You've reached your Fable limit · resets 3pm (Asia/Seoul) (session worktree $TG/repo/tw/"* \
+  && "$(o .result)" == "no verdict: triage session hit the usage limit: You've reached your Fable limit · resets 3pm (Asia/Seoul)" ]] \
+  && ! grep -q 'triage session idle, no verdict' "$TG/repo/.ticket-loop/loop.log" && grep -q 'triage: triage session hit the usage limit' "$TG/repo/.ticket-loop/loop.log" \
+  && grep -q '^status wt-.* todo 무인 수습: 판정 없이 끝남' "$TG/repo/ev" || fail "수습 세션의 사용량 한도: $(cat "$TG/repo/out.json") / $(cat "$TG/repo/.ticket-loop/loop.log")"
+tcase KIND=ci_failed PR=34 SCREEN="$LIMIT_SCREEN"
+[[ "$(o .rc)" == 1 && "$(o .kind)" == ci_failed && "$(o .result)" == "no verdict: the session stopped without a verdict" ]] && grep -q 'triage session idle, no verdict (3/3)' "$TG/repo/.ticket-loop/loop.log" \
+  || fail "USAGE_LIMIT_REGEX 가 비었는데 한도로 읽음: $(cat "$TG/repo/out.json")"
 # 7) 수정 PR 이 CI 실패·기본 브랜치가 아닌 곳으로 감·병합 실패 → 멈춘다(병합하지 않는다)
 tcase KIND=post_merge_failed VERDICT="$V_FIX" PR_VIEW_JSON="$PRV" CI_PASS=0
 [[ "$(o .rc)" == 1 && "$(o .note)" == " — triage (project): 기대값을 새 열에 맞췄다 (fix PR #131: CI failed — gh pr checks 131)" && "$(tcalls)" == "pr view,label create,pr edit" ]] || fail "수정 PR CI 실패: $(o .note) / $(tcalls)"
@@ -1448,6 +1473,8 @@ for f in wait_for_pr idle_fp_add bg_wait pr_settle repair session_active_recentl
 done
 sed -n '/^idle_fp_count() /p; /^ci_run_sec() {/,/^}/p; /^claude_project_dir() /p' "$KIT/files/scripts/ticket-loop.sh" >> "$W/fn.sh"
 grep -q '^idle_fp_count() ' "$W/fn.sh" && grep -q '^ci_run_sec() ' "$W/fn.sh" && grep -q '^claude_project_dir() ' "$W/fn.sh" || fail "idle_fp_count·ci_run_sec·claude_project_dir 를 찾지 못함"
+sed -n '/^# ----- 화면 분류 -----/,/^# ----- 화면 분류 끝 -----/p' "$KIT/files/scripts/ticket-loop.sh" >> "$W/fn.sh"   # 세 대기가 부르는 screen_check(#10)
+grep -q '^screen_kind() {' "$W/fn.sh" && grep -q '^screen_check() {' "$W/fn.sh" && grep -q '^screen_stop_check() {' "$W/fn.sh" || fail "화면 분류 블록을 찾지 못함"
 # $1 open_pr_for 가 PR 을 돌려줄 호출 번호들, $2 PR 생성 시각(지금 기준 초, 빈 값이면 못 읽음), $3 terminal_idle 이 "일하는 중"(1)을 돌려줄
 # 호출 번호들, $4 화면이 바뀌는 terminal_tail 호출 번호들 → "종료 코드|PR|오판 수"
 idlefp_case() {
@@ -1727,6 +1754,113 @@ out="$(guard_wait_case verdict claude 3)"; [[ "$out" == "1|3|1" ]] || fail "wait
 out="$(guard_wait_case verdict codex 3)"; [[ "$out" == "1|3|0" ]] || fail "wait_for_verdict: AGENT=codex 인데 세션 기록을 봄: $out (기대 1|3|0)"
 echo "ok  세션 기록이 방금 갱신된 idle 은 strike 가 아님(#11 — PR·수리·수습 대기, subagents/ 포함, 로그는 연속 idle 에 한 번)"
 
+# #10: strike 를 세기 전에 워커 화면을 분류한다(screen_kind — 세션 기록 가드 뒤). 사용량 한도 문구(USAGE_LIMIT_REGEX)는 idle 이면 strike 없이
+# usage_limit 로 멈추고 사유에 그 줄(+ 재설정 시각 문구)이 들어간다. 권한 확인 창 문구(PERMISSION_PROMPT_REGEX)가 든 화면이 PROMPT_STALL_SEC 동안
+# 글자 그대로면 idle 신호가 없어도(타임아웃으로 돌아온 바퀴) worker_no_pr 로 멈춘다 — 짧게 머물다 화면이 바뀌면 다시 센다. 빈 정규식(codex)은
+# 감지하지 않아 전처럼 idle strike 다. 시계는 가짜다(date +%s — terminal_idle 한 번에 60초).
+# 2026-10 실측: rental-portal #262(한도 문구를 idle 로 세다 수습 세션까지 같은 한도에 걸림), #3(확인 창에 27분, 로그 없음)
+SC="$W/sc"; rm -rf "$SC"; mkdir -p "$SC"
+LIMIT_A=$'│ > /implement 7\n│  You\'ve reached your Fable limit · resets 3pm (Asia/Seoul)'
+LIMIT_B=$'│  Claude usage limit reached.\n│  Try again at 15:00 (Asia/Seoul)\n│ ❯'
+PROMPT_S=$'This shell -c script runs rm and could not be checked\n Do you want to proceed?\n ❯ 1. Yes\n   2. No'
+WORK_S=$'⠋ Running tests… (2m 10s · ↓ 1.2k tokens)'
+# $1 terminal_idle 이 idle(0)을 돌려줄 호출 번호들(all 이면 전부, 빈 값이면 전부 타임아웃), $2 화면, $3 이 호출 번호부터 $4 화면으로 바뀜(빈 값이면 안 바뀜),
+# $5 프리셋(claude: 두 정규식 기본값, codex: 빈 값), $6 PROMPT_STALL_SEC → "종료 코드|종류|사유|경고 줄 수|오판 수"
+screen_case() {
+  (cd "$W" && SC="$SC" IDLE_AT="$1" SCREEN_A="$2" SWITCH_AT="${3:-}" SCREEN_B="${4:-}" MODE="${5:-claude}" STALL="${6:-300}" bash -c '
+    set -euo pipefail
+    echo 0 > "$SC/clock"; echo 0 > "$SC/icnt"; : > "$SC/warns"; : > "$SC/stop"
+    source fn.sh
+    date() { if [[ "${1:-}" == +%s ]]; then echo $(( 1700000000 + $(cat "$SC/clock") )); else command date "$@"; fi; }
+    log() { [[ "${1:-}" != warn ]] || echo x >> "$SC/warns"; }; idle_wait_ms() { echo 1; }
+    terminal_idle() { local c; c=$(( $(cat "$SC/icnt") + 1 )); echo "$c" > "$SC/icnt"; echo $(( $(cat "$SC/clock") + 60 )) > "$SC/clock"
+      if [[ "$IDLE_AT" == all || " $IDLE_AT " == *" $c "* ]]; then return 0; fi; return 1; }
+    terminal_tail() { local c; c="$(cat "$SC/icnt")"; if [[ -n "$SWITCH_AT" && $c -ge $SWITCH_AT ]]; then printf "%s\n" "$SCREEN_B"; else printf "%s\n" "$SCREEN_A"; fi; }
+    open_pr_for() { :; }; pr_created_epoch() { :; }; pr_settle() { :; }
+    if [[ "$MODE" == claude ]]; then USAGE_LIMIT_REGEX="reached your .* limit|usage limit"; PERMISSION_PROMPT_REGEX="Do you want to proceed\\?"; else USAGE_LIMIT_REGEX=""; PERMISSION_PROMPT_REGEX=""; fi
+    AGENT="$MODE"; WT_PATH=""; PROGRESS_SEC=0; IDLE_WAIT_MS=1; STARTUP_GRACE_SEC=0; IDLE_RECHECK_SEC=0; IDLE_STRIKES=3; SESSION_LOG_FRESH_SEC=30; PROMPT_STALL_SEC="$STALL"
+    IDLE_FP_FILE="$(mktemp)"; WAIT_STOP_FILE="$SC/stop"; rc=0
+    bg_wait wait_for_pr 7 h $(( $(date +%s) + 660 )) > out || rc=$?
+    wait_stop_read
+    echo "$rc|$WAIT_STOP_KIND|$WAIT_STOP_REASON|$(grep -c x "$SC/warns" || true)|$(idle_fp_count)"; rm -f "$IDLE_FP_FILE"')
+}
+out="$(screen_case all "$LIMIT_A")"
+[[ "$out" == "1|usage_limit|worker hit the usage limit: You've reached your Fable limit · resets 3pm (Asia/Seoul)|0|0" ]] || fail "idle + 한도 문구: strike 없이 usage_limit 이어야: $out"
+out="$(screen_case all "$LIMIT_B")"
+[[ "$out" == "1|usage_limit|worker hit the usage limit: Claude usage limit reached. — Try again at 15:00 (Asia/Seoul)|0|0" ]] || fail "한도 문구 + 다른 줄의 재설정 시각: 사유 뒤에 붙어야: $out"
+out="$(screen_case all "$LIMIT_A" "" "" codex)"; [[ "$out" == "1|||3|0" ]] || fail "USAGE_LIMIT_REGEX 가 비면(codex) 전처럼 idle strike 여야: $out (기대 1|||3|0)"
+out="$(screen_case "" "$LIMIT_A")"; [[ "$out" == "2|||0|0" ]] || fail "한도 문구는 idle 로 확인된 화면에서만(타임아웃 바퀴에서는 분류하지 않음): $out (기대 2|||0|0)"
+out="$(screen_case "" "$PROMPT_S")"
+[[ "$out" == "1|worker_no_pr|worker is waiting at a confirmation prompt: Do you want to proceed? (screen unchanged for 300s)|0|0" ]] || fail "idle 신호 없이 확인 창에 PROMPT_STALL_SEC 머묾: worker_no_pr 이어야: $out"
+out="$(screen_case "" "$PROMPT_S" 4 "$WORK_S")"; [[ "$out" == "2|||0|0" ]] || fail "확인 창이 PROMPT_STALL_SEC 보다 짧게 머물다 화면이 바뀌면 멈추면 안 됨: $out (기대 2|||0|0)"
+out="$(screen_case "" "$PROMPT_S" 4 "$WORK_S" claude 120)"; [[ "$out" == "1|worker_no_pr|"*"(screen unchanged for 120s)|0|0" ]] || fail "PROMPT_STALL_SEC 를 줄이면 그 안에 멈춰야(체류 시간이 상수를 따름): $out"
+out="$(screen_case all "$PROMPT_S")"; [[ "$out" == "1|||3|0" ]] || fail "idle 신호가 살아 있으면 strike 세 번이 먼저 찬다(전과 같은 경로): $out (기대 1|||3|0)"
+out="$(screen_case all "$PROMPT_S" "" "" claude 60)"; [[ "$out" == "1|worker_no_pr|"*"(screen unchanged for 60s)|1|0" ]] || fail "idle 바퀴에서도 체류 시간이 차면 확인 창으로 멈춰야: $out"
+out="$(screen_case "" "$PROMPT_S" "" "" codex)"; [[ "$out" == "2|||0|0" ]] || fail "PERMISSION_PROMPT_REGEX 가 비면 확인 창을 보지 않아야: $out (기대 2|||0|0)"
+out="$(screen_case "" "$WORK_S")"; [[ "$out" == "2|||0|0" ]] || fail "일하는 화면은 아무것도 아님: $out (기대 2|||0|0)"
+# 수리 대기(repair)·수습 대기(wait_for_verdict)도 같은 분류 — $1 어느 대기, $2 idle 호출 번호들(all | 빈 값), $3 화면 → "종료 코드|종류|사유|경고 줄 수"
+screen_wait_case() {
+  (cd "$W" && SC="$SC" WHICH="$1" IDLE_AT="$2" SCREEN_A="$3" bash -c '
+    set -euo pipefail
+    echo 0 > "$SC/clock"; echo 0 > "$SC/icnt"; : > "$SC/warns"; : > "$SC/stop"
+    source fn.sh
+    date() { if [[ "${1:-}" == +%s ]]; then echo $(( 1700000000 + $(cat "$SC/clock") )); else command date "$@"; fi; }
+    log() { [[ "${1:-}" != warn ]] || echo x >> "$SC/warns"; }
+    idle_wait_ms() { echo 1; }; send_prompt() { :; }; progress_check() { :; }; progress_reset() { :; }; progress_dirty() { :; }
+    terminal_idle() { local c; c=$(( $(cat "$SC/icnt") + 1 )); echo "$c" > "$SC/icnt"; echo $(( $(cat "$SC/clock") + 60 )) > "$SC/clock"
+      if [[ "$IDLE_AT" == all || " $IDLE_AT " == *" $c "* ]]; then return 0; fi; return 1; }
+    terminal_tail() { printf "%s\n" "$SCREEN_A"; }; pr_head_sha() { echo aaa1111; }; verdict_written() { return 1; }; die() { echo "die $*"; exit 9; }
+    USAGE_LIMIT_REGEX="reached your .* limit|usage limit"; PERMISSION_PROMPT_REGEX="Do you want to proceed\\?"; PROMPT_STALL_SEC=300
+    AGENT=claude; WT_PATH=""; PROGRESS_SEC=0; REPAIR_SETTLE_SEC=0; CUR_N=7; BACKEND_NAME=x; STARTUP_GRACE_SEC=0; IDLE_RECHECK_SEC=0; IDLE_STRIKES=3; SESSION_LOG_FRESH_SEC=30
+    WAIT_STOP_FILE="$SC/stop"; rc=0
+    case "$WHICH" in
+      repair) repair h "고쳐라" $(( $(date +%s) + 660 )) 77 || rc=$? ;;
+      verdict) bg_wait wait_for_verdict 7 h "$SC/no-verdict.json" $(( $(date +%s) + 660 )) /wt/x || rc=$? ;;
+    esac
+    wait_stop_read
+    echo "$rc|$WAIT_STOP_KIND|$WAIT_STOP_REASON|$(grep -c x "$SC/warns" || true)"')
+}
+out="$(screen_wait_case repair all "$LIMIT_A")"; [[ "$out" == "0|usage_limit|worker hit the usage limit: You've reached your Fable limit · resets 3pm (Asia/Seoul)|0" ]] || fail "repair: idle + 한도 문구: $out"
+out="$(screen_wait_case repair "" "$PROMPT_S")"; [[ "$out" == "0|worker_no_pr|worker is waiting at a confirmation prompt: Do you want to proceed? (screen unchanged for 300s)|0" ]] || fail "repair: idle 없이 확인 창: $out"
+out="$(screen_wait_case repair all "$WORK_S")"; [[ "$out" == "0|||3" ]] || fail "repair: 보통 화면이면 전처럼 strike: $out (기대 0|||3)"
+out="$(screen_wait_case verdict all "$LIMIT_A")"; [[ "$out" == "1|usage_limit|triage session hit the usage limit: You've reached your Fable limit · resets 3pm (Asia/Seoul)|0" ]] || fail "wait_for_verdict: idle + 한도 문구: $out"
+out="$(screen_wait_case verdict "" "$PROMPT_S")"; [[ "$out" == "1|worker_no_pr|triage session is waiting at a confirmation prompt: Do you want to proceed? (screen unchanged for 300s)|0" ]] || fail "wait_for_verdict: idle 없이 확인 창: $out"
+out="$(screen_wait_case verdict all "$WORK_S")"; [[ "$out" == "1|||3" ]] || fail "wait_for_verdict: 보통 화면이면 전처럼 strike: $out (기대 1|||3)"
+# 호출부(screen_stop_check): 사용량 한도는 수습 없이 usage_limit 로 die, 확인 창은 worker_no_pr 수습(진단만) 뒤 die, 분류가 없으면 0 으로 돌아와
+# 전처럼 간다. $1 WAIT_STOP_FILE 내용(종류<탭>사유, 빈 값이면 없음), $2 맥락 → 출력 줄들
+stopchk_case() {
+  (cd "$W" && SC="$SC" STOPC="$1" CTX="${2:-}" bash -c '
+    set -euo pipefail
+    source fn.sh
+    printf "%s" "$STOPC" > "$SC/stop"; WAIT_STOP_FILE="$SC/stop"
+    BRANCH_PREFIX=issue-; BACKEND_NAME=cmux; STOP_KIND=""; TRIAGE_NOTE=""
+    die() { echo "die|$STOP_KIND|$*"; exit 9; }
+    triage() { echo "triage|$1|$2"; TRIAGE_NOTE=" — triage (project): stuck on rm"; return 1; }
+    rc=0; screen_stop_check 7 "$CTX" || rc=$?; echo "through|$rc|$STOP_KIND"') || true
+}
+out="$(stopchk_case $'usage_limit\tworker hit the usage limit: You have hit the usage limit — Try again at 15:00')"
+[[ "$out" == "die|usage_limit|#7: worker hit the usage limit: You have hit the usage limit — Try again at 15:00. No triage (it would hit the same limit) — rerun the loop after the limit resets. The issue-7 worktree is kept in cmux." ]] \
+  || fail "screen_stop_check: 사용량 한도는 수습 없이 usage_limit 로 멈춰야: $out"
+out="$(stopchk_case $'worker_no_pr\tworker is waiting at a confirmation prompt: Do you want to proceed? (screen unchanged for 300s)' " while repairing PR #34")"
+[[ "$out" == $'triage|worker_no_pr|#7: worker is waiting at a confirmation prompt: Do you want to proceed? (screen unchanged for 300s) while repairing PR #34. The loop does not answer prompts — check the issue-7 worktree in cmux.\ndie|worker_no_pr|#7: worker is waiting at a confirmation prompt: Do you want to proceed? (screen unchanged for 300s) while repairing PR #34. The loop does not answer prompts — check the issue-7 worktree in cmux. — triage (project): stuck on rm' ]] \
+  || fail "screen_stop_check: 확인 창은 worker_no_pr 수습(진단만) 뒤 멈춰야: $out"
+out="$(stopchk_case "")"; [[ "$out" == "through|0|" ]] || fail "screen_stop_check: 분류가 없으면 전처럼 가야: $out"
+# 배선: 세 대기가 screen_check 를 idle 바퀴(세션 기록 가드 뒤)와 타임아웃 바퀴 양쪽에서 부르고, 호출부 세 곳(PR 없이 멈춤·충돌 수리·CI 수리)이
+# screen_stop_check 를 본다. 프리셋: claude 는 두 정규식 기본값, codex·그 외는 빈 값. 상수 PROMPT_STALL_SEC=300. 수습 대상 판정에 usage_limit 없음
+[[ "$(grep -c '! screen_check "${handle}" worker 1 || return' "$KIT/files/scripts/ticket-loop.sh")" == 2 && "$(grep -c '! screen_check "${handle}" worker 0 || return' "$KIT/files/scripts/ticket-loop.sh")" == 2 \
+  && "$(grep -c '! screen_check "$handle" "triage session" [01] || return 1' "$KIT/files/scripts/ticket-loop.sh")" == 2 ]] || fail "세 대기가 screen_check 를 idle·타임아웃 양쪽에서 부르지 않음"
+grep -q '^    screen_stop_check "${n}"   # 사용량 한도' <(sed -n '/^run_ticket() {/,/^}/p' "$KIT/files/scripts/ticket-loop.sh") \
+  && [[ "$(grep -c 'screen_stop_check "${n}" " while repairing PR #${pr}"' "$KIT/files/scripts/ticket-loop.sh")" == 2 ]] || fail "호출부 세 곳이 screen_stop_check 를 보지 않음"
+grep -qF 'USAGE_LIMIT_REGEX="${USAGE_LIMIT_REGEX:-reached your .* limit|usage limit}"' "$KIT/files/scripts/ticket-loop.sh" \
+  && grep -qF 'PERMISSION_PROMPT_REGEX="${PERMISSION_PROMPT_REGEX:-Do you want to proceed\?}"' "$KIT/files/scripts/ticket-loop.sh" \
+  && [[ "$(grep -cF 'USAGE_LIMIT_REGEX="${USAGE_LIMIT_REGEX:-}"' "$KIT/files/scripts/ticket-loop.sh")" == 2 && "$(grep -cF 'PERMISSION_PROMPT_REGEX="${PERMISSION_PROMPT_REGEX:-}"' "$KIT/files/scripts/ticket-loop.sh")" == 2 ]] \
+  && grep -q '^PROMPT_STALL_SEC=300 ' "$KIT/files/scripts/ticket-loop.sh" || fail "프리셋(claude 기본값, codex·그 외 빈 값)·PROMPT_STALL_SEC 상수가 다름"
+grep -q 'worker_no_pr) ;; \*) return 1 ;; esac' "$KIT/files/scripts/ticket-loop.sh" && ! grep -q 'usage_limit) resumable' "$KIT/files/scripts/ticket-loop.sh" || fail "usage_limit 가 수습 대상에 들어감"
+for f in README.md README.ko.md; do grep -q 'USAGE_LIMIT_REGEX' "$KIT/$f" && grep -q 'PERMISSION_PROMPT_REGEX' "$KIT/$f" && grep -q 'PROMPT_STALL_SEC' "$KIT/$f" || fail "$f 변수 목록에 화면 분류 정규식이 없음"; done
+grep -q '`usage_limit`' "$KIT/files/.agents/skills/loop-triage/SKILL.md" || fail "loop-triage 스킬 종류 표에 usage_limit 가 없음"
+! grep -q 'USAGE_LIMIT_REGEX\|PERMISSION_PROMPT_REGEX' "$KIT/files/.agents/skills/setup-ticket-loop/SKILL.md" || fail "setup-ticket-loop 결정 표에 화면 분류 정규식을 넣지 않기로 했다"
+echo "ok  strike 전 화면 분류(#10 — 사용량 한도는 수습 없이 usage_limit, 확인 창 PROMPT_STALL_SEC 체류는 idle 없이도 worker_no_pr, 빈 정규식은 전처럼)"
+
 # CI 수리(repair_ci): 수리 뒤 head 가 바뀌면 0(충돌·CI 확인부터 다시), 그대로면 CI 를 한 번 더 보고 통과면 0, 실패면 1(호출부가 멈춘다).
 # 2026-10-21 rental-portal #258: 러너 설치 경합으로 실패한 job 을 워커가 `gh run rerun --failed` 로만 다시 돌려 1분 뒤 통과했는데,
 # 0.9.4 까지는 head 가 그대로라 "no new commit was pushed after the repair" 로 멈췄다
@@ -1742,6 +1876,7 @@ rci_case() {  # $1 수리 뒤 head(수리 전은 aaa1111), $2 ci_passed 종료 �
     ci_passed() { [[ "$1" == 77 ]] || exit 8; n_ci=$((n_ci + 1)); return "$CRC"; }
     log() { [[ "$1" != warn ]] || warns=$((warns + 1)); }
     die() { echo "die $*"; exit 9; }
+    screen_stop_check() { [[ "$1" == 7 && "$2" == " while repairing PR #77" ]] || { echo "screen_stop_check args: $*"; exit 8; }; }
     source rci.sh
     rc=0; repair_ci 7 77 h $(( $(date +%s) + 60 )) || rc=$?
     echo "$rc|$n_ci|$warns|${phases% }"')
