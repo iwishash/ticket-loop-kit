@@ -1086,6 +1086,8 @@ ensure_agent_started() {
 # 워크트리를 만든 뒤 PR이 열리기까지(보통 수십 분) 루프 터미널에는 아무 줄도 없어 멈춘 것처럼 보였다 — 워커는 다른 창에서 일한다.
 # 그 사이 PROGRESS_SEC마다 워크트리를 git으로만 들여다본다(백엔드·에이전트와 무관하고 네트워크도 안 쓴다):
 #   브랜치가 바뀌면(워커가 issue-N → issue-N-<slug>로 옮김. 옮기지 않고 issue-N에 그대로 커밋해도 PR은 open_pr_for가 잡는다), 처음 파일이 수정되면, 새 커밋이 들어오면(제목 그대로, 오래된 것부터) 바로 한 줄.
+#   커밋 줄은 워커가 만든 것만 — origin/<BASE_BRANCH>에서 닿는 커밋은 뺀다. 워커가 더 새로운 기본 브랜치에서 브랜치를 따 HEAD가 기본 브랜치 안에서만
+#   옮겨 갔으면 "base moved to <sha>" 한 줄(그 사이 병합된 남의 커밋이 워커 커밋처럼 보이지 않게). 원격 추적 ref가 없으면 전처럼 범위의 커밋을 다 찍는다
 #   그 밖에는 커밋 안 된 변경 파일 목록이 지난 줄과 달라졌을 때만, HEARTBEAT_SEC에 한 번까지 "작업 중" 한 줄에 경과 시간과 파일(이름 셋까지)을
 #   적는다 — 이슈를 읽고 TDD로 도는 첫 수십 분은 커밋이 없어도 무엇을 만지는지 보인다. 같은 내용은 되풀이하지 않는다(변화가 없으면 조용하다).
 #   화면을 읽어 도구 호출을 뽑는 쪽은 에이전트마다 형식이 달라 쓰지 않는다
@@ -1108,7 +1110,7 @@ progress_dirty() {   # 커밋 안 된 변경 파일 경로(한 줄에 하나, �
 }
 
 progress_check() {   # $1 티켓 번호. 바뀐 것이 있으면 한 줄씩, 없으면 HEARTBEAT_SEC마다 한 줄
-  local n="$1" now head branch commits line files cnt names noted=0
+  local n="$1" now head base branch commits line files cnt names noted=0
   [[ -n "${PROG_WT:-}" && -d "$PROG_WT" ]] || return 0
   now="$(date +%s)"
   branch="$(git -C "$PROG_WT" rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
@@ -1117,10 +1119,18 @@ progress_check() {   # $1 티켓 번호. 바뀐 것이 있으면 한 줄씩, 없
   fi
   head="$(git -C "$PROG_WT" rev-parse HEAD 2>/dev/null || true)"
   if [[ -n "$head" && "$head" != "$PROG_HEAD" ]]; then
-    # 지난 HEAD 이후의 커밋들. HEAD가 뒤로 갔거나(amend·reset) 지난 값이 없으면 지금 커밋 하나만
-    commits="$(git -C "$PROG_WT" log --reverse --format='%h %s' "${PROG_HEAD:-$head}..${head}" 2>/dev/null || true)"
-    [[ -n "$commits" ]] || commits="$(git -C "$PROG_WT" log -1 --format='%h %s' "$head" 2>/dev/null || true)"
-    while IFS= read -r line; do [[ -z "$line" ]] || log step "#${n}: commit ${line}"; done <<<"$commits"
+    # 기본 브랜치의 원격 추적 ref. 워크트리는 메인 체크아웃과 ref를 공유하므로 워커의 git fetch가 갱신한 값을 그대로 쓴다(루프는 fetch하지 않는다).
+    # 없으면(로컬 전용 저장소 등) 빈 값 — 아래는 전과 같이 동작한다
+    base=""; [[ -z "${BASE_BRANCH:-}" ]] || base="$(git -C "$PROG_WT" rev-parse --verify -q "refs/remotes/origin/${BASE_BRANCH}" 2>/dev/null || true)"
+    if [[ -n "$base" ]] && git -C "$PROG_WT" merge-base --is-ancestor "$head" "$base" 2>/dev/null; then
+      # HEAD가 기본 브랜치 안에서만 옮겨 갔다(워커가 더 새로운 origin/<base>에서 브랜치를 땄다) — 그 사이 병합된 남의 커밋을 워커 커밋처럼 찍지 않는다
+      log step "#${n}: base moved to $(git -C "$PROG_WT" rev-parse --short "$head" 2>/dev/null || echo "${head:0:7}")"
+    else
+      # 지난 HEAD 이후의 커밋들 — 기본 브랜치에서 닿는 커밋은 뺀다. HEAD가 뒤로 갔거나(amend·reset) 지난 값이 없으면 지금 커밋 하나만
+      commits="$(git -C "$PROG_WT" log --reverse --format='%h %s' "${PROG_HEAD:-$head}..${head}" ${base:+--not "$base"} 2>/dev/null || true)"
+      [[ -n "$commits" ]] || commits="$(git -C "$PROG_WT" log -1 --format='%h %s' "$head" 2>/dev/null || true)"
+      while IFS= read -r line; do [[ -z "$line" ]] || log step "#${n}: commit ${line}"; done <<<"$commits"
+    fi
     PROG_HEAD="$head"; noted=1
   fi
   files="$(progress_dirty)"
