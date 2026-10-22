@@ -1095,7 +1095,9 @@ git -C "$TG/repo" push -q origin "$(git -C "$TG/repo" -c user.name=t -c user.ema
 sed -n '/^# ----- 알림 · 멈춤 보고 -----/,/^# ----- 알림 · 멈춤 보고 끝 -----/p' "$KIT/files/scripts/ticket-loop.sh" > "$TG/fn.sh"
 sed -n '/^# ---------- 무인 수습 ----------/,/^# ---------- 티켓 기록 · 스펙 리포트 ----------/p' "$KIT/files/scripts/ticket-loop.sh" >> "$TG/fn.sh"
 sed -n '/^idle_wait_ms() /p; /^GH_TRANSIENT_RE=/p; /^merge_pr() {/,/^}/p' "$KIT/files/scripts/ticket-loop.sh" >> "$TG/fn.sh"
+sed -n '/^session_active_recently() {/,/^}/p; /^claude_project_dir() /p' "$KIT/files/scripts/ticket-loop.sh" >> "$TG/fn.sh"   # wait_for_verdict 의 idle 가드(#11)
 grep -q '^triage() {' "$TG/fn.sh" && grep -q '^wait_for_verdict() {' "$TG/fn.sh" && grep -q '^idle_wait_ms() ' "$TG/fn.sh" && grep -q '^merge_pr() {' "$TG/fn.sh" \
+  && grep -q '^session_active_recently() {' "$TG/fn.sh" && grep -q '^claude_project_dir() ' "$TG/fn.sh" \
   || fail "무인 수습 블록을 찾지 못함"
 for b in curl osascript; do cp "$M/bin/$b" "$TG/bin/$b"; done
 cat > "$TG/bin/gh" <<'EOF'
@@ -1282,12 +1284,12 @@ echo "ok  무인 수습 연결(네 자리·수습 뒤 검증 로그 이름)"
 # idle 뒤 다시 보니 PR 이 열려 있어도 PR 이 idle 보다 먼저 열렸으면 일을 마친 워커(세지 않음), 나중이면 오판. PR 없이 센 idle 뒤에
 # 워커가 다시 일하면(화면이 바뀜·idle 이 풀림·PR 을 엶) 그 idle 들이 오판이고, idle 세 번으로 멈추면 그 연속 idle 은 오판이 아니다
 W="$T/idlefp"; mkdir -p "$W"
-for f in wait_for_pr idle_fp_add bg_wait pr_settle repair; do
+for f in wait_for_pr idle_fp_add bg_wait pr_settle repair session_active_recently wait_for_verdict; do
   sed -n "/^${f}() {/,/^}/p" "$KIT/files/scripts/ticket-loop.sh" >> "$W/fn.sh"
   grep -q "^${f}() " "$W/fn.sh" || fail "${f} 를 찾지 못함"
 done
-sed -n '/^idle_fp_count() /p; /^ci_run_sec() {/,/^}/p' "$KIT/files/scripts/ticket-loop.sh" >> "$W/fn.sh"
-grep -q '^idle_fp_count() ' "$W/fn.sh" && grep -q '^ci_run_sec() ' "$W/fn.sh" || fail "idle_fp_count·ci_run_sec 를 찾지 못함"
+sed -n '/^idle_fp_count() /p; /^ci_run_sec() {/,/^}/p; /^claude_project_dir() /p' "$KIT/files/scripts/ticket-loop.sh" >> "$W/fn.sh"
+grep -q '^idle_fp_count() ' "$W/fn.sh" && grep -q '^ci_run_sec() ' "$W/fn.sh" && grep -q '^claude_project_dir() ' "$W/fn.sh" || fail "idle_fp_count·ci_run_sec·claude_project_dir 를 찾지 못함"
 # $1 open_pr_for 가 PR 을 돌려줄 호출 번호들, $2 PR 생성 시각(지금 기준 초, 빈 값이면 못 읽음), $3 terminal_idle 이 "일하는 중"(1)을 돌려줄
 # 호출 번호들, $4 화면이 바뀌는 terminal_tail 호출 번호들 → "종료 코드|PR|오판 수"
 idlefp_case() {
@@ -1501,6 +1503,71 @@ repair_case() {  # $1 수리 뒤 head(공백으로 가른 차례, 마지막 값�
 grep -q 'repair "${handle}" "PR #${pr} 이 ${BASE_BRANCH}과 충돌한다.* "$deadline" "${pr}"' "$KIT/files/scripts/ticket-loop.sh" \
   && grep -q 'repair "${handle}" "PR #${pr} 의 CI가 실패했다.* "$deadline" "${pr}"' "$KIT/files/scripts/ticket-loop.sh" || fail "수리 두 곳이 PR 번호를 넘기지 않음"
 echo "ok  수리 끝 알아채기(idle 없이 새 커밋, 새 커밋 없는 idle 은 연달아 볼 때만)"
+
+# #11: 백엔드가 idle 을 돌려줘도 Claude Code 세션 기록(CLAUDE_CONFIG_DIR/projects/<WT_PATH 변환>/ 아래 *.jsonl, subagents/ 포함)이
+# SESSION_LOG_FRESH_SEC 안에 갱신됐으면 일하는 중 — strike 를 세지 않고 그 idle 은 오판으로 센다(화면이 바뀐 경우와 같은 처리). 기록이 창 밖이거나
+# 폴더가 없거나 AGENT 가 codex 면 전처럼 센다. 로그 줄은 연속된 idle 판정에서 한 번. 수리 대기·수습 대기도 같은 가드다.
+# 2026-10-22 rental-portal #266: strike 3회 중 앞의 2회는 워커가 도구를 7번 호출하던 중이었다
+SG="$W/sg"; rm -rf "$SG"; mkdir -p "$SG"
+# 헬퍼 자체: 폴더 없음 / 빈 폴더 / 창 밖 파일 / subagents/ 아래 새 파일 / 창이 -1 이면 새 파일도 밖 / codex / 빈 경로 → "종료 코드:경과 초 "
+out="$(cd "$W" && SG="$SG" bash -c 'set -euo pipefail; source fn.sh; AGENT=claude; CLAUDE_CONFIG_DIR="$SG/cfg"; d="$(claude_project_dir /wt/x)"
+  r() { local rc=0; session_active_recently "$1" || rc=$?; printf "%s:%s " "$rc" "${SESSION_LOG_AGE:-}"; }
+  SESSION_LOG_FRESH_SEC=30; r /wt/x; mkdir -p "$d/s1/subagents"; r /wt/x
+  echo "{}" > "$d/s1.jsonl"; touch -t 202001010000 "$d/s1.jsonl"; r /wt/x
+  echo "{}" > "$d/s1/subagents/agent-a.jsonl"; r /wt/x; SESSION_LOG_FRESH_SEC=-1; r /wt/x
+  SESSION_LOG_FRESH_SEC=30; AGENT=codex; r /wt/x; AGENT=claude; r ""')"
+[[ "$out" =~ ^"1: 1: 1:"[0-9]+" 0:"[01]" 1:"[01]" 1: 1: "$ ]] || fail "session_active_recently: $out (기대 1: 1: 1:<옛 경과> 0:0 1:0 1: 1: )"
+# $1 AGENT, $2 세션 기록 파일(세션 폴더 기준, 빈 값이면 폴더를 만들지 않음), $3 그 파일을 창 밖(2020년)으로 되돌릴 terminal_idle 호출 번호,
+# $4 terminal_idle 이 "일하는 중"(1)을 돌려줄 호출 번호들 → "종료 코드|PR|오판 수|가드 로그 줄 수"
+guard_case() {
+  (cd "$W" && SG="$SG" AG="$1" JF="$2" STALE_AT="${3:-}" BUSY_AT="${4:-}" bash -c '
+    set -euo pipefail
+    rm -rf "$SG/cfg"; : > "$SG/glog"; echo 0 > "$SG/icnt"
+    source fn.sh
+    AGENT="$AG"; WT_PATH="/wt/o-r/worktrees/issue-7"; CLAUDE_CONFIG_DIR="$SG/cfg"; SDIR="$(claude_project_dir "$WT_PATH")"
+    if [[ -n "$JF" ]]; then mkdir -p "$(dirname "$SDIR/$JF")"; echo "{}" > "$SDIR/$JF"; fi
+    log() { [[ "$*" != *"still working"* ]] || echo x >> "$SG/glog"; }; idle_wait_ms() { echo 1; }
+    terminal_idle() { local c; c=$(( $(cat "$SG/icnt") + 1 )); echo "$c" > "$SG/icnt"
+      [[ -z "$STALE_AT" || -z "$JF" || $c -lt $STALE_AT ]] || touch -t 202001010000 "$SDIR/$JF"
+      [[ " $BUSY_AT " != *" $c "* ]] || return 1; return 0; }
+    terminal_tail() { echo same; }; open_pr_for() { :; }; pr_created_epoch() { :; }; pr_settle() { :; }
+    PROGRESS_SEC=0; IDLE_WAIT_MS=1; STARTUP_GRACE_SEC=0; IDLE_RECHECK_SEC=0; IDLE_STRIKES=3; SESSION_LOG_FRESH_SEC=30
+    IDLE_FP_FILE="$(mktemp)"; rc=0
+    bg_wait wait_for_pr 7 h $(( $(date +%s) + 60 )) > out || rc=$?
+    echo "$rc|$(cat out)|$(idle_fp_count)|$(grep -c x "$SG/glog" || true)"; rm -f "$IDLE_FP_FILE"')
+}
+out="$(guard_case claude s1.jsonl 3)"; [[ "$out" == "1||2|1" ]] || fail "세션 기록이 방금 갱신됐는데 strike 를 셈(오판으로 세고 로그는 한 번): $out (기대 1||2|1)"
+out="$(guard_case claude s1.jsonl 1)"; [[ "$out" == "1||0|0" ]] || fail "세션 기록이 창 밖인데 strike 를 세지 않음: $out (기대 1||0|0)"
+out="$(guard_case codex s1.jsonl 3)"; [[ "$out" == "1||0|0" ]] || fail "AGENT=codex 인데 세션 기록을 봄: $out (기대 1||0|0)"
+out="$(guard_case claude "" 3)"; [[ "$out" == "1||0|0" ]] || fail "세션 폴더가 없는데 strike 를 세지 않음: $out (기대 1||0|0)"
+out="$(guard_case claude s1/subagents/agent-a.jsonl 3)"; [[ "$out" == "1||2|1" ]] || fail "subagents/ 아래 기록만 갱신돼도 일하는 중으로 봐야: $out (기대 1||2|1)"
+out="$(guard_case claude s1.jsonl 4 2)"; [[ "$out" == "1||2|2" ]] || fail "idle 이 풀렸다 다시 잡히면 가드 로그를 다시 한 번: $out (기대 1||2|2)"
+# 수리 대기(repair: 새 커밋 없는 idle)·수습 대기(wait_for_verdict: 판정 없는 idle)도 같은 가드 — $1 어느 대기, $2 AGENT, $3 창 밖으로 되돌릴
+# terminal_idle 호출 번호 → "종료 코드|경고 줄 수|가드 로그 줄 수"
+guard_wait_case() {
+  (cd "$W" && SG="$SG" WHICH="$1" AG="$2" STALE_AT="$3" bash -c '
+    set -euo pipefail
+    rm -rf "$SG/cfg"; : > "$SG/glog"; : > "$SG/warns"; echo 0 > "$SG/icnt"
+    source fn.sh
+    AGENT="$AG"; WT_PATH="/wt/o-r/worktrees/issue-7"; CLAUDE_CONFIG_DIR="$SG/cfg"; SDIR="$(claude_project_dir "$WT_PATH")"
+    mkdir -p "$SDIR"; echo "{}" > "$SDIR/s1.jsonl"
+    log() { [[ "$*" != *"still working"* ]] || echo x >> "$SG/glog"; [[ "${1:-}" != warn ]] || echo x >> "$SG/warns"; }
+    idle_wait_ms() { echo 1; }; send_prompt() { :; }; progress_check() { :; }; progress_reset() { :; }; progress_dirty() { :; }
+    terminal_idle() { local c; c=$(( $(cat "$SG/icnt") + 1 )); echo "$c" > "$SG/icnt"; [[ $c -lt $STALE_AT ]] || touch -t 202001010000 "$SDIR/s1.jsonl"; return 0; }
+    terminal_tail() { echo same; }; pr_head_sha() { echo aaa1111; }; verdict_written() { return 1; }; die() { echo "die $*"; exit 9; }
+    PROGRESS_SEC=0; REPAIR_SETTLE_SEC=0; CUR_N=7; BACKEND_NAME=x; STARTUP_GRACE_SEC=0; IDLE_RECHECK_SEC=0; IDLE_STRIKES=3; SESSION_LOG_FRESH_SEC=30
+    rc=0
+    case "$WHICH" in
+      repair) repair h "고쳐라" $(( $(date +%s) + 60 )) 77 || rc=$? ;;
+      verdict) bg_wait wait_for_verdict 7 h "$SG/no-verdict.json" $(( $(date +%s) + 60 )) "$WT_PATH" || rc=$? ;;
+    esac
+    echo "$rc|$(grep -c x "$SG/warns" || true)|$(grep -c x "$SG/glog" || true)"')
+}
+out="$(guard_wait_case repair claude 3)"; [[ "$out" == "0|3|1" ]] || fail "repair: 세션 기록이 방금 갱신됐는데 strike 를 셈: $out (기대 0|3|1)"
+out="$(guard_wait_case repair codex 3)"; [[ "$out" == "0|3|0" ]] || fail "repair: AGENT=codex 인데 세션 기록을 봄: $out (기대 0|3|0)"
+out="$(guard_wait_case verdict claude 3)"; [[ "$out" == "1|3|1" ]] || fail "wait_for_verdict: 세션 기록이 방금 갱신됐는데 strike 를 셈: $out (기대 1|3|1)"
+out="$(guard_wait_case verdict codex 3)"; [[ "$out" == "1|3|0" ]] || fail "wait_for_verdict: AGENT=codex 인데 세션 기록을 봄: $out (기대 1|3|0)"
+echo "ok  세션 기록이 방금 갱신된 idle 은 strike 가 아님(#11 — PR·수리·수습 대기, subagents/ 포함, 로그는 연속 idle 에 한 번)"
 
 # CI 수리(repair_ci): 수리 뒤 head 가 바뀌면 0(충돌·CI 확인부터 다시), 그대로면 CI 를 한 번 더 보고 통과면 0, 실패면 1(호출부가 멈춘다).
 # 2026-10-21 rental-portal #258: 러너 설치 경합으로 실패한 job 을 워커가 `gh run rerun --failed` 로만 다시 돌려 1분 뒤 통과했는데,

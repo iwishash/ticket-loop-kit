@@ -245,6 +245,7 @@ TERMINAL_RETRY=5          # wait가 이상하게 끝났을 때 터미널 읽기�
 TERMINAL_RETRY_SEC=10
 IDLE_STRIKES=3            # PR 없이 연속 idle이면 멈춤으로 본다
 IDLE_RECHECK_SEC=30
+SESSION_LOG_FRESH_SEC=30  # idle로 보여도 Claude Code 세션 기록(*.jsonl)이 이 안에 갱신됐으면 아직 일하는 중 — strike를 세지 않는다(session_active_recently)
 STARTUP_GRACE_SEC=120     # 기동 직후에는 프롬프트 처리 전에도 idle로 잡힌다
 AGENT_START_WAIT_SEC=90   # 에이전트 배너가 보이기까지 기다리는 상한(1회), 넘기면 한 번 다시 띄운다
 CI_APPEAR_TIMEOUT_SEC=900
@@ -1155,6 +1156,27 @@ idle_wait_ms() { if [[ "$PROGRESS_SEC" -gt 0 ]]; then echo $(( PROGRESS_SEC * 10
 # PR을 열었다
 idle_fp_add() { local i; for (( i = 0; i < $1; i++ )); do echo >> "${IDLE_FP_FILE:-/dev/null}"; done; }
 
+# idle로 보이는 워커가 실제로는 일하는 중인지를 Claude Code 세션 기록으로 본다 — $1 작업 폴더(워커의 WT_PATH, 수습 세션의 워크트리)의
+# 세션 기록 폴더(claude_project_dir — 토큰 집계와 같은 변환이라 Orca처럼 WORKTREE_DIR 밖의 워크트리도 맞는다) 아래 *.jsonl(하위
+# subagents/ 포함) 중 가장 최근 것이 SESSION_LOG_FRESH_SEC 안에 갱신됐으면 0. AGENT가 claude가 아니거나 폴더·파일이 없으면 1 — 호출부는
+# idle 판정을 그대로 쓴다. 갱신 뒤 지난 초를 SESSION_LOG_AGE에 남긴다(로그용). 세 대기(wait_for_pr·repair·wait_for_verdict)가 strike를
+# 세기 직전에 부른다. cmux에서 백그라운드 작업 알림으로 시작되는 턴 전후에 lifecycle이 잠깐 idle로 보이는 것으로 추정된다 — 2026-10-22
+# rental-portal #266에서 strike 3회 중 앞의 2회는 워커가 도구를 7번 호출하던 중이었다. 진짜 idle(백그라운드 verify를 기다리며 턴이 끝난
+# 상태 등)은 기록이 갱신되지 않아 전처럼 센다 — 이 가드는 strike를 줄이기만 하고 늘리지 않는다. mtime은 stat으로 읽는다(macOS -f %m,
+# Linux -c %Y). Codex는 세션 기록 형식이 달라 아직 보지 않는다
+session_active_recently() {
+  local dir newest fmt
+  SESSION_LOG_AGE=""
+  [[ "${AGENT:-}" == claude && -n "${1:-}" ]] || return 1
+  dir="$(claude_project_dir "$1")"
+  [[ -d "$dir" ]] || return 1
+  if stat -f %m "$dir" >/dev/null 2>&1; then fmt=(-f %m); else fmt=(-c %Y); fi
+  newest="$(find "$dir" -type f -name '*.jsonl' -exec stat "${fmt[@]}" {} + 2>/dev/null | sort -n | tail -n 1)"
+  [[ -n "$newest" ]] || return 1
+  SESSION_LOG_AGE=$(( $(date +%s) - newest ))
+  [[ "$SESSION_LOG_AGE" -le "$SESSION_LOG_FRESH_SEC" ]]
+}
+
 # PR을 찾은 뒤 워커가 이슈 정리(implement 스킬의 마지막 단계 — 체크박스, 맨 끝에 IN_REVIEW_LABEL)를 마치기를 기다린다. 이슈에 그 라벨이
 # 붙었거나 워커가 idle이면 끝, 아니면 PR_SETTLE_SEC에서 넘어간다. 기다림은 남긴다 — CI 경로 필터로 체크 없이 바로 병합하는 PR은 워커보다
 # 먼저 병합·이슈 닫힘·라벨 제거가 일어난다. 0.9.1까지는 idle 하나만 IDLE_WAIT_MS(10분)까지 기다렸다 — rental-portal 스펙 #141(cmux)에서
@@ -1177,7 +1199,7 @@ pr_settle() {
 # idle 오판(idle_fp_add)은 PR 없이 센 idle 뒤에 워커가 다시 일한 것, 그리고 idle을 잡은 뒤 열린 PR이다. 0.9.1까지는 "idle 뒤 다시 보니
 # PR이 열려 있음"을 다 셌는데, 대개 일을 마친 워커였다(PR을 연 뒤 idle) — 폴링 순서의 부산물이지 오판이 아니다
 wait_for_pr() {
-  local n="$1" handle="$2" deadline="$3" strikes=0 pending=0 pr started idle idle_at created last_screen="" screen wait_ms
+  local n="$1" handle="$2" deadline="$3" strikes=0 pending=0 pr started idle idle_at created last_screen="" screen wait_ms active_said=0
   started="$(date +%s)"; wait_ms="$(idle_wait_ms)"
   while :; do
     pr="$(open_pr_for "${n}")"
@@ -1206,12 +1228,20 @@ wait_for_pr() {
       # 지난 idle 이후 화면이 바뀌었으면 그사이 일했다는 뜻 — 앞서 센 idle은 오판이고, 연속 횟수를 새로 센다
       screen="$(terminal_tail "${handle}" | cksum | cut -d' ' -f1)"
       if [[ "$screen" != "$last_screen" ]]; then idle_fp_add "$pending"; pending=0; strikes=0; last_screen="$screen"; fi
+      # 세션 기록이 방금 갱신됐으면 일하던 워커를 idle로 본 것 — 이번 idle과 앞서 센 idle은 오판이고 strike를 세지 않는다(화면이 바뀐
+      # 경우와 같은 처리). 로그는 연속된 idle 판정에서 한 번만
+      if session_active_recently "${WT_PATH:-}"; then
+        [[ $active_said -eq 1 ]] || log "#${n}: idle reported, but the session log was written ${SESSION_LOG_AGE}s ago — still working"
+        idle_fp_add $((pending + 1)); pending=0; strikes=0; active_said=1
+        sleep "$IDLE_RECHECK_SEC"; continue
+      fi
+      active_said=0
       strikes=$((strikes + 1)); pending=$((pending + 1))
       log warn "#${n}: worker idle, no PR (${strikes}/${IDLE_STRIKES})"
       [[ ${strikes} -lt $IDLE_STRIKES ]] || return 1   # 정말 멈췄다 — 이 연속 idle은 오판이 아니다
       sleep "$IDLE_RECHECK_SEC"
     else
-      idle_fp_add "$pending"; pending=0; strikes=0   # 워커가 계속 일한다 — 앞서 센 idle은 오판
+      idle_fp_add "$pending"; pending=0; strikes=0; active_said=0   # 워커가 계속 일한다 — 앞서 센 idle은 오판
     fi
   done
 }
@@ -1225,7 +1255,7 @@ wait_for_pr() {
 #     수리 프롬프트 뒤 새 커밋이 push됐고 head가 REPAIR_SETTLE_SEC 동안 그대로이며 워크트리에 커밋 안 된 변경이 없으면 끝난 것으로 본다.
 #     0.9.1까지는 티켓 제한 시간까지 기다렸다
 repair() {
-  local handle="$1" text="$2" deadline="$3" pr="${4:-}" idle wait_ms before="" head="" seen="" seen_at=0 strikes=0 last_screen="" screen
+  local handle="$1" text="$2" deadline="$3" pr="${4:-}" idle wait_ms before="" head="" seen="" seen_at=0 strikes=0 last_screen="" screen active_said=0
   wait_ms="$(idle_wait_ms)"
   [[ -z "$pr" ]] || before="$(pr_head_sha "$pr" 2>/dev/null || true)"
   send_prompt "${handle}" "$text"
@@ -1239,12 +1269,18 @@ repair() {
       [[ -n "$before" && -n "$head" && "$head" == "$before" ]] || return 0
       screen="$(terminal_tail "${handle}" | cksum | cut -d' ' -f1)"
       if [[ "$screen" != "$last_screen" ]]; then strikes=0; last_screen="$screen"; fi
-      strikes=$((strikes + 1))
-      log warn "#${CUR_N}: worker idle after the repair prompt, no new commit on PR #${pr} yet (${strikes}/${IDLE_STRIKES})"
-      [[ ${strikes} -lt $IDLE_STRIKES ]] || return 0
+      if session_active_recently "${WT_PATH:-}"; then   # 세션 기록이 방금 갱신됐으면 아직 일하는 중 — strike를 세지 않는다(wait_for_pr와 같은 규칙)
+        [[ $active_said -eq 1 ]] || log "#${CUR_N}: idle reported, but the session log was written ${SESSION_LOG_AGE}s ago — still working"
+        strikes=0; active_said=1
+      else
+        active_said=0
+        strikes=$((strikes + 1))
+        log warn "#${CUR_N}: worker idle after the repair prompt, no new commit on PR #${pr} yet (${strikes}/${IDLE_STRIKES})"
+        [[ ${strikes} -lt $IDLE_STRIKES ]] || return 0
+      fi
       sleep "$IDLE_RECHECK_SEC"
     else
-      strikes=0   # 워커가 다시 일한다
+      strikes=0; active_said=0   # 워커가 다시 일한다
       if [[ -n "$head" && "$head" != "$before" ]]; then
         [[ "$head" == "$seen" ]] || { seen="$head"; seen_at="$(date +%s)"; }
         if [[ $(( $(date +%s) - seen_at )) -ge $REPAIR_SETTLE_SEC && -z "$(progress_dirty)" ]]; then
@@ -1710,7 +1746,7 @@ verdict_written() { jq -e '.verdict == "resume" or .verdict == "halt"' "$1" >/de
 # 새로 센다). bg_wait로 부른다. 진행 로그는 수습 워크트리를 본다("#N triage: commit …").
 # 반환: 0 판정 있음, 1 판정 없이 멈춤, 2 시간 초과, 3 터미널 끊김
 wait_for_verdict() {
-  local n="$1" handle="$2" vfile="$3" deadline="$4" wt_path="$5" strikes=0 started idle last_screen="" screen wait_ms
+  local n="$1" handle="$2" vfile="$3" deadline="$4" wt_path="$5" strikes=0 started idle last_screen="" screen wait_ms active_said=0
   started="$(date +%s)"; wait_ms="$(idle_wait_ms)"
   [[ "$PROGRESS_SEC" -le 0 ]] || progress_reset "$wt_path"
   while :; do
@@ -1728,12 +1764,18 @@ wait_for_verdict() {
       ! verdict_written "$vfile" || continue
       screen="$(terminal_tail "$handle" | cksum | cut -d' ' -f1)"
       if [[ "$screen" != "$last_screen" ]]; then strikes=0; last_screen="$screen"; fi
-      strikes=$((strikes + 1))
-      log warn "#${n}: triage session idle, no verdict (${strikes}/${IDLE_STRIKES})"
-      [[ ${strikes} -lt $IDLE_STRIKES ]] || return 1
+      if session_active_recently "$wt_path"; then   # 수습 세션의 기록이 방금 갱신됐으면 아직 일하는 중 — strike를 세지 않는다
+        [[ $active_said -eq 1 ]] || log "#${n}: idle reported, but the session log was written ${SESSION_LOG_AGE}s ago — still working"
+        strikes=0; active_said=1
+      else
+        active_said=0
+        strikes=$((strikes + 1))
+        log warn "#${n}: triage session idle, no verdict (${strikes}/${IDLE_STRIKES})"
+        [[ ${strikes} -lt $IDLE_STRIKES ]] || return 1
+      fi
       sleep "$IDLE_RECHECK_SEC"
     else
-      strikes=0
+      strikes=0; active_said=0
     fi
   done
 }
