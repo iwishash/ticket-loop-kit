@@ -823,14 +823,14 @@ grep -q '^LOG_FILE="$(abs_path "$LOG_FILE")"$' "$KIT/files/scripts/ticket-loop.s
 [[ "$(cd "$P/repo" && ROOT="$P/repo" FN="$P/fn.sh" bash -c 'source "$FN"; abs_path /dev/null; echo; abs_path /abs/x; echo; abs_path rel/y')" == $'/dev/null\n/abs/x\n'"$P/repo/rel/y" ]] || fail "abs_path 가 /dev/null·절대 경로를 그대로 두고 상대 경로만 ROOT 에 붙이지 않는다"
 
 # 진행 로그: 실제 git 저장소에서 progress_reset/check 를 그대로 부른다 — 브랜치·첫 수정·커밋은 바로 한 줄, 심장박동은 변경 파일 목록이
-# 지난 줄과 다를 때만(같으면 HEARTBEAT_SEC=0 이어도 조용하다)
+# 지난 줄과 다를 때만(같으면 HEARTBEAT_SEC=0 이어도 조용하다). 원격 추적 ref(origin/main)가 없는 저장소라 BASE_BRANCH 를 줘도 줄은 전과 같다
 Q="$T/progress"; mkdir -p "$Q"; git -C "$Q" init -q -b main repo; git -C "$Q/repo" -c user.name=t -c user.email=t@t commit -q --allow-empty -m init
 sed -n '/^# ----- 진행 로그 -----/,/^# ----- 진행 로그 끝 -----/p' "$KIT/files/scripts/ticket-loop.sh" > "$Q/fn.sh"
 grep -q '^progress_check() ' "$Q/fn.sh" && grep -q '^idle_wait_ms() ' "$Q/fn.sh" || fail "진행 로그 함수(progress_check·idle_wait_ms)를 찾지 못함"
 out="$(cd "$Q" && FN="$Q/fn.sh" bash -c '
   set -euo pipefail
   log() { echo "[$1] ${*:2}"; }; c() { git -C repo -c user.name=t -c user.email=t@t "$@"; }
-  PROGRESS_SEC=60; IDLE_WAIT_MS=600000; HEARTBEAT_SEC=300
+  PROGRESS_SEC=60; IDLE_WAIT_MS=600000; HEARTBEAT_SEC=300; BASE_BRANCH=main
   source "$FN"
   progress_reset "$PWD/repo"
   echo "== quiet"; progress_check 7
@@ -866,6 +866,46 @@ $out"
 grep -q 'progress_reset "${wt_path}"' "$KIT/files/scripts/ticket-loop.sh" && grep -q '^  progress_sync$' "$KIT/files/scripts/ticket-loop.sh" || fail "run_ticket 이 progress_reset(PR 대기 전)·progress_sync(PR 열린 뒤)를 부모 셸에서 부르지 않는다"
 [[ "$(grep -c 'progress_check "${n}"\|progress_check "${CUR_N}"' "$KIT/files/scripts/ticket-loop.sh")" -ge 3 ]] || fail "wait_for_pr·repair 가 progress_check 를 부르지 않는다"
 echo "ok  진행 로그(브랜치·첫 수정·커밋·심장박동은 목록이 달라질 때만)"
+
+# 진행 로그 — 기본 브랜치 커밋은 워커 커밋이 아니다(#6): 워크트리를 base A 에서 만든 뒤 origin/main 이 B·C 로 앞서고, 워커가
+# `git fetch && git checkout -b issue-8-x origin/main` 으로 C 에서 브랜치를 따면 B·C 의 commit 줄 대신 "base moved to C" 한 줄.
+# 이어서 워커가 D 를 만들면 commit D 한 줄만(A..D 범위의 B·C 는 origin/main 에서 닿으므로 뺀다). amend 는 전처럼 새 HEAD 한 줄
+B="$T/progress-base"; mkdir -p "$B"; git -C "$B" init -q --bare origin.git
+git -C "$B" init -q -b main repo; git -C "$B/repo" -c user.name=t -c user.email=t@t commit -q --allow-empty -m "init A"
+git -C "$B/repo" remote add origin "$B/origin.git"; git -C "$B/repo" push -q -u origin main 2>/dev/null
+git -C "$B" clone -q origin.git other 2>/dev/null
+git -C "$B/other" -c user.name=t -c user.email=t@t commit -q --allow-empty -m "feat: b (merged by someone else)"
+git -C "$B/other" -c user.name=t -c user.email=t@t commit -q --allow-empty -m "feat: c (merged by someone else)"
+git -C "$B/other" push -q origin main 2>/dev/null
+out="$(cd "$B" && FN="$Q/fn.sh" bash -c '
+  set -euo pipefail
+  log() { echo "[$1] ${*:2}"; }; c() { git -C repo -c user.name=t -c user.email=t@t "$@"; }
+  PROGRESS_SEC=60; IDLE_WAIT_MS=600000; HEARTBEAT_SEC=300; BASE_BRANCH=main
+  source "$FN"
+  progress_reset "$PWD/repo"
+  echo "== quiet"; progress_check 8
+  echo "== fetch+branch-at-C"; c fetch -q origin; c checkout -q -b issue-8-x origin/main; progress_check 8
+  echo "== same"; progress_check 8
+  echo "== commit-D"; printf d > repo/d.ts; c add d.ts; c commit -q -m "feat: d #8"; progress_check 8
+  echo "== amend"; c commit -q --amend -m "feat: d amended #8"; progress_check 8
+  echo "== base-sha $(c rev-parse --short origin/main)"' 2>&1)" || fail "진행 로그(기본 브랜치 이동) 함수 실패: $out"
+csha="$(git -C "$B/other" rev-parse --short main)"
+want="== quiet
+== fetch+branch-at-C
+[step] #8: branch issue-8-x
+[step] #8: base moved to ${csha}
+== same
+== commit-D
+[step] #8: commit SHA feat: d #8
+== amend
+[step] #8: commit SHA feat: d amended #8
+== base-sha ${csha}"
+[[ "$(sed -E 's/commit [0-9a-f]{7,} /commit SHA /' <<<"$out")" == "$want" ]] || fail "진행 로그(기본 브랜치 이동) 출력이 기대와 다르다:
+$out"
+grep -q 'merged by someone else' <<<"$out" && fail "기본 브랜치의 커밋이 워커 커밋처럼 찍혔다:
+$out"
+grep -q -- '--not "$base"' "$KIT/files/scripts/ticket-loop.sh" && grep -q 'refs/remotes/origin/${BASE_BRANCH}' "$KIT/files/scripts/ticket-loop.sh" || fail "progress_check 가 origin/<BASE_BRANCH> 에서 닿는 커밋을 빼지 않는다"
+echo "ok  진행 로그 — 기본 브랜치에서 딴 커밋은 base moved 한 줄, 워커 커밋만 commit 줄"
 
 # 티켓의 PR 찾기: head 브랜치가 issue-N 과 같거나 issue-N- 로 시작하는 것만. issue-1020·issue-1020-x 는 #102 가 아니다
 # (rental-portal #102 실측 — 워커가 워크트리 브랜치 issue-102 에 그대로 커밋해 PR 을 열었고 접두 `N-`만 보던 루프가 못 찾았다)
