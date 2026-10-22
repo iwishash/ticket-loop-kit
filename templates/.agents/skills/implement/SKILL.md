@@ -4,7 +4,7 @@ description: "Implement a piece of work based on a spec or set of tickets."
 disable-model-invocation: true
 ---
 
-<!-- Project-owned: scripts/sync-mattpocock-skills.sh skips this skill. Seeded by ticket-loop-kit from upstream mattpocock/skills `implement`; the setup-ticket-loop skill filled the __PLACEHOLDERS__. When upstream changes it, port the change here by hand. Lives in .agents/skills/ (read by Codex; .claude/skills/implement is a symbolic link to it for Claude Code). -->
+<!-- Project-owned: scripts/sync-mattpocock-skills.sh skips this skill. Seeded by ticket-loop-kit from upstream mattpocock/skills `implement`; the setup-ticket-loop skill filled in the placeholders. When upstream changes it, port the change here by hand. Lives in .agents/skills/ (read by Codex; .claude/skills/implement is a symbolic link to it for Claude Code). -->
 
 "Use the X skill" below means: in Claude Code, call the Skill tool with "X"; in Codex, read `.agents/skills/X/SKILL.md` (the same as `$X`) and follow it.
 
