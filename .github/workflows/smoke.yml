@@ -1,0 +1,24 @@
+# tests/smoke.sh on every PR and on main. The ticket loop waits for this check before merging a worker's PR.
+name: smoke
+on:
+  push:
+    branches: [main]
+  pull_request:
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: git identity for the test repositories smoke.sh creates
+        run: |
+          git config --global user.name smoke
+          git config --global user.email smoke@example.com
+          git config --global init.defaultBranch main
+      # The runner starts steps with SIGPIPE ignored (inherited from Node). bash cannot trap a signal that was ignored on
+      # entry, so the loop's SIGPIPE stop case would exit 0. Reset the disposition before exec'ing bash.
+      - name: smoke
+        run: python3 -c 'import os, signal; signal.signal(signal.SIGPIPE, signal.SIG_DFL); os.execvp("bash", ["bash", "tests/smoke.sh"])'
