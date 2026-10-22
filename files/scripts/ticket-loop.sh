@@ -617,10 +617,22 @@ REPO_URL="$(gh repo view --json url -q .url 2>/dev/null || true)"   # Slack 본�
 # 파이프 뒤의 awk·jq가 종료 코드를 덮지 않게
 # 열린 선행 이슈 수. issue_dependencies_summary.blocked_by는 선행 이슈가 닫힌 뒤에도
 # 최대 ~20분 옛 값을 돌려준 실측이 있어, 목록에서 열린 것만 센다.
+# 예외 하나: 일시 장애가 아닌 404(Not Found)는 이슈 의존성 API가 없는 환경(옛 GHES)이다 — 조회 실패가 아니라 "막힘 없음"(0)으로 보고 실행당
+# 한 번만 경고한다. 그 밖(재시도 뒤의 5xx·연결 오류·401·403)은 비0. 경고 여부는 변수가 아니라 표시 파일이다 — blocked_by는 명령 치환(서브셸)
+# 안에서 불리므로 변수는 후보 사이에 남지 않는다. 파일이 비어 있으면 아직 경고하지 않은 것
+BLOCKED_BY_UNAVAILABLE_WARNED="$(mktemp "${TMPDIR:-/tmp}/ticket-loop-blocked-by-404.XXXXXX")"
 blocked_by() {
-  local counts
+  local counts errf rc=0
+  errf="$(mktemp "${TMPDIR:-/tmp}/ticket-loop-blocked.XXXXXX")"
   counts="$(gh api "repos/${OWNER_REPO}/issues/$1/dependencies/blocked_by" --paginate \
-    --jq '[.[] | select(.state == "open")] | length')" || return 1
+    --jq '[.[] | select(.state == "open")] | length' 2>"$errf")" || rc=$?
+  if [[ $rc -ne 0 ]] && grep -Eqi 'HTTP 404|Not Found' "$errf"; then
+    rm -f "$errf"
+    [[ -s "$BLOCKED_BY_UNAVAILABLE_WARNED" ]] || { log warn "dependencies API not available (HTTP 404) — treating tickets as not blocked"; echo 1 > "$BLOCKED_BY_UNAVAILABLE_WARNED"; }
+    echo 0; return 0
+  fi
+  cat "$errf" >&2; rm -f "$errf"   # gh 래퍼의 재시도 경고·마지막 오류는 그대로 보인다
+  [[ $rc -eq 0 ]] || return 1
   awk '{s += $1} END {print s + 0}' <<<"$counts"
 }
 

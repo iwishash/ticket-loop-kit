@@ -664,7 +664,9 @@ case "$1 ${2:-}" in
   "issue view") echo "T$3" ;;
   "api "*) n="${2#repos/o/r/issues/}"; n="${n%%/*}"
     case "$2" in
-      */dependencies/blocked_by) ! hit FAIL_BLOCKED "$n" || boom; printf '%b\n' "${BLOCKED_OUT:-0}" ;;
+      */dependencies/blocked_by) ! hit FAIL_BLOCKED "$n" || boom
+                                 ! hit FAIL_BLOCKED_404 "$n" || { echo "gh: HTTP 404: Not Found (https://api.github.com/x)" >&2; exit 1; }
+                                 printf '%b\n' "${BLOCKED_OUT:-0}" ;;
       */sub_issues) [[ "${FAIL_KIDS:-0}" == 0 ]] || boom; printf '%s\n' "${KIDS_OUT:-[]}" ;;
       repos/o/r/issues/*) ! hit FAIL_SUBS "$n" || boom; printf '%s\n' "${SUBS_OUT:-0}" ;;
     esac ;;
@@ -693,6 +695,10 @@ echo '[]' > "$GF/prs.json"
 [[ "$(qf candidates PARENT=40 KIDS_OUT='[12]')" == $'0|12\t0\tT12|' ]] || fail "candidates(--parent) 성공 출력: $(qf candidates PARENT=40 KIDS_OUT='[12]')"
 # gh 가 실패하면 출력 없이 비0 — blocked_by 가 awk 합계 0 으로, open_pr_for·candidates 가 빈 값으로 읽히던 것
 [[ "$(qf 'blocked_by 12' FAIL_BLOCKED=12)" == "1||" ]] || fail "blocked_by: gh 실패가 0 으로 읽힘: $(qf 'blocked_by 12' FAIL_BLOCKED=12)"
+# 예외: 일시 장애가 아닌 404 는 의존성 API 가 없는 환경(옛 GHES) — 0 에 종료 코드 0, 경고는 한 셸에서 두 번 불러도 한 번
+W404='dependencies API not available (HTTP 404) — treating tickets as not blocked'
+[[ "$(qf 'blocked_by 12' FAIL_BLOCKED_404=12)" == "0|0|$W404" ]] || fail "blocked_by: 404 를 조회 실패로 읽음(의존성 API 없는 환경): $(qf 'blocked_by 12' FAIL_BLOCKED_404=12)"
+[[ "$(qf 'blocked_by 12; blocked_by 11' FAIL_BLOCKED_404=all)" == "0|0,0|$W404" ]] || fail "blocked_by: 404 경고가 한 번이 아님: $(qf 'blocked_by 12; blocked_by 11' FAIL_BLOCKED_404=all)"
 [[ "$(qf 'sub_issue_count 12' FAIL_SUBS=12)" == "1||" ]] || fail "sub_issue_count: gh 실패가 성공으로 읽힘: $(qf 'sub_issue_count 12' FAIL_SUBS=12)"
 [[ "$(qf 'open_pr_for 12' FAIL_PR=1)" == "1||" ]] || fail "open_pr_for: gh 실패가 'PR 없음'으로 읽힘: $(qf 'open_pr_for 12' FAIL_PR=1)"
 [[ "$(qf candidates LIST_FAIL_FROM=1)" == "1||" ]] || fail "candidates: issue list 실패가 빈 목록으로 읽힘: $(qf candidates LIST_FAIL_FROM=1)"
@@ -702,6 +708,7 @@ grep -qF 'list="$(candidates)" || return 1' "$GF/fn.sh" || fail "pick_targets �
 [[ "$(qf pick_targets)" == $'0|11\tT11,12\tT12|' ]] || fail "pick_targets 성공 출력: $(qf pick_targets)"
 [[ "$(qf pick_targets LIST_FAIL_FROM=1)" == "1||" ]] || fail "pick_targets: 목록 조회 실패가 빈 목록으로 읽힘: $(qf pick_targets LIST_FAIL_FROM=1)"
 [[ "$(qf pick_targets FAIL_BLOCKED=11)" == $'0|12\tT12|skip #11 (T11): could not check (GitHub)' ]] || fail "pick_targets: blocked_by 실패인 티켓을 골랐거나 다른 티켓까지 버림: $(qf pick_targets FAIL_BLOCKED=11)"
+[[ "$(qf pick_targets FAIL_BLOCKED_404=all)" == $'0|11\tT11,12\tT12|'"$W404" ]] || fail "pick_targets: 404(의존성 API 없음)인데 티켓을 건너뛰거나 경고가 거듭됨: $(qf pick_targets FAIL_BLOCKED_404=all)"
 [[ "$(qf pick_targets FAIL_SUBS=12)" == $'0|11\tT11|skip #12 (T12): could not check (GitHub)' ]] || fail "pick_targets: sub_issue_count 실패인 티켓을 골랐거나 다른 티켓까지 버림: $(qf pick_targets FAIL_SUBS=12)"
 [[ "$(qf pick_targets FAIL_PR=1)" == "0||skip #11 (T11): could not check (GitHub);skip #12 (T12): could not check (GitHub)" ]] || fail "pick_targets: pr list 실패인데 티켓을 고름: $(qf pick_targets FAIL_PR=1)"
 [[ "$(qf pick_targets BLOCKED_OUT=1)" == "0||skip #11 (T11): blocked by an open issue;skip #12 (T12): blocked by an open issue" ]] || fail "pick_targets: 막힌 티켓 건너뛰기 문구가 바뀜: $(qf pick_targets BLOCKED_OUT=1)"
