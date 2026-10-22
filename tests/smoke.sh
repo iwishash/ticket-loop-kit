@@ -1678,4 +1678,42 @@ grep -qxF 'BACKEND="${BACKEND:-cmux}"' "$C/.ticket-loop/loop.env" || fail "cmux 
 grep -q 'WORKTREE_SETUP_CMD' "$C/.ticket-loop/loop.env" || fail "cmux loop.env 에 WORKTREE_SETUP_CMD 안내가 없음"
 (cd "$N" && node "$KIT/bin/ticket-loop-kit.js" init --bogus >/dev/null 2>&1) && fail "모르는 인자를 거절해야 한다"
 echo "ok  npx 껍질 설치·재실행·백엔드 선택·거절"
+
+# npx 껍질, 플래그 없는 init 의 기본값은 기존 loop.env 의 BACKEND·AGENT 다(#4). tmux 설치본에 init --yes 를 돌리면 tmux 로 가고
+# Orca 등록을 시도하지 않으며 Next steps 에 Orca 항목이 없고 "Keeping" 경고도 없다. 명시한 --backend 는 여전히 이긴다(그때만 "Keeping").
+# 모르는 이름이면 경고 한 줄 뒤 지금의 기본값(orca·claude)으로 가고 실패하지 않는다. 가짜 orca CLI 는 불리면 표식 파일을 남긴다
+E="$T/npx-env"; mkdir -p "$E/.ticket-loop" "$T/fake-orca"; git -C "$E" init -q -b main; git -C "$E" commit -q --allow-empty -m init
+printf '#!/usr/bin/env bash\necho called >> "%s"\nexit 1\n' "$T/fake-orca/called" > "$T/fake-orca/orca"; chmod +x "$T/fake-orca/orca"
+printf 'BACKEND="${BACKEND:-tmux}"\n' > "$E/.ticket-loop/loop.env"
+out="$(cd "$E" && ORCA_CLI="$T/fake-orca/orca" node "$KIT/bin/ticket-loop-kit.js" init --yes --no-skills --no-github --no-git-credential 2>&1)" || fail "loop.env BACKEND=tmux 에서 init --yes 실패: $out"
+grep -qF 'Backend: tmux (from .ticket-loop/loop.env)' <<<"$out" || fail "loop.env 의 BACKEND=tmux 가 기본값이 되지 않음: $out"
+grep -qE 'Orca Settings|Orca CLI|Registered the repo with Orca|Orca registration|Orca: already' <<<"$out" && fail "tmux 설치본인데 Orca 등록·안내가 나옴: $out"
+[[ ! -e "$T/fake-orca/called" ]] || fail "tmux 설치본인데 orca CLI 를 불렀다"
+grep -q 'Keeping' <<<"$out" && fail "loop.env 의 값을 그대로 쓰는데 Keeping 경고가 나옴: $out"
+grep -qxF 'BACKEND="${BACKEND:-tmux}"' "$E/.ticket-loop/loop.env" || fail "loop.env 의 BACKEND 줄이 바뀜"
+grep -qxF 'AGENT="${AGENT:-claude}"' "$E/.ticket-loop/loop.env" || fail "AGENT 줄이 없는 loop.env 에 기본 claude 를 덧붙이지 않음"
+# 명시한 --backend orca 가 이긴다: orca 로 진행하고 Keeping BACKEND=tmux 경고, 배너의 Backend 에는 loop.env 표시가 없다
+out="$(cd "$E" && node "$KIT/bin/ticket-loop-kit.js" init --yes --backend orca --no-skills --no-github --no-git-credential --no-orca 2>&1)" || fail "--backend orca init 실패: $out"
+grep -qE '^▸ Backend: Orca · ' <<<"$out" || fail "--backend orca 가 loop.env 의 tmux 에 밀림: $out"
+grep -qF 'Keeping BACKEND=tmux in .ticket-loop/loop.env' <<<"$out" || fail "--backend orca 인데 Keeping BACKEND=tmux 경고가 없음: $out"
+grep -qxF 'BACKEND="${BACKEND:-tmux}"' "$E/.ticket-loop/loop.env" || fail "--backend orca 가 loop.env 를 고침"
+# AGENT 도 같다(VAR=값 표기도 읽는다): codex 가 기본이 되고 Next steps 도 Codex 기준
+E2="$T/npx-env-agent"; mkdir -p "$E2/.ticket-loop"; git -C "$E2" init -q -b main; git -C "$E2" commit -q --allow-empty -m init
+printf 'BACKEND=tmux\nAGENT="${AGENT:-codex}"\n' > "$E2/.ticket-loop/loop.env"
+out="$(cd "$E2" && node "$KIT/bin/ticket-loop-kit.js" init --yes --no-skills --no-github --no-git-credential 2>&1)" || fail "loop.env AGENT=codex 에서 init --yes 실패: $out"
+grep -qF 'Backend: tmux (from .ticket-loop/loop.env) · Agent: Codex CLI (from .ticket-loop/loop.env)' <<<"$out" || fail "loop.env 의 AGENT=codex 가 기본값이 되지 않음: $out"
+grep -q 'In Codex' <<<"$out" || fail "AGENT=codex 인데 Codex 다음 단계 안내가 없음: $out"
+grep -q 'Keeping' <<<"$out" && fail "AGENT 를 그대로 쓰는데 Keeping 경고가 나옴: $out"
+[[ -f "$E2/.codex/rules/ticket-loop.rules" ]] || fail "AGENT=codex 가 install.sh 로 넘어가지 않음"
+# loop.env 가 없으면 지금과 같은 기본값(orca·claude)이고 loop.env 표시가 없다
+E3="$T/npx-env-none"; mkdir -p "$E3"; git -C "$E3" init -q -b main; git -C "$E3" commit -q --allow-empty -m init
+out="$(cd "$E3" && node "$KIT/bin/ticket-loop-kit.js" init --yes --no-skills --no-github --no-git-credential --no-orca 2>&1)" || fail "loop.env 없는 init 실패: $out"
+grep -qxF '▸ Backend: Orca · Agent: Claude Code' <<<"$out" || fail "loop.env 가 없는데 기본값이 orca·claude 가 아니다: $out"
+# 모르는 이름: 경고 한 줄 뒤 기본값으로 진행, 종료 코드 0, loop.env 는 그대로
+printf 'BACKEND="${BACKEND:-zellij}"\nAGENT="${AGENT:-gemini}"\n' > "$E3/.ticket-loop/loop.env"
+out="$(cd "$E3" && node "$KIT/bin/ticket-loop-kit.js" init --yes --no-skills --no-github --no-git-credential --no-orca 2>&1)" || fail "모르는 BACKEND 가 loop.env 에 있으면 실패하면 안 된다: $out"
+grep -qF 'Ignoring BACKEND=zellij in .ticket-loop/loop.env' <<<"$out" && grep -qF 'Ignoring AGENT=gemini in .ticket-loop/loop.env' <<<"$out" || fail "모르는 loop.env 값에 경고가 없음: $out"
+grep -qxF '▸ Backend: Orca · Agent: Claude Code' <<<"$out" || fail "모르는 loop.env 값인데 기본값으로 가지 않음: $out"
+grep -qxF 'BACKEND="${BACKEND:-zellij}"' "$E3/.ticket-loop/loop.env" && grep -qxF 'AGENT="${AGENT:-gemini}"' "$E3/.ticket-loop/loop.env" || fail "모르는 값을 init 이 고쳐 씀"
+echo "ok  npx 껍질 기본값은 기존 loop.env 의 BACKEND·AGENT(명시 플래그 우선, 모르는 값은 경고 뒤 기본값)"
 echo "smoke 통과"
