@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.9.13 — 2026-10-23
+
+0.9.12 실측에서 나온 결함 하나(#22)를 PR #23으로 고쳤다. 루프의 판정에 닿는다 — 티켓 사이의 다음 대상 조회가 *성공하면서* 빈 목록을 줄 때.
+
+- **티켓 사이의 빈 대상 목록은 한 번 더 확인하고, `--parent`면 스펙과 맞춰 본 뒤에야 "남은 티켓 없음"으로 읽는다(#22).** #8은 조회 *실패*만 막았다. 실측(`--parent 313`, 2026-10-23): #315 병합 직후 `pm_due`가 `skip` 줄 하나 없이 "no more tickets"를 내 열린 ready 하위 이슈 12건을 두고 병합 뒤 검증을 앞당겼다(창 4 대신 2, 통합 테스트 55분 추가). 같은 빈 응답이 메인 고리에서 났다면 12건을 남기고 "No more tickets to process."로 정상 종료하고 finished 알림을 보냈을 것이다. `gh issue list`와 `sub_issues` 중 어느 쪽이 빈 값을 줬는지는 남은 기록으로 알 수 없다.
+  - `pick_targets`: 조회가 성공했는데 후보가 0행이면 `ticket lookup returned 0 candidates` 한 줄을 남기고 2로 끝난다(목록은 비어 있다). 후보가 있었지만 담당자·스펙·막힘·PR로 모두 걸러진 빈 목록은 전처럼 0이고 skip 줄이 남아 구분된다.
+  - 새 `pick_next_targets`(`pm_due`와 메인 고리 — 시작 전 첫 계산은 `pick_targets` 그대로): 0행이면 `empty ticket list — re-checking in 30s`(새 상수 `PICK_RECHECK_SEC`) 뒤 한 번 더 조회한다. 두 번째가 목록을 주면 그 목록, 두 번째도 0행이면 `--parent`가 없을 때 빈 목록으로 확정한다.
+  - `--parent`면 새 `spec_empty_list_check`가 스펙과 맞춰 본다: 스펙 요약(`issues/N`의 `sub_issues_summary` — 목록과 다른 끝점)에 열린 하위 이슈가 없으면 빈 목록이 맞다. 있으면 `sub_issues`가 요약의 `total`보다 적게 돌려줬거나(빈·부분 응답), 돌려준 것 가운데 열려 있고 `READY_LABEL`(+`SCOPE_LABEL`)이 붙고 `IN_REVIEW_LABEL`이 없는 것이 있으면(그것은 `issue list`에 있었어야 한다) 믿지 않는다. 열린 하위 이슈가 전부 ready 라벨이 없거나(needs-info·ready-for-human …) in-review면 빈 목록이 맞다. 이슈 #22가 제안한 "요약의 `total − completed > 0`이면 불신"은 코드 리뷰에서 결함으로 드러나 이렇게 바꿨다 — 그대로 하면 그런 하위 이슈가 하나라도 남은 스펙은 끝마다 5분 뒤 멈춤으로 끝나고 루프 끝 검증(`pm_flush_end`)을 건너뛴다. `candidates`의 하위 이슈 조회도 같은 `spec_sub_issues`(번호·상태·라벨)를 쓴다.
+  - `pm_due`: 조회 실패(1)와 불신(2) 둘 다 검증을 미룬다 — 메인 고리가 다시 계산하고, 정말 없으면 루프 끝 검증이 덮는다. 메인 고리: 불신이면 #8의 조회 실패와 같은 방식으로 `PICK_RETRY_SEC` 동안 다시 해 보고(한 바퀴에 재확인 30초가 더 든다), 그래도 같으면 `ticket list empty but spec #N has open sub-issues`로 멈춘다 — 처리 중인 티켓이 없으므로 이슈 코멘트·무인 수습 없이 stopped 알림과 멈춤 기록(`other`)만 남는다. 두 번째 0행 뒤 스펙 조회가 실패하면 조회 실패(1)로 간다.
+  - 비용: 실행 끝마다 재확인 30초가 한두 번(`pm_due`의 미리 계산 + 메인 고리) 더 든다. 스펙 끝에서 요약의 `completed`가 이슈 닫힘을 늦게 반영하면 메인 고리가 최대 5분 재시도 뒤 멈춤으로 끝날 수 있다 — 실측 전.
+- 스모크: 가짜 `gh`가 호출 차례로 성공한 빈 응답을 넣고(`LIST_EMPTY_FROM/TO`, `KIDS_EMPTY_FROM/TO`), 스펙 요약(`SPEC_SUMMARY`)과 상태·라벨이 든 하위 이슈(`kids`)를 준다. 이슈의 네 사례를 함수·`pm_due`·메인 고리 세 심에서, 그리고 needs-info·in-review만 남는 경우와 `--label` 범위 밖을 본다. `pm_due` 하네스의 `log`가 실제처럼 stderr로 쓰게 고쳤다(명령 치환에 섞여 대상 목록을 오염시키던 것). 부록 D·PDF 재빌드.
+- 이미 설치된 저장소: 키트를 올리면 바로 켜진다. `loop.env`에 새로 적을 것은 없다(`PICK_RECHECK_SEC`는 덮어쓸 수 있다).
+
 ## 0.9.12 — 2026-10-22
 
 트리아지에서 ready-for-agent로 분류한 나머지 셋(#8 #11 #10)을 PR #18 #17 #19로 고쳤다. 셋 다 루프의 판정에 닿는다 — 티켓 고르기의 GitHub 조회 실패, idle 오판, 그리고 사용량 한도·확인 창 감지.
