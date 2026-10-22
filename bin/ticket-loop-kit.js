@@ -39,8 +39,8 @@ Usage
 
 Options
   -y, --yes              Use defaults without asking (automatic when not a TTY)
-  --backend <name>       ${Object.entries(BACKENDS).map(([k, b]) => `${k}${b.available ? '' : ' (coming soon)'}`).join(' | ')}  (default: orca)
-  --agent <name>         ${Object.keys(AGENTS).join(' | ')}  (default: claude) — the worker the loop starts; written to loop.env as AGENT
+  --backend <name>       ${Object.entries(BACKENDS).map(([k, b]) => `${k}${b.available ? '' : ' (coming soon)'}`).join(' | ')}  (default: the BACKEND in .ticket-loop/loop.env, else orca)
+  --agent <name>         ${Object.keys(AGENTS).join(' | ')}  (default: the AGENT in .ticket-loop/loop.env, else claude) — the worker the loop starts; written to loop.env as AGENT
   --no-skills            Skip vendoring the mattpocock skills (implement calls tdd and ticket-review — only skip if you vendor them yourself)
   --workflow-skills      Also vendor the planning skills: grill-with-docs, to-spec, to-tickets, retro (+ 3 skills they call)
   --no-workflow-skills   Remove the planning skills if a previous install vendored them (default: keep the previous choice)
@@ -240,6 +240,21 @@ function envValue(text, key) {
   const m = text.match(new RegExp(`^\\s*${key}=["']?\\$\\{${key}:-([a-z]+)\\}["']?\\s*$`, 'm')) || text.match(new RegExp(`^\\s*${key}=["']?([a-z]+)["']?\\s*$`, 'm'));
   return m ? m[1] : null;
 }
+// 기존 loop.env 의 BACKEND·AGENT — init 의 기본값. 아는 이름이고(백엔드는 쓸 수 있는 것) 아니면 경고 한 줄을 내고 빼놓는다(호출한 쪽이 지금의 기본값으로 간다)
+function loopEnvDefaults(root) {
+  const file = path.join(root, LOOP_DIR, 'loop.env');
+  if (!fs.existsSync(file)) return {};
+  const text = fs.readFileSync(file, 'utf8');
+  const out = {};
+  for (const [key, table, fallback] of [['BACKEND', BACKENDS, 'orca'], ['AGENT', AGENTS, 'claude']]) {
+    const cur = envValue(text, key);
+    if (cur === null) continue;
+    if (!table[cur]) warn(`Ignoring ${key}=${cur} in ${LOOP_DIR}/loop.env (unknown — choose one of: ${Object.keys(table).join(', ')}); defaulting to ${fallback}.`);
+    else if (table[cur].available === false) warn(`Ignoring ${key}=${cur} in ${LOOP_DIR}/loop.env (${table[cur].label} is not available yet); defaulting to ${fallback}.`);
+    else out[key] = cur;
+  }
+  return out;
+}
 function writeLoopEnv(root, backend, agent) {
   const dir = path.join(root, LOOP_DIR);
   const file = path.join(dir, 'loop.env');
@@ -295,25 +310,33 @@ async function init(o) {
   if (!has('gh')) warn('gh is not installed: labels, credential and Orca registration will be skipped, and the loop itself needs gh.');
   else if (!run('gh', ['auth', 'status']).ok) warn('gh is not logged in (gh auth login).');
 
+  // 플래그가 없을 때의 기본값: 기존 loop.env 의 BACKEND·AGENT → 없으면 orca·claude. --yes 의 값과 대화형 선택의 미리 골라진 항목 둘 다에 쓴다.
+  // 옛 위치(.orca-loop/)는 kit.json 만 읽으므로 loop.env 는 현재 위치만 본다. 모르는 이름·쓸 수 없는 백엔드면 경고 한 줄을 내고 지금의 기본값으로 간다
+  const fromEnv = loopEnvDefaults(root);
+  const backendDefault = fromEnv.BACKEND || 'orca';
+  const agentDefault = fromEnv.AGENT || 'claude';
+
   // 백엔드
   let backend = o.backend;
   if (backend && !BACKENDS[backend]) die(`Unknown backend ${backend}. Choose one of: ${Object.keys(BACKENDS).join(', ')}`);
   if (interactive && !backend) {
     console.log('');
     backend = await select('Backend — who manages worktrees and agent terminals?',
-      Object.entries(BACKENDS).map(([key, b]) => ({ key, label: b.label, note: b.note, disabled: !b.available })), 'orca');
+      Object.entries(BACKENDS).map(([key, b]) => ({ key, label: b.label, note: b.note, disabled: !b.available })), backendDefault);
     if (backend === null) { console.log(c.dim('Aborted.')); process.exit(130); }
   }
-  backend = backend || 'orca';
+  backend = backend || backendDefault;
   if (!BACKENDS[backend].available) die(`The ${BACKENDS[backend].label} backend is not available yet. ${BACKENDS[backend].note}.`);
   let agent = o.agent;
   if (agent && !AGENTS[agent]) die(`Unknown agent ${agent}. Choose one of: ${Object.keys(AGENTS).join(', ')}`);
   if (interactive && !agent) {
     agent = await select('Worker agent — which CLI runs each ticket?',
-      Object.entries(AGENTS).map(([key, a]) => ({ key, label: a.label, note: a.note })), 'claude');
+      Object.entries(AGENTS).map(([key, a]) => ({ key, label: a.label, note: a.note })), agentDefault);
     if (agent === null) { console.log(c.dim('Aborted.')); process.exit(130); }
   }
-  agent = agent || 'claude';
+  agent = agent || agentDefault;
+  // 배너에 "(from .ticket-loop/loop.env)" — 플래그 없이 loop.env 의 값이 그대로 쓰였을 때만(명시한 플래그나 대화형에서 다른 것을 골랐으면 아니다)
+  const envNote = (key, explicit, chosen) => (!explicit && fromEnv[key] && chosen === fromEnv[key] ? c.dim(` (from ${LOOP_DIR}/loop.env)`) : '');
 
   // origin 이 실제로 쓰는 주소 — ls-remote --get-url 은 insteadOf 규칙까지 적용한 값을 준다. SSH 면 gh 토큰 단계는 쓰이지 않는다
   const originUrl = run('git', ['ls-remote', '--get-url', 'origin']).out;
@@ -359,7 +382,7 @@ async function init(o) {
   if (backend !== 'orca') o.orca = false;
 
   console.log('');
-  say(`Backend: ${c.cyan(BACKENDS[backend].label)} · Agent: ${c.cyan(AGENTS[agent].label)}`);
+  say(`Backend: ${c.cyan(BACKENDS[backend].label)}${envNote('BACKEND', o.backend, backend)} · Agent: ${c.cyan(AGENTS[agent].label)}${envNote('AGENT', o.agent, agent)}`);
 
   // install.sh 가 먼저 돈다 — 옛 .agent-loop/ (.orca-loop/) 를 .ticket-loop/ 로 옮기는 마이그레이션이 거기 있어서, loop.env 는 그 뒤에 쓴다
   const args = [INSTALL_SH, '--ref', o.ref || kitRef(), '--agent', agent];
