@@ -647,10 +647,12 @@ echo "ok  병합 뒤 검증 재실행(포트 대기·첫 실행 로그·딱 한 
 # GitHub 조회 실패(#8): 조회 넷(blocked_by·sub_issue_count·open_pr_for·candidates)은 gh 가 실패하면 출력 없이 비0 이고 성공 출력은 전과 같다.
 # pick_targets 는 목록 조회가 실패하면 비0, 후보 하나의 검사가 실패하면 그 티켓만 "could not check" 로 건너뛴다(다른 티켓은 고른다).
 # 가짜 gh 는 FAIL_* 로 고른 조회만 502 로 끝낸다(issue list 는 호출 차례 LIST_FAIL_FROM~LIST_FAIL_TO 에서, 나머지는 all 또는 이슈 번호).
+# 성공한 빈 응답(#22)은 호출 차례로 넣는다 — issue list 는 LIST_EMPTY_FROM~LIST_EMPTY_TO 에서 [], sub_issues 는 KIDS_EMPTY_FROM~KIDS_EMPTY_TO 에서 [].
+# sub_issues 는 KIDS_OUT(상태·라벨이 든 객체 배열 — kids 헬퍼로 만든다), 스펙 이슈(PARENT)의 요약은 SPEC_SUMMARY("total completed").
 # 메인 고리의 재시도·멈춤은 알림·멈춤 보고 검사 뒤에 같은 가짜 gh 로 본다
 GF="$(cd "$T" && pwd -P)/ghfail"; mkdir -p "$GF/bin"
 sed -n '/^# ---------- GitHub 조회 ----------/,/^# ---------- 백엔드 ----------/p' "$KIT/files/scripts/ticket-loop.sh" > "$GF/fn.sh"
-for f in blocked_by sub_issue_count open_pr_for candidates pick_targets issue_title; do grep -q "^${f}() " "$GF/fn.sh" || fail "GitHub 조회 절에 ${f} 가 없음"; done
+for f in blocked_by sub_issue_count open_pr_for candidates pick_targets pick_next_targets spec_sub_issues spec_empty_list_check issue_title; do grep -q "^${f}() " "$GF/fn.sh" || fail "GitHub 조회 절에 ${f} 가 없음"; done
 cat > "$GF/bin/gh" <<'GH'
 #!/usr/bin/env bash
 [[ -z "${CALLS:-}" ]] || printf "%s\x1e" "$@" | jq -Rsc '{cmd: "gh", args: (split("\u001e")[:-1])}' >> "$CALLS"
@@ -659,6 +661,7 @@ hit() { [[ "${!1:-}" == all || "${!1:-}" == "$2" ]]; }   # $1 FAIL_* 변수 이�
 case "$1 ${2:-}" in
   "issue list") c=$(( $(cat "$GF/n" 2>/dev/null || echo 0) + 1 )); echo "$c" > "$GF/n"
                 [[ $c -lt ${LIST_FAIL_FROM:-9999} || $c -gt ${LIST_FAIL_TO:-9999} ]] || boom
+                [[ $c -lt ${LIST_EMPTY_FROM:-9999} || $c -gt ${LIST_EMPTY_TO:-9999} ]] || { echo '[]'; exit 0; }
                 cat "$GF/issues.json" ;;
   "pr list")    [[ "${FAIL_PR:-0}" == 0 ]] || boom; cat "$GF/prs.json" ;;
   "issue view") echo "T$3" ;;
@@ -667,19 +670,26 @@ case "$1 ${2:-}" in
       */dependencies/blocked_by) ! hit FAIL_BLOCKED "$n" || boom
                                  ! hit FAIL_BLOCKED_404 "$n" || { echo "gh: HTTP 404: Not Found (https://api.github.com/x)" >&2; exit 1; }
                                  printf '%b\n' "${BLOCKED_OUT:-0}" ;;
-      */sub_issues) [[ "${FAIL_KIDS:-0}" == 0 ]] || boom; printf '%s\n' "${KIDS_OUT:-[]}" ;;
-      repos/o/r/issues/*) ! hit FAIL_SUBS "$n" || boom; printf '%s\n' "${SUBS_OUT:-0}" ;;
+      */sub_issues) k=$(( $(cat "$GF/k" 2>/dev/null || echo 0) + 1 )); echo "$k" > "$GF/k"
+                    [[ "${FAIL_KIDS:-0}" == 0 ]] || boom
+                    [[ $k -lt ${KIDS_EMPTY_FROM:-9999} || $k -gt ${KIDS_EMPTY_TO:-9999} ]] || { echo '[]'; exit 0; }
+                    printf '%s\n' "${KIDS_OUT:-[]}" ;;
+      repos/o/r/issues/*) ! hit FAIL_SUBS "$n" || boom
+                          if [[ "$n" == "${PARENT:-x}" ]]; then printf '%s\n' "${SPEC_SUMMARY:-0 0}"; else printf '%s\n' "${SUBS_OUT:-0}"; fi ;;
     esac ;;
 esac
 GH
 chmod +x "$GF/bin/gh"
 echo '[{"number":12,"title":"T12","labels":[],"assignees":[]},{"number":11,"title":"T11","labels":[],"assignees":[]}]' > "$GF/issues.json"
 echo '[]' > "$GF/prs.json"
+# 가짜 sub_issues 응답: kids 11 12 → 열린 ready-for-agent 둘. "번호:상태:라벨,라벨" 로 바꿀 수 있다(kids 11 '12:open:needs-info' '13:closed:ready-for-agent')
+kids() { local k n st lb; for k in "$@"; do if [[ "$k" == *:*:* ]]; then IFS=: read -r n st lb <<<"$k"; else n="${k%%:*}"; st=""; lb=ready-for-agent; fi; printf '%s\t%s\t%s\n' "$n" "${st:-open}" "$lb"; done \
+  | jq -Rsc 'split("\n") | map(select(. != "") | split("\t") | {number: (.[0] | tonumber), state: .[1], labels: (.[2] | if . == "" then [] else split(",") end)})'; }
 qf() {  # $1 함수 호출(bash 문장), 나머지: 환경(VAR=값) → "종료 코드|stdout(줄 사이 ,)|skip 로그(줄 사이 ;)"
-  local call="$1"; shift; rm -f "$GF/n"; : > "$GF/log"
+  local call="$1"; shift; rm -f "$GF/n" "$GF/k"; : > "$GF/log"
   (cd "$GF" && env PATH="$GF/bin:$PATH" GF="$GF" CALL="$call" "$@" bash -c '
     set -euo pipefail
-    OWNER_REPO=o/r; BRANCH_PREFIX=issue-; READY_LABEL=ready-for-agent; SCOPE_LABEL=""; PARENT="${PARENT:-}"; IN_REVIEW_LABEL=in-review; ORDER_REGEX="^T(?<n>[0-9]+)"; TICKETS=()
+    OWNER_REPO=o/r; BRANCH_PREFIX=issue-; READY_LABEL=ready-for-agent; SCOPE_LABEL="${SCOPE_LABEL:-}"; PARENT="${PARENT:-}"; IN_REVIEW_LABEL=in-review; ORDER_REGEX="^T(?<n>[0-9]+)"; TICKETS=(); PICK_RECHECK_SEC=0
     log() { case "${1:-}" in title|step|ok|warn|err) [[ $# -lt 2 ]] || shift ;; esac; echo "$*" >> "$GF/log"; }
     source fn.sh
     rc=0; out="$(eval "$CALL" 2>/dev/null)" || rc=$?
@@ -692,7 +702,7 @@ echo '[{"number":120,"headRefName":"issue-12"}]' > "$GF/prs.json"
 [[ "$(qf 'open_pr_for 12')" == "0|120|" && "$(qf 'open_pr_for 11')" == "0||" ]] || fail "open_pr_for 성공 출력: $(qf 'open_pr_for 12') / $(qf 'open_pr_for 11')"
 echo '[]' > "$GF/prs.json"
 [[ "$(qf candidates)" == $'0|11\t0\tT11,12\t0\tT12|' ]] || fail "candidates 성공 출력: $(qf candidates)"
-[[ "$(qf candidates PARENT=40 KIDS_OUT='[12]')" == $'0|12\t0\tT12|' ]] || fail "candidates(--parent) 성공 출력: $(qf candidates PARENT=40 KIDS_OUT='[12]')"
+[[ "$(qf candidates PARENT=40 KIDS_OUT="$(kids 12)")" == $'0|12\t0\tT12|' ]] || fail "candidates(--parent) 성공 출력: $(qf candidates PARENT=40 KIDS_OUT="$(kids 12)")"
 # gh 가 실패하면 출력 없이 비0 — blocked_by 가 awk 합계 0 으로, open_pr_for·candidates 가 빈 값으로 읽히던 것
 [[ "$(qf 'blocked_by 12' FAIL_BLOCKED=12)" == "1||" ]] || fail "blocked_by: gh 실패가 0 으로 읽힘: $(qf 'blocked_by 12' FAIL_BLOCKED=12)"
 # 예외: 일시 장애가 아닌 404 는 의존성 API 가 없는 환경(옛 GHES) — 0 에 종료 코드 0, 경고는 한 셸에서 두 번 불러도 한 번
@@ -716,6 +726,47 @@ grep -qF 'list="$(candidates)" || return 1' "$GF/fn.sh" || fail "pick_targets �
 echo '[{"number":120,"headRefName":"issue-12"}]' > "$GF/prs.json"
 [[ "$(qf pick_targets)" == $'0|11\tT11|skip #12 (T12): PR already open' ]] || fail "pick_targets: PR 열린 티켓 건너뛰기 문구가 바뀜: $(qf pick_targets)"
 echo '[]' > "$GF/prs.json"
+# 후보 0행(#22): 조회가 성공했는데 목록이 비면(issue list 가 [], 또는 --parent 의 sub_issues 가 []) 비0(2)에 로그 한 줄 — "후보는 있었지만 모두
+# 걸러짐"(0, skip 줄)과 구분된다. 모두 걸러진 경우는 위의 BLOCKED_OUT·SUBS_OUT 검사대로 0
+E0='ticket lookup returned 0 candidates'
+[[ "$(qf pick_targets LIST_EMPTY_FROM=1)" == "2||$E0" ]] || fail "pick_targets: issue list 의 빈 응답이 0행으로 표시되지 않음: $(qf pick_targets LIST_EMPTY_FROM=1)"
+[[ "$(qf pick_targets PARENT=40 KIDS_EMPTY_FROM=1)" == "2||$E0" ]] || fail "pick_targets(--parent): sub_issues 의 빈 응답이 0행으로 표시되지 않음: $(qf pick_targets PARENT=40 KIDS_EMPTY_FROM=1)"
+[[ "$(qf pick_targets PARENT=40 KIDS_OUT="$(kids 11 12)")" == $'0|11\tT11,12\tT12|' ]] || fail "pick_targets(--parent) 성공 출력: $(qf pick_targets PARENT=40 KIDS_OUT="$(kids 11 12)")"
+# 스펙의 하위 이슈(spec_sub_issues): 번호·상태·라벨, 조회 실패는 비0
+[[ "$(qf 'spec_sub_issues 40' PARENT=40 KIDS_OUT="$(kids 11 '12:closed:')")" == '0|[{"number":11,"state":"open","labels":["ready-for-agent"]},{"number":12,"state":"closed","labels":[]}]|' && "$(qf 'spec_sub_issues 40' PARENT=40 FAIL_KIDS=1)" == "1||" ]] \
+  || fail "spec_sub_issues: $(qf 'spec_sub_issues 40' PARENT=40 KIDS_OUT="$(kids 11 '12:closed:')") / $(qf 'spec_sub_issues 40' PARENT=40 FAIL_KIDS=1)"
+# 빈 목록과 스펙 맞춰 보기(spec_empty_list_check): 요약(SPEC_SUMMARY "total completed")에 열린 하위 이슈가 없으면 빈 목록이 맞다(출력 없음, 하위 이슈 조회도
+# 안 한다). 있으면 sub_issues 가 total 보다 적게 왔거나(빈·부분 응답), 열린·ready(+scope)·in-review 아님인 하위 이슈가 있으면 이유를 낸다. 열린 것이
+# 전부 ready 라벨이 없거나 in-review 면 빈 목록이 맞다. 요약·하위 이슈 조회 실패는 비0
+sec() { qf 'spec_empty_list_check 40' PARENT=40 "$@"; }
+[[ "$(sec SPEC_SUMMARY='14 14' FAIL_KIDS=1)" == "0||" ]] || fail "spec_empty_list_check(열린 하위 이슈 0 → 빈 목록 맞음, 하위 이슈 조회 없이): $(sec SPEC_SUMMARY='14 14' FAIL_KIDS=1)"
+[[ "$(sec SPEC_SUMMARY='14 11')" == "0|the sub_issues lookup returned 0 of 14 sub-issues of spec #40 (3 open)|" ]] || fail "spec_empty_list_check(sub_issues 가 빈 응답): $(sec SPEC_SUMMARY='14 11')"
+[[ "$(sec SPEC_SUMMARY='3 1' KIDS_OUT="$(kids 11 12)")" == "0|the sub_issues lookup returned 2 of 3 sub-issues of spec #40 (2 open)|" ]] || fail "spec_empty_list_check(sub_issues 가 부분 응답): $(sec SPEC_SUMMARY='3 1' KIDS_OUT="$(kids 11 12)")"
+[[ "$(sec SPEC_SUMMARY='3 1' KIDS_OUT="$(kids 11 12 '13:closed:')")" == "0|spec #40 has 2 open ready-for-agent sub-issues the lookup did not return|" ]] \
+  || fail "spec_empty_list_check(issue list 가 빈 응답 — 열린 ready 하위 이슈가 있다): $(sec SPEC_SUMMARY='3 1' KIDS_OUT="$(kids 11 12 '13:closed:')")"
+[[ "$(sec SPEC_SUMMARY='2 1' KIDS_OUT="$(kids 11 '13:closed:')")" == "0|spec #40 has 1 open ready-for-agent sub-issue the lookup did not return|" ]] || fail "spec_empty_list_check(단수): $(sec SPEC_SUMMARY='2 1' KIDS_OUT="$(kids 11 '13:closed:')")"
+[[ "$(sec SPEC_SUMMARY='3 0' KIDS_OUT="$(kids '11:open:needs-info' '12:open:ready-for-agent,in-review' '13:open:ready-for-human')")" == "0||" ]] \
+  || fail "spec_empty_list_check(열린 것이 전부 ready 아님·in-review → 빈 목록 맞음): $(sec SPEC_SUMMARY='3 0' KIDS_OUT="$(kids '11:open:needs-info' '12:open:ready-for-agent,in-review' '13:open:ready-for-human')")"
+[[ "$(sec SPEC_SUMMARY='1 0' KIDS_OUT="$(kids 11)" SCOPE_LABEL=area-x)" == "0||" ]] || fail "spec_empty_list_check(--label 범위 밖의 열린 ready → 빈 목록 맞음): $(sec SPEC_SUMMARY='1 0' KIDS_OUT="$(kids 11)" SCOPE_LABEL=area-x)"
+[[ "$(sec SPEC_SUMMARY='14 11' FAIL_SUBS=40)" == "1||" && "$(sec SPEC_SUMMARY='14 11' FAIL_KIDS=1)" == "1||" ]] || fail "spec_empty_list_check(조회 실패): $(sec SPEC_SUMMARY='14 11' FAIL_SUBS=40) / $(sec SPEC_SUMMARY='14 11' FAIL_KIDS=1)"
+# 티켓 사이의 조회(pick_next_targets, #22): 후보 0행이면 PICK_RECHECK_SEC 쉬고 한 번 더 — 두 번째가 목록을 주면 그 목록(0). 두 번째도 0행이면
+# 빈 목록으로 확정(0)하되, --parent 면 스펙과 맞춰 봐서(spec_empty_list_check) 말이 안 되면 믿지 않는다(2). 어느 조회든 실패하면 1. 후보가 있었지만
+# 모두 걸러진 빈 목록은 재확인 없이 0(skip 줄)
+RC='empty ticket list — re-checking in 0s'
+NT='ticket list empty but spec #40 has 2 open ready-for-agent sub-issues the lookup did not return — not trusting it'
+[[ "$(qf pick_next_targets LIST_EMPTY_FROM=1 LIST_EMPTY_TO=1)" == $'0|11\tT11,12\tT12|'"$E0;$RC" ]] || fail "pick_next_targets: issue list 가 한 번 비었다 회복 → 두 번째 목록이어야: $(qf pick_next_targets LIST_EMPTY_FROM=1 LIST_EMPTY_TO=1)"
+[[ "$(qf pick_next_targets PARENT=40 KIDS_OUT="$(kids 11 12)" KIDS_EMPTY_FROM=1 KIDS_EMPTY_TO=1)" == $'0|11\tT11,12\tT12|'"$E0;$RC" ]] || fail "pick_next_targets(--parent): sub_issues 가 한 번 비었다 회복: $(qf pick_next_targets PARENT=40 KIDS_OUT="$(kids 11 12)" KIDS_EMPTY_FROM=1 KIDS_EMPTY_TO=1)"
+[[ "$(qf pick_next_targets LIST_EMPTY_FROM=1)" == "0||$E0;$RC;$E0" ]] || fail "pick_next_targets: 두 번 다 0행(--parent 없음) → 빈 목록 확정이어야: $(qf pick_next_targets LIST_EMPTY_FROM=1)"
+[[ "$(qf pick_next_targets PARENT=40 SPEC_SUMMARY='2 2' LIST_EMPTY_FROM=1)" == "0||$E0;$RC;$E0" ]] || fail "pick_next_targets(--parent, 열린 하위 이슈 0): 빈 목록 확정이어야: $(qf pick_next_targets PARENT=40 SPEC_SUMMARY='2 2' LIST_EMPTY_FROM=1)"
+[[ "$(qf pick_next_targets PARENT=40 SPEC_SUMMARY='2 0' KIDS_OUT="$(kids 11 12)" LIST_EMPTY_FROM=1)" == "2||$E0;$RC;$E0;$NT" ]] \
+  || fail "pick_next_targets(--parent, 열린 ready 하위 이슈 둘): 빈 목록을 믿음: $(qf pick_next_targets PARENT=40 SPEC_SUMMARY='2 0' KIDS_OUT="$(kids 11 12)" LIST_EMPTY_FROM=1)"
+[[ "$(qf pick_next_targets PARENT=40 SPEC_SUMMARY='2 0' KIDS_OUT="$(kids '11:open:needs-info' '12:open:ready-for-agent,in-review')" LIST_EMPTY_FROM=1)" == "0||$E0;$RC;$E0" ]] \
+  || fail "pick_next_targets(--parent, 열린 것이 전부 ready 아님·in-review → 빈 목록 확정): $(qf pick_next_targets PARENT=40 SPEC_SUMMARY='2 0' KIDS_OUT="$(kids '11:open:needs-info' '12:open:ready-for-agent,in-review')" LIST_EMPTY_FROM=1)"
+[[ "$(qf pick_next_targets PARENT=40 SPEC_SUMMARY='2 0' FAIL_SUBS=40 LIST_EMPTY_FROM=1)" == "1||$E0;$RC;$E0" ]] || fail "pick_next_targets(--parent, 스펙 조회 실패): 조회 실패(1)여야: $(qf pick_next_targets PARENT=40 SPEC_SUMMARY='2 0' FAIL_SUBS=40 LIST_EMPTY_FROM=1)"
+[[ "$(qf pick_next_targets LIST_FAIL_FROM=1)" == "1||" && "$(qf pick_next_targets LIST_EMPTY_FROM=1 LIST_EMPTY_TO=1 LIST_FAIL_FROM=2)" == "1||$E0;$RC" ]] \
+  || fail "pick_next_targets: 조회 실패가 1 이 아님: $(qf pick_next_targets LIST_FAIL_FROM=1) / $(qf pick_next_targets LIST_EMPTY_FROM=1 LIST_EMPTY_TO=1 LIST_FAIL_FROM=2)"
+[[ "$(qf pick_next_targets BLOCKED_OUT=1)" == "0||skip #11 (T11): blocked by an open issue;skip #12 (T12): blocked by an open issue" ]] || fail "pick_next_targets: 모두 걸러진 빈 목록인데 재확인함: $(qf pick_next_targets BLOCKED_OUT=1)"
+[[ "$(qf pick_next_targets)" == $'0|11\tT11,12\tT12|' ]] || fail "pick_next_targets 성공 출력: $(qf pick_next_targets)"
 echo "ok  GitHub 조회 실패 — 조회 넷은 비0, pick_targets 는 목록 실패 비0·후보 검사 실패 could not check(성공 출력 그대로)"
 
 # 묶어 돌리는 병합 뒤 검증(POST_MERGE_EVERY): 창(아직 검증하지 않은 병합)의 저장·읽기, 언제 돌릴지(pm_due), 묶음 검증의 결과 문자열과
@@ -728,7 +779,7 @@ pmw_commit() { [[ -z "${2:-}" ]] || touch "$W/repo/$2"; git -C "$W/repo" add -A;
 C0="$(pmw_commit init)"; C1="$(pmw_commit 'merge #11' a)"; C2="$(pmw_commit 'merge #12' b)"; C3="$(pmw_commit 'merge #13' broken)"; C4="$(pmw_commit 'merge #14' c)"
 git -C "$W/repo" push -q origin HEAD:main 2>/dev/null; git -C "$W/repo" fetch -q origin
 sed -n '/^# ---------- 병합 뒤 검증 ----------/,/^# ---------- 티켓 기록 · 스펙 리포트 ----------/p' "$KIT/files/scripts/ticket-loop.sh" > "$W/fn.sh"
-sed -n '/^abs_path() /p; /^bg_wait() {/,/^}/p; /^PH_NAME=/p; /^phase() {/,/^}/p' "$KIT/files/scripts/ticket-loop.sh" >> "$W/fn.sh"
+sed -n '/^abs_path() /p; /^bg_wait() {/,/^}/p; /^PH_NAME=/p; /^phase() {/,/^}/p; /^pick_next_targets() {/,/^}/p' "$KIT/files/scripts/ticket-loop.sh" >> "$W/fn.sh"
 for f in pm_count pm_list pm_cover pm_of pm_save pm_load pm_add pm_passed pm_due pm_probe pm_describe pm_bisect pm_window_json post_merge_recover pm_flush_end; do
   grep -q "^${f}() {" "$W/fn.sh" || fail "병합 뒤 검증 절에 ${f} 가 없음"
 done
@@ -740,11 +791,11 @@ pmw() {
     set -euo pipefail
     ROOT="$(git rev-parse --show-toplevel)"; MAIN_WT="$ROOT"; OWNER_REPO=o/r; BASE_BRANCH=main; POST_MERGE_COPY=""; POST_MERGE_PORT=""; PORT_WAIT_SEC=0
     POST_MERGE_CMD="exit 0"; POST_MERGE_RETRY_CMD=""; POST_MERGE_WORKTREE="$W/wt"; POST_MERGE=1; POST_MERGE_EVERY=4
-    TICKETS=(); MAX=0; done_count=0; PROCESSED=""; CLOSED_SPECS=""
-    log() { case "${1:-}" in title|step|ok|warn|err) [[ $# -lt 2 ]] || shift ;; esac; echo "$*"; }
+    TICKETS=(); MAX=0; done_count=0; PROCESSED=""; CLOSED_SPECS=""; PARENT=""; PICK_RECHECK_SEC=0
+    log() { case "${1:-}" in title|step|ok|warn|err) [[ $# -lt 2 ]] || shift ;; esac; echo "$*" >&2; }   # 실제 log 처럼 stderr — 명령 치환(pm_due 의 대상 조회)에 섞이지 않게
     dim_lines() { local l; while IFS= read -r l; do echo "  $l"; done; }; fmt_epoch() { echo "$1"; }
     post_merge_flaky_record() { echo "FLAKY_RECORD $1"; }; die() { echo "DIE $*"; exit 7; }
-    pick_targets() { echo "PICK" >&2; printf "%b" "${PICK:-}"; }
+    pick_targets() { echo "PICK" >&2; printf "%b" "${PICK:-}"; }   # pick_next_targets 는 실제 함수(fn.sh) — 가짜 pick_targets 를 부른다
     source "$FN"
     PM_STATE_FILE="$W/state.json"; LOG_FILE="$(abs_path .ticket-loop/loop-0101.log)"
     eval "$BODY"' 2>&1)
@@ -788,9 +839,25 @@ due() { pmw "PM_PENDING=\"\$(printf '%s\n' \"$WIN4\" | awk 'NR <= $1')\"; $2; rc
 [[ "$(due 0 'CLOSED_SPECS=" 40"' 12 40)" == 'DUE=1 WHY= SET=0' ]] || fail "pm_due(창이 비면 돌리지 않음): $(due 0 'CLOSED_SPECS=" 40"' 12 40)"
 # 다음 대상 조회가 실제로 실패할 때(가짜 gh 의 issue list 가 502 — $GF) 미룬다. pick_targets 를 통째로 가짜로 바꾸지 않고 candidates 까지 실제 함수로
 # (0.9.9 의 이 분기는 pick_targets 가 실패를 돌려주지 못해 닿지 않았다 — #8). 같은 길로 성공하면 다음 대상(#11)을 메인 고리에 넘긴다
-PMQ="PATH=$GF/bin:\$PATH; export GF=$GF; rm -f $GF/n; BRANCH_PREFIX=issue-; READY_LABEL=ready-for-agent; SCOPE_LABEL=; PARENT=; IN_REVIEW_LABEL=in-review; ORDER_REGEX='^T(?<n>[0-9]+)'; source $GF/fn.sh"
+PMQ="PATH=$GF/bin:\$PATH; export GF=$GF; rm -f $GF/n $GF/k; BRANCH_PREFIX=issue-; READY_LABEL=ready-for-agent; SCOPE_LABEL=; PARENT=; IN_REVIEW_LABEL=in-review; ORDER_REGEX='^T(?<n>[0-9]+)'; PICK_RECHECK_SEC=0; source $GF/fn.sh"
 [[ "$(due 2 "$PMQ; export LIST_FAIL_FROM=1")" == $'gh: HTTP 502: Bad Gateway (https://api.github.com/x)\nDUE=1 WHY= SET=0' ]] || fail "pm_due(다음 대상 조회 실패 → 죽지 않고 미룸): $(due 2 "$PMQ; export LIST_FAIL_FROM=1")"
 [[ "$(due 2 "$PMQ")" == 'DUE=1 WHY= SET=1' ]] || fail "pm_due(실제 조회로 다음 대상 있음 → 미루고 목록을 넘김): $(due 2 "$PMQ")"
+# 성공한 빈 응답(#22): issue list(또는 --parent 의 sub_issues)가 한 번 [] 을 주고 다음에 목록을 주면 재확인 뒤 미루고 그 목록을 넘긴다 —
+# 전에는 "no more tickets" 로 검증을 앞당겼다(실측). 두 번 다 비고 스펙에 열린 하위 이슈가 남으면 미룬다(메인 고리가 다시 계산한다);
+# 두 번 다 비고 --parent 가 없거나 열린 하위 이슈가 0 이면 그때 "no more tickets". 모두 걸러진 빈 목록은 재확인 없이 "no more tickets"
+[[ "$(due 2 "$PMQ; export LIST_EMPTY_FROM=1 LIST_EMPTY_TO=1")" == "$E0"$'\n'"$RC"$'\nDUE=1 WHY= SET=1' ]] || fail "pm_due(issue list 가 한 번 빔 → 재확인 뒤 미룸): $(due 2 "$PMQ; export LIST_EMPTY_FROM=1 LIST_EMPTY_TO=1")"
+K2="$(kids 11 12)"
+[[ "$(due 2 "$PMQ; export PARENT=40 KIDS_OUT='$K2' KIDS_EMPTY_FROM=1 KIDS_EMPTY_TO=1")" == "$E0"$'\n'"$RC"$'\nDUE=1 WHY= SET=1' ]] \
+  || fail "pm_due(--parent 의 sub_issues 가 한 번 빔 → 재확인 뒤 미룸): $(due 2 "$PMQ; export PARENT=40 KIDS_OUT='$K2' KIDS_EMPTY_FROM=1 KIDS_EMPTY_TO=1")"
+[[ "$(due 2 "$PMQ; export PARENT=40 SPEC_SUMMARY='14 11' LIST_EMPTY_FROM=1")" == "$E0"$'\n'"$RC"$'\n'"$E0"$'\nticket list empty but the sub_issues lookup returned 0 of 14 sub-issues of spec #40 (3 open) — not trusting it\nDUE=1 WHY= SET=0' ]] \
+  || fail "pm_due(두 번 다 빔, 스펙에 열린 하위 이슈 → 미룸): $(due 2 "$PMQ; export PARENT=40 SPEC_SUMMARY='14 11' LIST_EMPTY_FROM=1")"
+[[ "$(due 2 "$PMQ; export LIST_EMPTY_FROM=1")" == "$E0"$'\n'"$RC"$'\n'"$E0"$'\nDUE=0 WHY=no more tickets SET=0' ]] || fail "pm_due(두 번 다 빔, --parent 없음 → 돌림): $(due 2 "$PMQ; export LIST_EMPTY_FROM=1")"
+[[ "$(due 2 "$PMQ; export PARENT=40 SPEC_SUMMARY='14 14' LIST_EMPTY_FROM=1")" == "$E0"$'\n'"$RC"$'\n'"$E0"$'\nDUE=0 WHY=no more tickets SET=0' ]] || fail "pm_due(두 번 다 빔, 열린 하위 이슈 0 → 돌림): $(due 2 "$PMQ; export PARENT=40 SPEC_SUMMARY='14 14' LIST_EMPTY_FROM=1")"
+K3="$(kids '11:open:needs-info' '12:open:ready-for-agent,in-review')"
+[[ "$(due 2 "$PMQ; export PARENT=40 SPEC_SUMMARY='2 0' KIDS_OUT='$K3' LIST_EMPTY_FROM=1")" == "$E0"$'\n'"$RC"$'\n'"$E0"$'\nDUE=0 WHY=no more tickets SET=0' ]] \
+  || fail "pm_due(두 번 다 빔, 열린 것이 전부 ready 아님·in-review → 돌림): $(due 2 "$PMQ; export PARENT=40 SPEC_SUMMARY='2 0' KIDS_OUT='$K3' LIST_EMPTY_FROM=1")"
+[[ "$(due 2 "$PMQ; export BLOCKED_OUT=1")" == $'skip #11 (T11): blocked by an open issue\nskip #12 (T12): blocked by an open issue\nDUE=0 WHY=no more tickets SET=0' ]] \
+  || fail "pm_due(모두 걸러진 빈 목록 → 재확인 없이 돌림): $(due 2 "$PMQ; export BLOCKED_OUT=1")"
 echo "ok  묶어 돌리는 검증 — 언제 돌리나(창이 참·스펙 끝·실행의 마지막)"
 
 # 묶음 검증: 통과·재실행 통과면 결과에 덮은 병합을 적고 창을 닫는다(시작 = 검증한 커밋)
@@ -1181,16 +1248,16 @@ echo "ok  알림·멈춤 보고(Slack·GitHub 기록, die·set -e·신호, 긴 �
 ML="$(cd "$T" && pwd -P)/mainloop"; mkdir -p "$ML/bin"
 cp "$M/bin/curl" "$M/bin/osascript" "$GF/bin/gh" "$ML/bin/"; cp "$GF/issues.json" "$GF/prs.json" "$ML/"
 { sed -n '/^# ----- 알림 · 멈춤 보고 -----/,/^# ----- 알림 · 멈춤 보고 끝 -----/p' "$KIT/files/scripts/ticket-loop.sh"; cat "$GF/fn.sh"; } > "$ML/fn.sh"
-sed -n '/^targets="$(pick_targets)"/p' "$KIT/files/scripts/ticket-loop.sh" > "$ML/prestart.sh"
+sed -n '/^pick_rc=0; targets="$(pick_targets)"/,/^\[\[ $pick_rc -ne 1 \]\] || die/p' "$KIT/files/scripts/ticket-loop.sh" > "$ML/prestart.sh"
 sed -n '/^done_count=0$/,$p' "$KIT/files/scripts/ticket-loop.sh" > "$ML/loop.sh"
-grep -q 'pick_targets' "$ML/prestart.sh" && grep -q '^while :; do' "$ML/loop.sh" && grep -q 'notify "Ticket loop finished"' "$ML/loop.sh" || fail "메인 고리를 찾지 못함"
+[[ "$(grep -c . "$ML/prestart.sh")" == 2 ]] && grep -q 'pick_targets' "$ML/prestart.sh" && grep -q '^while :; do' "$ML/loop.sh" && grep -q 'notify "Ticket loop finished"' "$ML/loop.sh" || fail "메인 고리를 찾지 못함"
 cat > "$ML/run.sh" <<'EOF'
 set -euo pipefail
-ROOT="$PWD"; MAIN_WT="$PWD"; OWNER_REPO=o/r; BASE_BRANCH=main; BACKEND=cmux; BACKEND_NAME=cmux; AGENT=claude; PARENT=""
+ROOT="$PWD"; MAIN_WT="$PWD"; OWNER_REPO=o/r; BASE_BRANCH=main; BACKEND=cmux; BACKEND_NAME=cmux; AGENT=claude; PARENT="${PARENT:-}"
 SLACK_WEBHOOK_URL=https://hooks.example/x; SLACK_MENTION="<@U1>"; STOPPED_LABEL=loop-stopped
 BRANCH_PREFIX=issue-; READY_LABEL=ready-for-agent; SCOPE_LABEL=""; IN_REVIEW_LABEL=in-review; ORDER_REGEX="^T(?<n>[0-9]+)"
 LOG_FILE="$PWD/loop.log"; : > "$LOG_FILE"; LOCK_DIR="$PWD/lock"
-PICK_RETRY_SEC="${PICK_RETRY_SEC:-2}"; PICK_RETRY_EVERY_SEC=1; MAX=0; NEXT_TARGETS_SET=0; NEXT_TARGETS=""; TRIAGE_USED=0; CLOSED_SPECS=""
+PICK_RETRY_SEC="${PICK_RETRY_SEC:-2}"; PICK_RETRY_EVERY_SEC=1; PICK_RECHECK_SEC=0; MAX=0; NEXT_TARGETS_SET=0; NEXT_TARGETS=""; TRIAGE_USED=0; CLOSED_SPECS=""
 # shellcheck disable=SC2206
 TICKETS=(${TICKETS_IN:-})
 log() { case "$1" in title|step|ok|warn|err) shift ;; esac; printf '[2026-10-22 10:00:00] %s\n' "$*" >> "$LOG_FILE"; }
@@ -1207,7 +1274,7 @@ targets=$'11\tT11'   # 시작 전 첫 계산의 결과 — 그 다음부터는 �
 source loop.sh
 EOF
 mlcase() {  # 환경(VAR=값 …) → 종료 코드. 결과는 $ML/{ev,loop.log,calls.jsonl,.ticket-loop/stops}
-  rm -rf "$ML/lock" "$ML/.ticket-loop" "$ML/n"; : > "$ML/calls.jsonl"; : > "$ML/ev"
+  rm -rf "$ML/lock" "$ML/.ticket-loop" "$ML/n" "$ML/k"; : > "$ML/calls.jsonl"; : > "$ML/ev"
   local rc=0
   (cd "$ML" && env PATH="$ML/bin:$PATH" CALLS="$ML/calls.jsonl" HOME="$ML/home" GF="$ML" "$@" bash run.sh 2>"$ML/err") || rc=$?
   echo "$rc"
@@ -1253,6 +1320,43 @@ cp "$ML/prs.json" "$ML/prs.bak"; echo '[{"number":120,"headRefName":"issue-12"}]
 rc="$(mlcase TICKETS_IN=12)"; [[ "$rc" == 1 ]] && grep -qF 'ERROR: #12: a PR is already open' "$ML/loop.log" || fail "번호 지정(PR 열림): rc $rc / $(cat "$ML/loop.log")"
 mv "$ML/prs.bak" "$ML/prs.json"
 echo "ok  메인 고리의 GitHub 조회 실패 — 시작 전 die, 티켓 사이 재시도 뒤 멈춤(could not list tickets, 코멘트 없이 알림·멈춤 기록만), 번호 지정은 die"
+
+# 메인 고리의 성공한 빈 응답(#22): 티켓 사이의 재계산이 후보 0행이면 PICK_RECHECK_SEC 뒤 한 번 더 — 회복하면 다음 티켓을 고른다(전에는
+# "No more tickets" 로 끝나고 finished 알림). 두 번 다 비고 --parent 의 스펙에 열린 하위 이슈가 남으면 PICK_RETRY_SEC 동안 다시 해 본 뒤
+# 사유 "ticket list empty but spec #N has open sub-issues" 로 멈춘다(stopped 알림·멈춤 기록 other, finished 없음). 두 번 다 비고 --parent 가
+# 없거나 열린 하위 이슈가 0 이면 지금처럼 끝난다. 모두 걸러진 빈 목록은 재확인 없이 끝난다. 시작 전 첫 계산의 0행은 재확인 없이 빈 목록(die 아님)
+mlempty() { grep -c "$E0" "$ML/loop.log" || true; }; mlrecheck() { grep -c "$RC" "$ML/loop.log" || true; }
+rc="$(mlcase LIST_EMPTY_FROM=1 LIST_EMPTY_TO=1)"
+[[ "$rc" == 0 && "$(cat "$ML/ev")" == $'run 11 T11\nrun 12 T12' && "$(mlempty)" == 1 && "$(mlrecheck)" == 1 && "$(mlnotify)" == "Ticket loop finished" && -z "$(mlstops)" ]] \
+  || fail "메인 고리(issue list 가 한 번 빔 → 재확인 뒤 다음 티켓): rc $rc / $(cat "$ML/ev") / 0행 $(mlempty) 재확인 $(mlrecheck) / $(mlnotify) / $(cat "$ML/loop.log")"
+rc="$(mlcase PARENT=40 KIDS_OUT="$K2" KIDS_EMPTY_FROM=1 KIDS_EMPTY_TO=1)"
+[[ "$rc" == 0 && "$(cat "$ML/ev")" == $'run 11 T11\nrun 12 T12' && "$(mlempty)" == 1 && "$(mlrecheck)" == 1 && "$(mlnotify)" == "Ticket loop finished" && -z "$(mlstops)" ]] \
+  || fail "메인 고리(--parent 의 sub_issues 가 한 번 빔 → 재확인 뒤 다음 티켓): rc $rc / $(cat "$ML/ev") / 0행 $(mlempty) 재확인 $(mlrecheck) / $(mlnotify) / $(cat "$ML/loop.log")"
+EMPTY_WHY='ticket list empty but spec #40 has open sub-issues'
+t0="$(date +%s)"; rc="$(mlcase PARENT=40 KIDS_OUT="$K2" SPEC_SUMMARY='2 0' LIST_EMPTY_FROM=1 PICK_RETRY_SEC=2)"; t1="$(date +%s)"
+[[ "$rc" == 1 && "$(cat "$ML/ev")" == "run 11 T11" && "$(mlrecheck)" -ge 2 && $((t1 - t0)) -ge 2 && $((t1 - t0)) -le 20 ]] \
+  && grep -q "ERROR: ${EMPTY_WHY}\$" "$ML/loop.log" && grep -q "${EMPTY_WHY} — retrying in 1s (for up to" "$ML/loop.log" && grep -qF "$NT" "$ML/loop.log" \
+  && ! grep -q 'No more tickets' "$ML/loop.log" && ! grep -q 'could not list tickets' "$ML/loop.log" \
+  || fail "메인 고리(두 번 다 빔, 스펙에 열린 하위 이슈 → 재시도 뒤 멈춤): rc $rc / $(cat "$ML/ev") / 재확인 $(mlrecheck) / $((t1 - t0))초 / $(cat "$ML/loop.log")"
+[[ "$(mlnotify)" == "Ticket loop stopped" ]] && [[ "$(mlslack)" == ":octagonal_sign: *Ticket loop stopped* · o/r · "*$'\n'"<@U1> ticket list empty but spec <https://github.com/o/r/issues/40|#40> has open sub-issues"* ]] \
+  || fail "빈 목록 불신 멈춤의 알림: $(mlnotify) / $(mlslack)"
+[[ "$(mlgh)" != *"issue comment"* && "$(mlgh)" != *"issue edit"* ]] || fail "빈 목록 불신 멈춤이 이슈에 코멘트·라벨을 남김: $(mlgh)"
+rec="$(mlstops)"; [[ "$(grep -c . <<<"$rec")" == 1 ]] && jq -e --arg w "$EMPTY_WHY" '.kind == "other" and .issue == null and .reason == $w' "$rec" >/dev/null || fail "빈 목록 불신 멈춤 기록: $rec / $(cat $rec 2>/dev/null)"
+[[ ! -e "$ML/lock" ]] || fail "빈 목록 불신 멈춤이 잠금을 풀지 않음"
+mlconfirmed() {   # 환경(VAR=값 …): 두 번 다 빈 목록이 확정돼 지금처럼 끝나야 한다(No more tickets, finished, 멈춤 기록 없음)
+  local rc; rc="$(mlcase "$@")"
+  [[ "$rc" == 0 && "$(cat "$ML/ev")" == "run 11 T11" && "$(mlempty)" == 2 && "$(mlrecheck)" == 1 && "$(mlnotify)" == "Ticket loop finished" && -z "$(mlstops)" ]] && grep -q 'No more tickets to process.' "$ML/loop.log" \
+    || fail "메인 고리(두 번 다 빔, $* → 확정 뒤 끝): rc $rc / $(cat "$ML/ev") / 0행 $(mlempty) 재확인 $(mlrecheck) / $(mlnotify) / $(cat "$ML/loop.log")"
+}
+mlconfirmed LIST_EMPTY_FROM=1                                                     # --parent 없음
+mlconfirmed PARENT=40 SPEC_SUMMARY='2 2' LIST_EMPTY_FROM=1                        # 스펙의 하위 이슈가 다 닫힘
+mlconfirmed PARENT=40 SPEC_SUMMARY='2 0' KIDS_OUT="$K3" LIST_EMPTY_FROM=1          # 열린 것이 전부 ready 아님·in-review
+rc="$(mlcase BLOCKED_OUT=1)"
+[[ "$rc" == 0 && "$(cat "$ML/ev")" == "run 11 T11" && "$(mlempty)" == 0 && "$(mlrecheck)" == 0 && "$(mlnotify)" == "Ticket loop finished" ]] && grep -q 'skip #12 (T12): blocked by an open issue' "$ML/loop.log" && grep -q 'No more tickets to process.' "$ML/loop.log" \
+  || fail "메인 고리(모두 걸러진 빈 목록 → 재확인 없이 끝): rc $rc / $(cat "$ML/ev") / 0행 $(mlempty) 재확인 $(mlrecheck) / $(cat "$ML/loop.log")"
+rc="$(mlcase MODE=prestart LIST_EMPTY_FROM=1)"
+[[ "$rc" == 0 && -z "$(cat "$ML/ev" | tr -d '\n')" && "$(mlempty)" == 1 && "$(mlrecheck)" == 0 && -z "$(mlnotify)" ]] || fail "시작 전 첫 계산(0행 → 재확인 없이 빈 목록): rc $rc / $(cat "$ML/ev") / 0행 $(mlempty) 재확인 $(mlrecheck) / $(mlnotify) / $(cat "$ML/loop.log")"
+echo "ok  메인 고리의 성공한 빈 응답 — 재확인 뒤 이어 감, 스펙에 열린 하위 이슈가 남으면 재시도 뒤 멈춤, 확정된 빈 목록·모두 걸러진 목록은 끝, 시작 전은 재확인 없음"
 
 # 무인 수습(0.9): triage 를 가짜 백엔드·gh·CI 로 그대로 부른다. 실제 git 저장소(bare origin 에 loop-triage 스킬 커밋)를 쓴다.
 # 가짜 backend_worktree_create 는 프롬프트에서 판정 파일 경로를 읽어 VERDICT 를 써 둔다(빈 값이면 판정 없이 idle 로 남는다)

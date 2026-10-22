@@ -271,6 +271,8 @@ GH_TRIES=3                # GitHub 일시 장애(5xx·연결 오류)에 걸린 g
 GH_RETRY_SEC=15           # 그 사이 GH_RETRY_SEC×회차씩 쉰다(15초·30초)
 PICK_RETRY_SEC=300        # 티켓 사이의 다음 대상 조회(pick_targets)가 gh 재시도까지 실패할 때 다시 해 보는 총 시간. 넘기면 멈춘다(could not list tickets)
 PICK_RETRY_EVERY_SEC=60   # 그 사이 다시 해 보는 간격
+PICK_RECHECK_SEC=30       # 티켓 사이의 다음 대상 조회가 성공하면서 후보를 하나도 돌려주지 않으면(0행) 이만큼 쉬고 한 번 더 조회한다 — GitHub가 성공한
+                          # 빈 응답을 준 것을 "남은 티켓 없음"으로 읽지 않게(#22). 두 번째도 0행이면 그때 확정한다(--parent면 스펙의 열린 하위 이슈 수와 맞춰 본다)
 PORT_WAIT_SEC=600         # POST_MERGE_PORT가 비기를 기다리는 상한. 기다리는 동안은 30초마다 다시 본다(멈춤이 아니다)
 REOPEN_WATCH_SEC=2        # 수습 수정 PR을 병합한 뒤 티켓 이슈가 닫히는지 다시 보는 간격(5번 — triage_keep_issue_open)
 PR_SETTLE_SEC=120         # PR을 찾은 뒤 워커의 이슈 정리(체크박스·IN_REVIEW_LABEL)를 기다리는 상한. 라벨이 붙거나 idle이면 바로 넘어간다(pr_settle)
@@ -664,6 +666,34 @@ sub_issue_count() {
   printf '%s\n' "$total"
 }
 
+# 스펙 $1의 하위 이슈 — 모든 상태, 페이지를 합친 JSON 배열 [{number, state, labels: [이름]}]. 조회 실패면 출력 없이 비0
+spec_sub_issues() {
+  local pages
+  pages="$(gh api "repos/${OWNER_REPO}/issues/$1/sub_issues" --paginate --jq '[.[] | {number, state, labels: [.labels[].name]}]')" || return 1
+  jq -sc 'add // []' <<<"$pages"
+}
+
+# 티켓 사이의 대상 조회가 재확인까지 빈 목록(후보 0행)일 때 스펙 $1과 맞춰 본다(pick_next_targets, #22). 빈 목록이 맞으면 출력 없이 0, 믿을 수
+# 없으면 그 이유 한 줄을 내고 0, 조회 실패면 출력 없이 비0. 스펙 요약(sub_issues_summary — 목록과 다른 끝점 issues/N)에 열린 하위 이슈가 남아
+# 있을 때만 의심하고, 그때 (a) sub_issues 끝점이 요약의 total보다 적게 돌려줬거나(빈·부분 응답), (b) 돌려준 것 가운데 열려 있고
+# READY_LABEL(+SCOPE_LABEL)이 붙고 IN_REVIEW_LABEL이 없는 것이 있으면(그것은 issue list에 있었어야 한다 — 막혔거나 담당자·PR이 있어도 skip 줄로
+# 남지 0행이 되지 않는다) 믿지 않는다. 열린 하위 이슈가 전부 ready 라벨이 없거나(needs-info·ready-for-human …) in-review면 빈 목록이
+# 맞다 — 요약의 열린 수만 보면 그런 스펙은 끝에 늘 멈춤으로 끝나고 루프 끝 검증도 건너뛴다
+spec_empty_list_check() {
+  local summary kids total completed
+  summary="$(gh api "repos/${OWNER_REPO}/issues/$1" --jq '"\(.sub_issues_summary.total // 0) \(.sub_issues_summary.completed // 0)"')" || return 1
+  read -r total completed <<<"$summary"
+  [[ "${total:-}" =~ ^[0-9]+$ && "${completed:-}" =~ ^[0-9]+$ ]] || return 1
+  [[ $(( total - completed )) -gt 0 ]] || return 0
+  kids="$(spec_sub_issues "$1")" || return 1
+  jq -r --argjson total "$total" --argjson open "$(( total - completed ))" --arg spec "$1" --arg ready "$READY_LABEL" --arg scope "$SCOPE_LABEL" --arg rv "$IN_REVIEW_LABEL" '
+      if length < $total then "the sub_issues lookup returned \(length) of \($total) sub-issues of spec #\($spec) (\($open) open)"
+      else (map(select(.state == "open" and (.labels | index($ready)) != null and ($scope == "" or (.labels | index($scope)) != null)
+                       and (.labels | index($rv)) == null)) | length) as $n
+        | if $n > 0 then "spec #\($spec) has \($n) open \($ready) sub-issue\(if $n == 1 then "" else "s" end) the lookup did not return" else empty end
+      end' <<<"$kids"
+}
+
 # 티켓 N의 열린 PR — head 브랜치가 `<BRANCH_PREFIX>N`과 같거나 `<BRANCH_PREFIX>N-`로 시작하는 것.
 # 워커는 implement 스킬대로 issue-N-<slug>를 만들지만, 루프가 만든 워크트리 브랜치 issue-N에 그대로 커밋해 PR을 연 실측이 있다
 # (rental-portal #102 → PR #120, 0.8.5). 접두 `N-`만 보면 그 PR을 못 찾아 "PR 없이 멈춤"으로 죽었다.
@@ -687,9 +717,8 @@ candidates() {
   [[ -z "$SCOPE_LABEL" ]] || args+=(--label "$SCOPE_LABEL")
   list="$(gh issue list "${args[@]}")" || return 1
   if [[ -n "$PARENT" ]]; then
-    kids="$(gh api "repos/${OWNER_REPO}/issues/${PARENT}/sub_issues" --paginate --jq '[.[].number]')" || return 1
-    kids="$(jq -s 'add // []' <<<"$kids")"
-    list="$(jq --argjson kids "$kids" 'map(select(.number as $n | $kids | index($n)))' <<<"$list")"
+    kids="$(spec_sub_issues "$PARENT")" || return 1
+    list="$(jq --argjson kids "$(jq -c 'map(.number)' <<<"$kids")" 'map(select(.number as $n | $kids | index($n)))' <<<"$list")"
   fi
   jq -r --arg re "$ORDER_REGEX" --arg rv "$IN_REVIEW_LABEL" '
       map(select((.labels | map(.name) | index($rv)) == null))
@@ -698,8 +727,10 @@ candidates() {
       | .[] | "\(.number)\t\(.assignees | length)\t\(.title)"' <<<"$list"
 }
 
-# 대상 목록("번호<TAB>제목" 줄들). 목록 조회(candidates)가 실패하면 비0 — 부르는 쪽이 정한다(시작 전이면 die, 티켓 사이면 PICK_RETRY_SEC 동안
-# 다시, pm_due는 검증을 미룬다). 후보 하나의 검사(sub_issue_count·blocked_by·open_pr_for)가 실패하면 그 티켓만 고르지 않는다 — 막혔거나
+# 대상 목록("번호<TAB>제목" 줄들). 목록 조회(candidates)가 실패하면 1 — 부르는 쪽이 정한다(시작 전이면 die, 티켓 사이면 PICK_RETRY_SEC 동안
+# 다시, pm_due는 검증을 미룬다). 조회가 성공했는데 후보가 0행이면 2(목록은 비어 있다) — 후보가 있었지만 모두 걸러진 빈 목록(0, skip 줄이 남는다)과
+# 구분한다. 성공한 빈 응답이 "남은 티켓 없음"으로 읽힌 실측이 있어(#22) 티켓 사이에는 pick_next_targets가 한 번 더 확인한다.
+# 후보 하나의 검사(sub_issue_count·blocked_by·open_pr_for)가 실패하면 그 티켓만 고르지 않는다 — 막혔거나
 # PR이 열렸을 수 있으니 안전한 쪽으로. 명령 치환 안에서 돌므로(set -e 없음) 실패는 종료 코드로만 알 수 있다
 pick_targets() {
   if [[ ${#TICKETS[@]} -gt 0 ]]; then
@@ -708,6 +739,7 @@ pick_targets() {
   fi
   local n assignees title list subs blocked pr
   list="$(candidates)" || return 1
+  [[ -n "$list" ]] || { log "ticket lookup returned 0 candidates"; return 2; }
   while IFS=$'\t' read -r n assignees title; do
     [[ -n "${n}" ]] || continue
     if [[ "${assignees}" != "0" ]]; then log "skip #${n} (${title}): has an assignee (in progress or taken by a person)"; continue; fi
@@ -719,6 +751,29 @@ pick_targets() {
     if [[ -n "$pr" ]]; then log "skip #${n} (${title}): PR already open"; continue; fi
     printf '%s\t%s\n' "${n}" "${title}"
   done <<<"$list"
+}
+
+# 티켓 사이의 다음 대상 — pick_targets에 빈 목록 재확인을 더한 것(이슈 #22). 조회가 성공하면서 후보 0행이면(skip 줄 하나 없이 빈 목록) GitHub가
+# 성공한 빈 응답을 돌려준 것일 수 있다 — 실측(0.9.12, --parent 313): 열린 하위 이슈 12건을 두고 issue list나 sub_issues가 빈 값을 줘 pm_due가
+# "no more tickets"로 병합 뒤 검증을 앞당겼다. 같은 경로가 메인 고리에서 나면 티켓을 남기고 정상 종료한다. 그래서 0행이면 PICK_RECHECK_SEC
+# 쉬고 한 번 더 조회하고, 두 번째도 0행이면 그때 빈 목록으로 확정한다. --parent면 스펙과 맞춰 봐서(spec_empty_list_check — 다른 끝점의 요약과
+# 하위 이슈의 상태·라벨) 빈 목록이 말이 안 되면 믿지 않는다. 후보가 있었지만 모두 걸러진(막힘·담당자·PR) 빈 목록은 재확인 없이 그대로다 — 스펙
+# 끝의 정상 경로. 시작 전 첫 계산은 사람이 앞에 있으니 pick_targets 그대로다.
+# 반환 0 목록(비어 있을 수 있다), 1 조회 실패(어느 조회든), 2 두 번 다 0행인데 스펙 #PARENT에 열린 하위 이슈가 남음 — 부르는 쪽(pm_due는 미룸,
+# 메인 고리는 PICK_RETRY_SEC 동안 다시 해 본 뒤 멈춤)이 정한다. 명령 치환 안에서 돌므로 로그는 남기되 변수는 돌려주지 못한다
+pick_next_targets() {
+  local list rc=0 why
+  list="$(pick_targets)" || rc=$?
+  [[ $rc -eq 2 ]] || { printf '%s' "$list"; return $rc; }   # 목록(0)이나 조회 실패(1, 출력 없음)는 그대로
+  log "empty ticket list — re-checking in ${PICK_RECHECK_SEC}s"
+  sleep "$PICK_RECHECK_SEC"
+  rc=0; list="$(pick_targets)" || rc=$?
+  [[ $rc -eq 2 ]] || { printf '%s' "$list"; return $rc; }
+  [[ -n "$PARENT" ]] || return 0
+  why="$(spec_empty_list_check "$PARENT")" || return 1
+  [[ -n "$why" ]] || return 0
+  log warn "ticket list empty but ${why} — not trusting it"
+  return 2
 }
 
 # ---------- 백엔드 ----------
@@ -1650,9 +1705,9 @@ pm_due() {
     PM_WHY="last ticket of this run"; return 0
   fi
   if [[ ${#TICKETS[@]} -eq 0 ]]; then
-    # 조회가 실패하면 미룬다 — 빈 목록을 "남은 티켓 없음"으로 읽어 검증을 앞당기지 않게. 메인 고리가 다시 계산하고, 대상 없이 끝나면
-    # 루프 끝 검증(pm_flush_end)이 덮는다
-    if ! NEXT_TARGETS="$(pick_targets </dev/null)"; then NEXT_TARGETS=""; return 1; fi
+    # 조회가 실패하거나, 두 번 다 빈 목록인데 스펙에 열린 하위 이슈가 남으면(pick_next_targets 2) 미룬다 — 빈 목록을 "남은 티켓 없음"으로
+    # 읽어 검증을 앞당기지 않게(#8·#22). 메인 고리가 다시 계산하고, 대상 없이 끝나면 루프 끝 검증(pm_flush_end)이 덮는다
+    if ! NEXT_TARGETS="$(pick_next_targets </dev/null)"; then NEXT_TARGETS=""; return 1; fi
     while IFS=$'\t' read -r cand ctitle; do
       [[ -n "$cand" && "$cand" != "$n" && " ${PROCESSED:-} " != *" ${cand} "* ]] || continue
       next="$cand"; break
@@ -2610,7 +2665,9 @@ KIT_VERSION="$(kit_version)"
 kit_banner "ticket-loop-kit ${KIT_VERSION}"
 backend_check
 pm_load
-targets="$(pick_targets)" || die "could not list tickets (GitHub)"   # 시작 전에는 사람이 앞에 있다 — 바로 멈춘다
+# 시작 전에는 사람이 앞에 있다 — 조회가 실패하면 바로 멈추고, 후보 0행(2)은 재확인 없이 빈 목록 그대로다(재확인은 티켓 사이 — pick_next_targets)
+pick_rc=0; targets="$(pick_targets)" || pick_rc=$?
+[[ $pick_rc -ne 1 ]] || die "could not list tickets (GitHub)"
 log "repository ${OWNER_REPO} / backend ${BACKEND_NAME} / base branch ${BASE_BRANCH} / label ${READY_LABEL}${SCOPE_LABEL:+ + ${SCOPE_LABEL}}${PARENT:+ / sub-issues of spec #${PARENT}}"
 log "post-merge check: $([[ $POST_MERGE -eq 1 ]] && echo "on$(case "$POST_MERGE_EVERY" in 1) ;; 0) echo ", when a spec or the run ends" ;; *) echo ", every ${POST_MERGE_EVERY} merged tickets and when a spec or the run ends" ;; esac) — ${POST_MERGE_CMD}${POST_MERGE_RETRY_CMD:+ (retry once on failure: ${POST_MERGE_RETRY_CMD})}" || echo "off")"
 if [[ -n "$PM_PENDING" ]]; then
@@ -2650,12 +2707,17 @@ while :; do
   else
     if [[ $NEXT_TARGETS_SET -eq 1 ]]; then targets="$NEXT_TARGETS"; NEXT_TARGETS_SET=0   # 병합 뒤 검증을 미룰 때 pm_due가 계산해 둔 것
     elif [[ $done_count -ne 0 ]]; then
-      # 목록 조회가 gh 재시도까지 실패하면(GitHub 장애가 길다) PICK_RETRY_SEC 동안 PICK_RETRY_EVERY_SEC마다 다시 해 보고, 그래도 안 되면
-      # 멈춘다. 처리 중인 티켓이 없으므로(CUR_N·STOP_ISSUE 비어 있음) 이슈 코멘트·무인 수습 없이 알림과 멈춤 기록(other)만 남는다
+      # 목록 조회가 gh 재시도까지 실패하거나(GitHub 장애가 길다, 1), 재확인까지 빈 목록인데 스펙에 열린 하위 이슈가 남으면(성공한 빈 응답, 2 — #22)
+      # PICK_RETRY_SEC 동안 PICK_RETRY_EVERY_SEC마다 다시 해 보고(2면 한 바퀴에 재확인 PICK_RECHECK_SEC가 더 든다), 그래도 안 되면 그 사유로
+      # 멈춘다 — 조용히 "No more tickets"로 끝내지 않는다.
+      # 처리 중인 티켓이 없으므로(CUR_N·STOP_ISSUE 비어 있음) 이슈 코멘트·무인 수습 없이 알림과 멈춤 기록(other)만 남는다
       pick_deadline=$(( $(date +%s) + PICK_RETRY_SEC ))
-      until targets="$(pick_targets </dev/null)"; do
-        [[ $(date +%s) -lt $pick_deadline ]] || { STOP_KIND=""; die "could not list tickets (GitHub)"; }
-        log warn "could not list tickets (GitHub) — retrying in ${PICK_RETRY_EVERY_SEC}s (for up to $((PICK_RETRY_SEC / 60))m)"
+      while :; do
+        pick_rc=0; targets="$(pick_next_targets </dev/null)" || pick_rc=$?
+        [[ $pick_rc -ne 0 ]] || break
+        if [[ $pick_rc -eq 2 ]]; then pick_why="ticket list empty but spec #${PARENT} has open sub-issues"; else pick_why="could not list tickets (GitHub)"; fi
+        [[ $(date +%s) -lt $pick_deadline ]] || { STOP_KIND=""; die "$pick_why"; }
+        log warn "${pick_why} — retrying in ${PICK_RETRY_EVERY_SEC}s (for up to $((PICK_RETRY_SEC / 60))m)"
         sleep "$PICK_RETRY_EVERY_SEC"
       done
     fi
