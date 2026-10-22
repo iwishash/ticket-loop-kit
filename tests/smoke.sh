@@ -57,6 +57,18 @@ grep -q 'allow_implicit_invocation: false' "$T/.agents/skills/loop-triage/agents
 jq -e '.managed | index(".agents/skills/loop-triage/SKILL.md")' "$T/.ticket-loop/kit.json" >/dev/null || fail "kit.json managed 에 loop-triage 스킬이 없음"
 echo "ok  첫 설치"
 
+# #5: 설치본에서 `__[A-Z_]*__`에 걸리는 줄은 사용자가 채울 자리표뿐이어야 한다. setup-ticket-loop 스킬의 자리표 표에 적힌 이름을
+# 모두 임의 값으로 채운 뒤 그 스킬 5절의 검사를 그대로 돌려 결과가 비어야 한다(주석 속 __PLACEHOLDERS__ 같은 낱말이 들어오면 여기서 걸린다)
+F="$T/filled"; rm -rf "$F"; mkdir -p "$F/.agents/skills"
+cp -R "$T/.agents/skills/implement" "$T/.agents/skills/pr" "$F/.agents/skills/"; cp -R "$T/.ticket-loop" "$T/.codex" "$F/"
+names="$(grep -o '^| `__[A-Z_]*__` |' "$KIT/files/.agents/skills/setup-ticket-loop/SKILL.md" | grep -o '__[A-Z_]*__')"
+[[ "$(wc -l <<<"$names")" -ge 8 ]] || fail "setup-ticket-loop 스킬의 자리표 표를 읽지 못함: $names"
+while IFS= read -r n; do find "$F" -type f -exec sed -i.bak "s/$n/filled/g" {} +; done <<<"$names"
+find "$F" -name '*.bak' -delete
+left="$(cd "$F" && grep -rn '__[A-Z_]*__' .agents/skills/implement .agents/skills/pr .ticket-loop .codex || true)"
+[[ -z "$left" ]] || fail "자리표를 다 채워도 5절 검사에 남는 줄: $left"
+echo "ok  자리표를 채운 설치본에서 setup-ticket-loop 5절 검사가 빈다"
+
 # 프로젝트 소유 파일은 두 번째 설치에서 유지돼야 한다
 echo "project edit" >> "$T/.ticket-loop/worker-rules.md"
 echo "tracker edit" >> "$T/docs/agents/issue-tracker.md"
