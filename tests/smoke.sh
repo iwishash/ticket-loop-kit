@@ -1821,34 +1821,41 @@ grep -qF 'branch="$(gh pr view "${pr}" --json headRefName -q .headRefName || tru
 echo "ok  gh 읽기 재시도(읽기만 — 쓰기·--watch·POST api·mutation 은 한 번, 출력·종료 코드 그대로)·병합 뒤 브랜치 조회 실패에 멈추지 않음"
 
 # CI 대기: --watch 는 API 오류 한 번에도 1 이다(체크 실패와 같은 코드). 1 이면 체크 상태를 다시 읽어 실패·취소가 있을 때만 실패, 다 통과면
-# 통과, 도는 체크가 있으면 GH_TRIES 번까지 다시 본다. 못 읽으면 전처럼 실패
+# 통과, 도는 체크가 있으면 GH_TRIES 번까지 다시 본다. 체크 목록이 비었으면(재등록 중 — 이슈 #24) 체크가 다시 나타나기를 기다린 뒤 다시 보고,
+# 나타나지 않거나 GH_TRIES 번 뒤에도 비어 있으면 실패. --watch 의 stderr 는 루프 로그에 섞이지 않는다
 sed -n '/^ci_passed() {/,/^}/p; /^wait_checks_appear() {/,/^}/p; /^bg_wait() {/,/^}/p' "$SCRIPT" > "$GW/ci.sh"
 grep -q '^ci_passed() {' "$GW/ci.sh" && grep -q '^bg_wait() {' "$GW/ci.sh" || fail "ci_passed·bg_wait 를 찾지 못함"
 cat > "$GW/bin/gh" <<'GH'
 #!/usr/bin/env bash
 case " $* " in
-  *" --watch "*) c=$(( $(cat "$GW/w") + 1 )); echo "$c" > "$GW/w"; set -- $WATCH; i=$c; [[ $i -le $# ]] || i=$#; exit "${!i}" ;;
+  *" --watch "*) c=$(( $(cat "$GW/w") + 1 )); echo "$c" > "$GW/w"; echo "no checks reported on the 'issue-7' branch" >&2; set -- $WATCH; i=$c; [[ $i -le $# ]] || i=$#; exit "${!i}" ;;
   *" bucket "*) printf '%s\n' "$BUCKETS" ;;
-  *" name "*) echo 1 ;;
+  *" name "*) c=$(( $(cat "$GW/n") + 1 )); echo "$c" > "$GW/n"; set -- $NAMES; i=$c; [[ $i -le $# ]] || i=$#; echo "${!i}" ;;
 esac
 GH
-ci2_case() {  # $1 --watch 가 차례로 낼 종료 코드(공백, 마지막 값이 이어짐), $2 체크 상태(bucket) → "종료 코드|watch 횟수|경고 수"
-  echo 0 > "$GW/w"; : > "$GW/warns"
-  (cd "$GW" && PATH="$GW/bin:$PATH" GW="$GW" WATCH="$1" BUCKETS="$2" bash -c '
+ci2_case() {  # $1 --watch 가 차례로 낼 종료 코드(공백, 마지막 값이 이어짐), $2 체크 상태(bucket), $3 체크 개수가 차례로 낼 값(기본 1),
+              # $4 CI_APPEAR_TIMEOUT_SEC(기본 5) → "종료 코드|watch 횟수|경고 수|stderr 줄 수"
+  echo 0 > "$GW/w"; echo 0 > "$GW/n"; : > "$GW/warns"
+  (cd "$GW" && PATH="$GW/bin:$PATH" GW="$GW" WATCH="$1" BUCKETS="$2" NAMES="${3:-1}" APPEAR="${4:-5}" bash -c '
     set -euo pipefail
     log() { [[ "$1" != warn ]] || echo x >> "$GW/warns"; }
-    GH_TRIES=3; CI_APPEAR_TIMEOUT_SEC=5; BG_PID=""
+    GH_TRIES=3; CI_APPEAR_TIMEOUT_SEC="$APPEAR"; BG_PID=""
     source ci.sh
-    rc=0; ci_passed 7 || rc=$?
-    echo "$rc|$(cat "$GW/w")|$(grep -c x "$GW/warns" || true)"')
+    rc=0; ci_passed 7 2> "$GW/err" || rc=$?
+    echo "$rc|$(cat "$GW/w")|$(grep -c x "$GW/warns" || true)|$(wc -l < "$GW/err" | tr -d " ")"')
 }
-[[ "$(ci2_case 0 "")" == "0|1|0" ]] || fail "ci_passed: 통과한 watch: $(ci2_case 0 "")"
-[[ "$(ci2_case 1 "fail pass")" == "1|1|0" && "$(ci2_case 1 "cancel pass")" == "1|1|0" ]] || fail "ci_passed: 실패·취소한 체크가 있는데 실패가 아님"
-[[ "$(ci2_case 1 "pass skipping")" == "0|1|1" ]] || fail "ci_passed: watch 는 1 이지만 다 통과했는데 실패로 봄: $(ci2_case 1 "pass skipping")"
-[[ "$(ci2_case "1 0" "pass pending")" == "0|2|1" ]] || fail "ci_passed: 도는 체크가 있는데 다시 보지 않음: $(ci2_case "1 0" "pass pending")"
-[[ "$(ci2_case 1 "pending")" == "1|3|2" ]] || fail "ci_passed: GH_TRIES 번 뒤에도 끝내지 않음: $(ci2_case 1 pending)"
-[[ "$(ci2_case 1 "")" == "1|1|0" ]] || fail "ci_passed: 체크 상태를 못 읽으면 실패여야: $(ci2_case 1 "")"
-echo "ok  CI 대기(--watch 가 1 이면 체크 상태를 다시 읽어 실패가 있을 때만 실패)"
+[[ "$(ci2_case 0 "")" == "0|1|0|0" ]] || fail "ci_passed: 통과한 watch: $(ci2_case 0 "")"
+[[ "$(ci2_case 1 "fail pass")" == "1|1|0|0" && "$(ci2_case 1 "cancel pass")" == "1|1|0|0" ]] || fail "ci_passed: 실패·취소한 체크가 있는데 실패가 아님, 또는 --watch 의 stderr 가 로그에 섞임: $(ci2_case 1 "fail pass")"
+[[ "$(ci2_case 1 "pass skipping")" == "0|1|1|0" ]] || fail "ci_passed: watch 는 1 이지만 다 통과했는데 실패로 봄: $(ci2_case 1 "pass skipping")"
+[[ "$(ci2_case "1 0" "pass pending")" == "0|2|1|0" ]] || fail "ci_passed: 도는 체크가 있는데 다시 보지 않음: $(ci2_case "1 0" "pass pending")"
+[[ "$(ci2_case 1 "pending")" == "1|3|2|0" ]] || fail "ci_passed: GH_TRIES 번 뒤에도 끝내지 않음: $(ci2_case 1 pending)"
+# 빈 체크 목록(#24): 체크가 다시 나타나면 다시 본다 — 두 번째 watch 가 통과하면 통과(경고 1: 재등록 대기). 끝내 비어 있으면 GH_TRIES 번 뒤 실패
+# (경고 3: 대기 2 + 포기 1). 체크가 다시 나타나지 않으면(개수 1 → 0, 대기 상한 0초) 바로 실패(경고 2: 대기 + 나타나지 않음)
+[[ "$(ci2_case "1 0" "")" == "0|2|1|0" ]] || fail "ci_passed: 빈 체크 목록 뒤 체크가 다시 나타났는데 실패로 봄: $(ci2_case "1 0" "")"
+[[ "$(ci2_case 1 "")" == "1|3|3|0" ]] || fail "ci_passed: 체크 목록이 끝내 비어 있으면 GH_TRIES 번 뒤 실패여야: $(ci2_case 1 "")"
+[[ "$(ci2_case 1 "" "1 0" 0)" == "1|1|2|0" ]] || fail "ci_passed: 빈 체크 목록 뒤 체크가 다시 나타나지 않으면 실패여야: $(ci2_case 1 "" "1 0" 0)"
+[[ "$(ci2_case 1 "" "0" 0)" == "1|0|1|0" ]] || fail "ci_passed: 체크가 처음부터 없으면 실패여야: $(ci2_case 1 "" "0" 0)"
+echo "ok  CI 대기(--watch 가 1 이면 체크 상태를 다시 읽어 실패가 있을 때만 실패, 빈 목록은 재등록 대기 뒤 다시 봄, stderr 는 로그에 섞이지 않음)"
 
 # 수리 끝 알아채기: idle 이 끝내 안 잡혀도(cmux lifecycle 공백) 새 커밋이 push 돼 REPAIR_SETTLE_SEC 동안 그대로이고 워크트리가 깨끗하면 끝.
 # 커밋이 없거나 워크트리가 더러우면 제한 시간까지 기다린다(1). idle 이 잡히면 새 커밋이 있을 때 바로 끝(0), 새 커밋이 아직 없으면 화면이
