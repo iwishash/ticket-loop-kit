@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.9.15 — 2026-10-23
+
+설치기 기본값 하나(#26)를 PR #27로 바꿨다. 루프 판정에 영향을 주는 변경은 없다. 새 설치에서 기획 스킬(workflow 묶음)은 늘 꺼져 있었고, `mattpocock-skills` 플러그인이 켜진 저장소에서는 체크리스트가 "Disable plugin"을 기본 켜짐으로 띄웠다 — 두 토글이 독립이라 플러그인을 끄면 기획 스킬이 이 저장소에서 사라지는데 벤더링은 꺼진 채라 사용자가 빈손이 됐고, 플러그인이 없는 새 설치는 `--workflow-skills`를 기억해야 스펙 → 티켓 → 회고 흐름을 쓸 수 있었다.
+
+- **새 설치의 workflow 기본값을 플러그인 유무로 정한다(#26).** 명시 플래그 > 지난 매니페스트 > 새 설치: `mattpocock-skills` 플러그인이 이 저장소에 켜져 있으면(enabledPlugins, user < project < local) 끔 — 기획 스킬은 이 머신에서 플러그인이 주고, core(`tdd`·`ticket-review`)는 implement가 부르고 이름을 바꾸고 커밋에 고정해야 하니 그래도 들인다. 플러그인이 없으면 켬. `--agent codex`는 플러그인 개념이 없으니 켬. upstream 26개 전부를 들이는 길은 두지 않았다(0.6 결정 유지). 규칙은 `sync-mattpocock-skills.sh`의 `auto`에 있고, npx 껍질은 같은 규칙으로 체크리스트 기본값을 정한다(플래그 없이 `--check`를 불러 스크립트 판정과 어긋나지 않게). 동기화 요약에 `planning skills: vendored|not vendored — <근거>` 한 줄이 붙는다(명시 플래그면 없음).
+- **plugin finding은 알림(info)이다.** 경고가 아니다 — core는 어차피 들이고 선택기에 `/tdd`와 `/mattpocock-skills:tdd`가 나란히 보일 뿐 루프는 벤더링한 쪽을 돈다. 플러그인만 켜진 저장소의 `--check`는 종료 0이고, `install.sh`가 "Skill conflicts found"를 내지 않는다. fix 명령(`claude plugin disable … --scope project`)은 그대로 두되 "켜면 기획 스킬도 벤더링하라"를 덧붙였다.
+- **npx 체크리스트**: "Also vendor the planning skills" 노트에 기본값의 근거(플러그인이 준다 / 플러그인 없음 / 지난 설치 유지). "Disable plugin … for this repo"는 **기본 꺼짐**, 노트에 결합 관계(끄면 위 항목도 켜라). `--yes`는 플러그인을 건드리지 않는다.
+- 주의: 플러그인은 사람·머신 단위이고 벤더링은 저장소 단위다. 플러그인에 맡기는 기본값은 다른 clone·클라우드 세션엔 기획 스킬이 없다는 뜻이라 요약과 노트에 적었다. 팀이 함께 쓰려면 `--workflow-skills`.
+- 스모크: 새 설치 플러그인 없음 → 9개와 근거 줄, `--no-workflow` 뒤 재실행은 지난 선택(끔) 유지, 플러그인 켜짐 → `--check` 0·2개·근거 줄, `--workflow`가 덮고 재실행이 유지, codex 새 설치는 플러그인이 있어도 9개, npx `--yes`(없음 9 · 켜짐 2, 플러그인은 그대로)와 `install.sh`(켜짐 2, 충돌 경고 없음). 기존 첫 동기화 검사는 `--no-workflow`를 명시한다.
+- 이미 설치된 저장소: 매니페스트가 있으니 지난 선택이 그대로 이어진다. 바뀌는 것은 없다. README 영·한의 표 두 줄과 가이드북 3장 문장을 고쳤다. PDF는 재빌드하지 않았다.
+
 ## 0.9.14 — 2026-10-23
 
 스킬 동기화 결함 하나(#20)를 PR #21로 고쳤다. 루프 판정에 영향을 주는 변경은 없다. rental-portal에서 0.9.10 → 0.9.12 `init --yes`를 돌리자 손으로 검사 셋을 더해 둔 `.agents/skills/ticket-review/SKILL.md`가 upstream `code-review` 그대로로 되돌아갔다 — `PROJECT_OWNED=(implement pr)`가 키트 관리 파일인 sync 스크립트 안에 고정돼 있어 저장소가 다른 스킬을 소유로 표시할 길이 없었고, 설치기 출력에도 덮어쓴 흔적이 없었다.

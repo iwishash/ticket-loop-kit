@@ -1,6 +1,6 @@
 {
   "name": "ticket-loop-kit",
-  "version": "0.9.14",
+  "version": "0.9.15",
   "description": "GitHub 이슈 티켓을 워크트리에서 한 건씩 무인으로 구현·검증·병합하는 티켓 루프 설치 키트",
   "private": true,
   "license": "MIT",
