@@ -23,6 +23,8 @@ set -euo pipefail
 #   bash scripts/sync-mattpocock-skills.sh                      # upstream main 최신, workflow 묶음은 지난 설치를 따른다
 #   bash scripts/sync-mattpocock-skills.sh --ref <ref>          # 태그·커밋 고정(옛 형식 `<ref>` 위치 인자도 받는다)
 #   bash scripts/sync-mattpocock-skills.sh --workflow           # workflow 묶음도 들인다 (--no-workflow: 빼고 지운다)
+#                                                               # 플래그가 없으면: 지난 매니페스트의 선택 > 새 설치는 mattpocock-skills 플러그인이
+#                                                               # 이 저장소에 켜져 있으면 끔(기획 스킬은 플러그인이 준다), 아니면 켬. codex 는 늘 켬
 #   bash scripts/sync-mattpocock-skills.sh --prune              # 지난 설치가 들인 kept 스킬을 지운다(기본은 유지·동기화)
 #   bash scripts/sync-mattpocock-skills.sh --check [--json]     # 들이지 않고 충돌만 검사한다(아래). 종료 0 없음 · 1 경고 · 3 차단
 #   --force   차단 수준 충돌이 있어도 들인다        --no-check   검사를 건너뛴다(설치기가 먼저 검사했을 때)
@@ -30,7 +32,8 @@ set -euo pipefail
 #
 # 하는 일:
 #   1. 같은 스킬이 다른 경로로 이미 설치돼 있는지 검사한다. Claude Code는 중복을 경고하지 않으므로 여기서 본다
-#        plugin          (claude) mattpocock-skills 플러그인이 이 저장소에 켜져 있다 → 둘 다 뜬다(/tdd 와 /mattpocock-skills:tdd)  경고
+#        plugin          (claude) mattpocock-skills 플러그인이 이 저장소에 켜져 있다 → core 는 그래도 들이고(선택기에 /tdd 와 /mattpocock-skills:tdd
+#                        가 같이 보인다) 기획 스킬은 플러그인이 준다. 새 설치의 workflow 기본값을 끄는 근거                              알림
 #        global          (claude) ~/.claude/skills/<이름> 이 있다 → 개인 스킬이 프로젝트 스킬을 가려 여기 둔 버전이 쓰이지 않는다  경고
 #                        (codex) ~/.agents/skills/<이름> 이 있다 → Codex 는 합치지 않고 둘 다 선택기에 보인다                     알림
 #        skills-cli      `npx skills add` 가 둔 skills-lock.json, 또는 이 저장소의 .agents/skills/<이름> 이 아닌 곳을 가리키는 링크
@@ -122,11 +125,41 @@ if [[ -f "$MANIFEST" ]]; then
   done < <(jq -r '(.project_owned // [])[] | strings' "$MANIFEST" 2>/dev/null)
 fi
 
-# workflow 묶음: 명시 플래그 > 지난 매니페스트(workflow 값, 없으면 to-tickets 가 들어 있었는지) > 끔
+# enabledPlugins 는 user < project < local 순으로 같은 id 를 덮는다(Claude Code 문서). 마지막으로 값을 준 파일이 이긴다
+plugin_enabled_in() {   # 출력: "<id>\t<file>" (켜진 것만)
+  local f ids id val
+  for id in $(for f in "$CLAUDE_HOME/settings.json" "$ROOT/.claude/settings.json" "$ROOT/.claude/settings.local.json"; do
+                [[ -f "$f" ]] && jq -r '(.enabledPlugins // {}) | keys[]' "$f" 2>/dev/null; done | grep '^mattpocock-skills@' | sort -u); do
+    val=""; local src=""
+    for f in "$CLAUDE_HOME/settings.json" "$ROOT/.claude/settings.json" "$ROOT/.claude/settings.local.json"; do
+      [[ -f "$f" ]] || continue
+      # `// empty` 는 false 도 비우므로 has 로 본다 — local 의 false 가 project 의 true 를 덮어야 한다
+      v="$(jq -r --arg id "$id" '(.enabledPlugins // {}) | if has($id) then (.[$id] | tostring) else empty end' "$f" 2>/dev/null)"
+      [[ -n "$v" ]] && { val="$v"; src="$f"; }
+    done
+    if [[ "$val" == true ]]; then printf '%s\t%s\n' "$id" "${src#"$ROOT/"}"; fi
+  done
+  return 0
+}
+
+# workflow 묶음: 명시 플래그 > 지난 매니페스트(workflow 값, 없으면 to-tickets 가 들어 있었는지) > 새 설치의 기본값.
+# 새 설치: (claude) mattpocock-skills 플러그인이 이 저장소에 켜져 있으면 끔 — 기획 스킬은 플러그인이 이 머신에서 준다. core 는 그래도 들인다
+# (implement 가 부르고, 이름을 바꾸고, 커밋에 고정해야 하므로). 플러그인이 없으면 켬 — 스펙 → 티켓 → 회고 흐름을 바로 쓸 수 있게.
+# codex 에는 플러그인이 없으니 켬. upstream 전부(26개)를 들이는 길은 두지 않는다(0.6 결정)
+WF_REASON=""   # 자동으로 정했을 때 요약에 적는 근거. 명시 플래그면 비어 있다
 if [[ "$WORKFLOW" == auto ]]; then
-  WORKFLOW=0
   if [[ -f "$MANIFEST" ]]; then
+    WORKFLOW=0
     if jq -e '.workflow == true or ((.skills // []) | index("to-tickets") != null)' "$MANIFEST" >/dev/null 2>&1; then WORKFLOW=1; fi
+    WF_REASON="the previous install's choice ($([[ $WORKFLOW -eq 1 ]] && echo '--no-workflow removes them' || echo '--workflow adds them'))"
+  else
+    WF_PLUGIN=""
+    [[ "$AGENT" == claude ]] && WF_PLUGIN="$(plugin_enabled_in | cut -f1 | head -n1)"
+    if [[ -n "$WF_PLUGIN" ]]; then
+      WORKFLOW=0; WF_REASON="plugin $WF_PLUGIN is enabled for this repo and provides them on this machine; other clones and cloud sessions need the plugin too (--workflow vendors them for every clone)"
+    else
+      WORKFLOW=1; WF_REASON="no mattpocock-skills plugin is enabled for this repo (--no-workflow skips them)"
+    fi
   fi
 fi
 WANTED=("${CORE_SKILLS[@]}")
@@ -151,30 +184,13 @@ fi
 FINDINGS=()   # 각 항목: severity|kind|detail|fix
 add_finding() { FINDINGS+=("$1|$2|$3|$4"); }
 
-# enabledPlugins 는 user < project < local 순으로 같은 id 를 덮는다(Claude Code 문서). 마지막으로 값을 준 파일이 이긴다
-plugin_enabled_in() {   # 출력: "<id>\t<file>" (켜진 것만)
-  local f ids id val
-  for id in $(for f in "$CLAUDE_HOME/settings.json" "$ROOT/.claude/settings.json" "$ROOT/.claude/settings.local.json"; do
-                [[ -f "$f" ]] && jq -r '(.enabledPlugins // {}) | keys[]' "$f" 2>/dev/null; done | grep '^mattpocock-skills@' | sort -u); do
-    val=""; local src=""
-    for f in "$CLAUDE_HOME/settings.json" "$ROOT/.claude/settings.json" "$ROOT/.claude/settings.local.json"; do
-      [[ -f "$f" ]] || continue
-      # `// empty` 는 false 도 비우므로 has 로 본다 — local 의 false 가 project 의 true 를 덮어야 한다
-      v="$(jq -r --arg id "$id" '(.enabledPlugins // {}) | if has($id) then (.[$id] | tostring) else empty end' "$f" 2>/dev/null)"
-      [[ -n "$v" ]] && { val="$v"; src="$f"; }
-    done
-    if [[ "$val" == true ]]; then printf '%s\t%s\n' "$id" "${src#"$ROOT/"}"; fi
-  done
-  return 0
-}
-
 check_conflicts() {
   local n line id src where
   if [[ "$AGENT" == claude ]]; then
     while IFS=$'\t' read -r id src; do
       [[ -n "$id" ]] || continue
-      add_finding warn plugin "plugin $id is enabled for this repo ($src) — its skills load twice (/tdd and /${id%%@*}:tdd)" \
-        "claude plugin disable $id --scope project"
+      add_finding info plugin "plugin $id is enabled for this repo ($src) — tdd and ticket-review are vendored anyway (the picker also shows /${id%%@*}:tdd); the planning skills can come from the plugin on this machine" \
+        "claude plugin disable $id --scope project — only if the vendored copies should be the only ones that load; then vendor the planning skills too (--workflow)"
     done < <(plugin_enabled_in)
     for n in "${DEST_NAMES[@]}"; do
       if [[ -e "$CLAUDE_HOME/skills/$n/SKILL.md" ]]; then
@@ -424,6 +440,7 @@ if [[ ${#kept_now[@]} -gt 0 ]]; then
   kept_note=", kept ${#kept_now[@]} from an earlier install (${kept_now[*]}${stale_note}) — --prune drops them"
 fi
 echo "  mattpocock/skills ${VERSION} + ${PENDING} unreleased changesets (${COMMIT:0:7}) → ${n_sets} skills synced (core$([[ $WORKFLOW -eq 1 ]] && echo ' + workflow'))${kept_note}"
+[[ -z "$WF_REASON" ]] || echo "  planning skills: $([[ $WORKFLOW -eq 1 ]] && echo vendored || echo 'not vendored') — ${WF_REASON}"
 echo "  project-owned (update by hand): ${PROJECT_OWNED[*]} — check the upstream CHANGELOG for changes to carry over"
 if [[ ${#overwrote[@]} -gt 0 ]]; then
   echo "  overwrote local edits: ${overwrote[*]} — these differed from the previous sync's upstream copy. Restore them from git (git checkout HEAD -- .agents/skills/<name>) and list the name under project_owned in .agents/skills/.mattpocock.json to keep them next time"

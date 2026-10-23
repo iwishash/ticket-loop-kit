@@ -43,7 +43,8 @@ Options
   --agent <name>         ${Object.keys(AGENTS).join(' | ')}  (default: the AGENT in .ticket-loop/loop.env, else claude) — the worker the loop starts; written to loop.env as AGENT
   --no-skills            Skip vendoring the mattpocock skills (implement calls tdd and ticket-review — only skip if you vendor them yourself)
   --workflow-skills      Also vendor the planning skills: grill-with-docs, to-spec, to-tickets, retro (+ 3 skills they call)
-  --no-workflow-skills   Remove the planning skills if a previous install vendored them (default: keep the previous choice)
+  --no-workflow-skills   Remove the planning skills if a previous install vendored them
+                         (default: the previous install's choice; a fresh install vendors them unless the mattpocock-skills plugin is enabled for this repo)
   --force-skills         Vendor even when another tool (npx skills) manages mattpocock skills in this repo
   --prune-skills         Remove skills an earlier install vendored outside the selected sets (default: keep and sync them)
   --no-github            Do not create the GitHub labels
@@ -344,12 +345,18 @@ async function init(o) {
   if (sshRemote && o.credential && !o.yes) o.credential = false;   // 기본값만 끈다. --yes 는 install.sh 가 알아서 한다(SSH 면 설정해도 무해)
 
   // 스킬 충돌 검사 — 같은 mattpocock 스킬이 플러그인·~/.claude/skills·`npx skills` 로 이미 있으면 보여 준다(Claude Code 는 중복을 경고하지 않는다).
-  // 다른 도구가 .claude/skills 를 관리하면(차단) 멈춘다. 지난 설치가 workflow 묶음을 들였으면 그 선택을 기본값으로 이어 간다
+  // 다른 도구가 .claude/skills 를 관리하면(차단) 멈춘다
   const manifest = readJson(path.join(root, '.agents', 'skills', '.mattpocock.json')) || readJson(path.join(root, '.claude', 'skills', '.mattpocock.json'));   // 0.6 이하는 옛 자리
-  if (o.workflow === null) o.workflow = !!(manifest && (manifest.workflow === true || (Array.isArray(manifest.skills) && manifest.skills.includes('to-tickets'))));
-  const findings = o.skills ? skillConflicts(root, o.workflow, agent) : [];
+  const findings = o.skills ? skillConflicts(root, o.workflow, agent) : [];   // o.workflow 가 null 이면 스크립트가 아래와 같은 규칙으로 정한다
   const plugins = agent === 'claude' ? findings.filter((f) => f.kind === 'plugin') : [];   // 플러그인 끄기는 Claude Code 워커일 때만 뜻이 있다
   const kept = findings.find((f) => f.kind === 'kept');   // 지난 설치가 들였지만 이번 묶음에 없는 스킬 — 기본은 유지
+  // workflow 묶음의 기본값(sync-mattpocock-skills.sh 의 auto 와 같은 규칙): 지난 설치가 있으면 그 선택. 새 설치는 mattpocock-skills 플러그인이
+  // 이 저장소에 켜져 있으면 끔(기획 스킬은 플러그인이 이 머신에서 준다 — core 는 그래도 들인다), 아니면 켬(스펙 → 티켓 → 회고 흐름을 바로 쓰게)
+  let workflowWhy;
+  if (o.workflow !== null) workflowWhy = '';
+  else if (manifest) { o.workflow = !!(manifest.workflow === true || (Array.isArray(manifest.skills) && manifest.skills.includes('to-tickets'))); workflowWhy = o.workflow ? ' (kept from the previous install)' : ' (previous install did not have them)'; }
+  else if (plugins.length) { o.workflow = false; workflowWhy = ` (off: plugin ${plugins[0].id} provides them on this machine — other clones and cloud sessions would need the plugin too)`; }
+  else { o.workflow = true; workflowWhy = ' (on: no mattpocock-skills plugin is enabled for this repo)'; }
   if (findings.length) {
     console.log('');
     say('Existing mattpocock skill installs');
@@ -367,9 +374,9 @@ async function init(o) {
   if (interactive) {
     const items = [
       { key: 'skills', label: 'Vendor tdd + ticket-review', note: 'the two mattpocock skills implement calls, pinned into .agents/skills/ with links from .claude/skills/ (code-review is renamed ticket-review); leaves implement·pr alone', on: o.skills },
-      { key: 'workflow', label: 'Also vendor the planning skills', note: `grill-with-docs · to-spec · to-tickets · retro + the 3 skills they call — for the spec → tickets → retro flow inside ${AGENTS[agent].label}${manifest ? (o.workflow ? ' (kept from the previous install)' : ' (previous install did not have them)') : ''}`, on: o.workflow },
+      { key: 'workflow', label: 'Also vendor the planning skills', note: `grill-with-docs · to-spec · to-tickets · retro + the 3 skills they call — for the spec → tickets → retro flow inside ${AGENTS[agent].label}${workflowWhy}`, on: o.workflow },
       ...(kept ? [{ key: 'pruneSkills', label: 'Remove the other skills an earlier install vendored', note: `${kept.names.length > 6 ? `${kept.names.slice(0, 6).join(' · ')} +${kept.names.length - 6} more` : kept.names.join(' · ')} — off: keep them and sync them with the rest; on: delete them`, on: o.pruneSkills }] : []),
-      ...plugins.map((f) => ({ key: `disable:${f.id}`, label: `Disable plugin ${f.id} for this repo`, note: 'writes enabledPlugins=false to .claude/settings.json so the vendored copies are the only ones that load', on: true })),
+      ...plugins.map((f) => ({ key: `disable:${f.id}`, label: `Disable plugin ${f.id} for this repo`, note: 'off: keep it — it provides the planning skills here, and the vendored tdd · ticket-review are the ones the loop runs anyway; on: writes enabledPlugins=false to .claude/settings.json so only the vendored copies load (then vendor the planning skills above too)', on: false })),
       { key: 'github', label: 'Create the 6 GitHub labels', note: 'ready-for-agent · in-review …', on: o.github },
       { key: 'credential', label: 'Use the gh token for git push',
         note: sshRemote ? 'SSH remote detected — not needed (default off)' : 'this repo only; keeps unattended HTTPS push from waiting on the keychain', on: o.credential },
@@ -409,8 +416,8 @@ async function init(o) {
 
 // 충돌 검사는 bash 스크립트(files/scripts/sync-mattpocock-skills.sh --check --json)가 한다 — 설치기 두 경로가 같은 판정을 내도록.
 // 반환: [{severity, kind, detail, fix, id?, names?}]. 스크립트가 없거나 깨지면 빈 목록(검사 실패가 설치를 막지는 않는다)
-function skillConflicts(root, workflow, agent) {
-  const r = run('bash', [path.join(PKG_ROOT, 'files', 'scripts', 'sync-mattpocock-skills.sh'), '--check', '--json', '--agent', agent, workflow ? '--workflow' : '--no-workflow'], { cwd: root });
+function skillConflicts(root, workflow, agent) {   // workflow: true · false · null(플래그 없음 — 스크립트의 기본값 규칙을 따른다)
+  const r = run('bash', [path.join(PKG_ROOT, 'files', 'scripts', 'sync-mattpocock-skills.sh'), '--check', '--json', '--agent', agent, ...(workflow === null ? [] : [workflow ? '--workflow' : '--no-workflow'])], { cwd: root });
   let list;
   try { list = JSON.parse(r.out); } catch { return []; }
   if (!Array.isArray(list)) return [];

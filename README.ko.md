@@ -122,7 +122,7 @@ Claude Code는 새 워크트리의 신뢰를 메인 체크아웃 경로로 판�
 | 묶음 | 스킬 | 기본 |
 |---|---|---|
 | core | `tdd`, `code-review` → `ticket-review`(내장 `/code-review`와 이름이 겹쳐서) | 항상 |
-| workflow | `grill-with-docs`, `to-spec`, `to-tickets`, `retro`와 `grilling`, `domain-modeling`, `writing-for-agents` | 꺼짐. `--workflow-skills` 또는 체크리스트. 지난 설치가 들였으면 유지 |
+| workflow | `grill-with-docs`, `to-spec`, `to-tickets`, `retro`와 `grilling`, `domain-modeling`, `writing-for-agents` | 새 설치: 켬. 단 `mattpocock-skills` 플러그인이 이 저장소에 켜져 있으면 끔(이 머신에서는 플러그인이 준다). 재설치: 지난 선택. `--workflow-skills` / `--no-workflow-skills`가 우선 |
 | kept | 지난 설치(0.5 이하는 26개 전부)가 두 묶음 밖에 놓은 것 | 유지·동기화하고 새 설치에는 들이지 않는다. `--prune-skills`로 지운다 |
 
 세 묶음은 매니페스트 `.agents/skills/.mattpocock.json`에 기록된다. 손으로 지운 스킬은 다시 들이지 않고, upstream에서 사라진 스킬은 그대로 둔다. 매니페스트의 `project_owned`는 저장소가 손으로 고쳐 쓰는 스킬 목록이다(기본 `implement`·`pr`). 들인 스킬의 이름(예: `ticket-review`)을 거기 더하면 동기화가 그 디렉터리를 건드리지 않고 `project-owned (update by hand)`에 함께 보여 준다. 그 밖의 들인 스킬은 덮어쓰되, 지난 동기화의 upstream 사본과 달랐으면(커밋된 수정 포함) 요약에 `overwrote local edits: <이름>`을 내어 git에서 되돌리고 `project_owned`에 적을 수 있게 한다. 나머지 upstream 스킬은 플러그인(`claude plugin install mattpocock-skills@claude-plugins-official`)으로 쓴다.
@@ -131,7 +131,7 @@ Claude Code는 새 워크트리의 신뢰를 메인 체크아웃 경로로 판�
 
 | 발견 | 처리 |
 |---|---|
-| `mattpocock-skills` 플러그인이 이 저장소에 켜져 있음(`/tdd`와 `/mattpocock-skills:tdd`가 함께 뜬다) | 경고. 체크리스트가 `claude plugin disable … --scope project`를 제안 |
+| `mattpocock-skills` 플러그인이 이 저장소에 켜져 있음(선택기에 `/tdd`와 `/mattpocock-skills:tdd`가 나란히 보인다. 루프는 벤더링한 쪽을 돈다) | 알림. `tdd`·`ticket-review`는 그래도 들이고, 새 설치의 기획 스킬은 플러그인에 맡긴다. 체크리스트의 `claude plugin disable … --scope project`는 기본 꺼짐(켜면 기획 스킬도 함께 벤더링) |
 | `~/.claude/skills/<이름>`에 같은 스킬(커밋한 사본을 가린다) | 경고 + 이름 목록 |
 | `npx skills add`의 `skills-lock.json`, 또는 이 저장소의 `.agents/skills/` 밖을 가리키는 `.claude/skills/*` 링크 | **설치 중단**. `npx skills remove`로 걷어낸 뒤 재실행(`--force-skills`로 강행, `--no-skills`로 건너뜀) |
 | `code-review` 스킬 디렉터리(내장 `/code-review`를 대체) | 경고 + `rm -rf` 안내 |

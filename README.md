@@ -122,7 +122,7 @@ Skills are vendored as files rather than installed as a plugin so that every wor
 | Set | Skills | Default |
 |---|---|---|
 | core | `tdd`, `code-review` → `ticket-review` (the name clashes with the built-in `/code-review`) | Always |
-| workflow | `grill-with-docs`, `to-spec`, `to-tickets`, `retro`, plus `grilling`, `domain-modeling`, `writing-for-agents` | Off. `--workflow-skills` or the checklist; kept if a previous install had them |
+| workflow | `grill-with-docs`, `to-spec`, `to-tickets`, `retro`, plus `grilling`, `domain-modeling`, `writing-for-agents` | Fresh install: on, unless the `mattpocock-skills` plugin is enabled for this repo (then the plugin provides them on this machine). Reinstall: the previous choice. `--workflow-skills` / `--no-workflow-skills` override |
 | kept | Skills an earlier install (0.5 and before vendored all 26) placed outside the two sets | Kept and synced, never added to a fresh install. `--prune-skills` removes them |
 
 The manifest `.agents/skills/.mattpocock.json` records all three. A skill you deleted by hand is not restored; one upstream dropped is left alone. Its `project_owned` list names the skills the repository maintains by hand (`implement` and `pr` by default): add a vendored name such as `ticket-review` there and the sync leaves that directory alone and lists it under `project-owned (update by hand)`. Any other vendored skill is overwritten; when it differed from the previous sync's upstream copy (committed edits included), the summary adds `overwrote local edits: <name>` so you can restore it from git and mark it `project_owned`. Other upstream skills come from the plugin (`claude plugin install mattpocock-skills@claude-plugins-official`).
@@ -131,7 +131,7 @@ Before changing anything, the installer looks for the same skills installed anot
 
 | Found | Handling |
 |---|---|
-| The `mattpocock-skills` plugin enabled for this repo (`/tdd` and `/mattpocock-skills:tdd` would both load) | Warning; the checklist offers `claude plugin disable … --scope project` |
+| The `mattpocock-skills` plugin enabled for this repo (the picker shows `/tdd` and `/mattpocock-skills:tdd` side by side; the loop runs the vendored one) | Notice. `tdd` and `ticket-review` are vendored anyway; a fresh install leaves the planning skills to the plugin. The checklist offers `claude plugin disable … --scope project` (off by default; if you turn it on, vendor the planning skills too) |
 | The same skill in `~/.claude/skills/<name>` (shadows the committed copy) | Warning with the names |
 | `skills-lock.json` from `npx skills add`, or a `.claude/skills/*` link pointing outside this repo's `.agents/skills/` | **Install stops.** Remove with `npx skills remove` and rerun (`--force-skills` overrides, `--no-skills` skips vendoring) |
 | A `code-review` skill directory (replaces the built-in `/code-review`) | Warning with an `rm -rf` hint |
