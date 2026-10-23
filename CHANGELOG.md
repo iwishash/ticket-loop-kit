@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.9.16 — 2026-10-23
+
+0.9.12 실측에서 나온 결함 하나(#24)와 리포트 기능 하나(#25)를 PR #28 #29로 넣었다. #24는 루프의 판정에 닿는다 — CI 대기가 빈 체크 목록을 읽을 때. #25는 리포트 생성만 바꾼다(설정이 비어 있으면 전과 같다).
+
+- **CI 대기: 빈 체크 목록은 실패가 아니라 재등록 중으로 본다(#24).** `ci_passed`가 `gh pr checks --watch --fail-fast`의 비0 종료 뒤 체크 상태(bucket)를 다시 읽을 때 목록이 비어 있으면 실패로 읽고 워커에게 CI 수리를 보냈다. GitHub가 job을 다시 큐에 넣는 순간(재시도·장애 복구)에는 PR의 체크 목록이 잠깐 비고 `--watch`가 "no checks reported"로 끝난다. 실측(rental-portal #316, 2026-10-23): run은 이미 success였고 check-run 하나가 GitHub 장애로 `in_progress`에 굳었다가 27분 뒤 attempt 2로 다시 돌았는데, 그 빈 목록을 실패로 읽어 할 일 없는 수리 1회를 보냈다.
+  - 빈 목록·못 읽음이면 `CI watch ended with an empty check list (checks being re-registered?) — waiting for them to reappear (n/N)`을 남기고 `wait_checks_appear`(`CI_APPEAR_TIMEOUT_SEC`, 15분)를 다시 거친 뒤 다시 본다(`GH_TRIES`번까지). 그 안에 나타나지 않거나(`the checks did not reappear within Ns`) `GH_TRIES`번째도 비어 있으면(`the check list was empty after N CI watches — treating it as a failure`) 전처럼 실패다.
+  - `--watch`의 stderr를 버린다 — 타임스탬프 없는 줄이 루프 로그에 그대로 섞였고, 결과는 어차피 bucket으로 다시 읽는다.
+  - 이슈의 세 번째 제안(run 결론은 success인데 check-run 하나가 `in_progress`로 오래 남으면 경고)은 넣지 않았다.
+  - 스모크: 가짜 `gh`가 체크 개수를 차례로 내고 "no checks reported" stderr 줄을 찍는다 — 빈 목록 뒤 체크가 다시 나타나면 통과, 끝내 비면 `GH_TRIES`번 뒤 실패, 다시 나타나지 않으면 실패, 처음부터 없으면 실패, 모든 사례에서 stderr 줄 0.
+  - 비용: 빈 목록이 났을 때 재등록 대기(최대 15분)가 수리 대신 든다. 체크가 정말 없어진 PR은 15분 뒤 전처럼 실패한다.
+- **스펙 리포트가 PR 본문의 '사람 확인 필요' 절을 모아 보인다(#25).** 워커는 스펙과 다르게 정했거나 스펙이 사람에게 남긴 결정을 내린 것을 PR 본문에 적는데, 리포트에는 인수 조건 체크 수만 보여 병합된 PR을 하나씩 열어야 했다(rental-portal 스펙 #313: 14개 PR의 "남은 판단 사항" 116줄 가운데 사람이 정할 것은 두 건).
+  - 새 설정 `REPORT_DECISIONS_HEADING`(기본 비움 = 전과 같다): PR 본문 절의 마크다운 제목(글자 그대로, 예: `사람 확인 필요`). 저장소마다 절 이름이 다르므로 키트는 이름만 받는다. 키트의 `pr` 스킬 템플릿은 그대로다 — 그 "Remaining judgement calls"는 기록용이라 기본으로 모으지 않는다. 사람이 정할 것만 적는 절을 `pr` 스킬에 따로 두고 그 이름을 적는다.
+  - 지정하면 리포트가 각 티켓 PR 본문에서 그 절(다음 같은·상위 수준 제목 앞까지, 하위 절 포함)을 뽑아 머리에 "<제목> — N PRs" 블록으로 모은다(티켓·PR 링크, 절 본문 원문 — 이스케이프·줄 바꿈 유지). KPI에 건수, 절이 있는 행의 Result brief에 ⚑ 표시와 링크. 절이 없거나 빈 PR은 나오지 않고, 하나도 없으면 블록도 없다.
+  - 리포트 로그 줄에 `'사람 확인 필요': N PRs`, 회고 안내 줄에 `(its '사람 확인 필요' list collects N PRs for a human)`이 붙는다(리포트를 쓴 스펙만).
+  - 스모크: 절 있음(하위 절·`<>` 글자)·빈 절·제목 아닌 글자의 세 PR, 제목 없는 렌더에 블록·표시·타일 없음, `write_spec_report`(가짜 `gh`)의 로그 줄과 `REPORT_DECISIONS`, `suggest_retro` 안내. 가이드북 설정 표·7장 9단계, loop-reports README 템플릿.
+- 이미 설치된 저장소: 키트를 올리면 #24는 바로 켜진다. #25는 `loop.env`에 `REPORT_DECISIONS_HEADING`을 적어야 켜진다(rental-portal은 `pr` 스킬에 그 절을 둔 뒤). 열린 이슈 #3·#12는 사람 실측이 먼저라 그대로다. PDF 재빌드.
+
 ## 0.9.15 — 2026-10-23
 
 설치기 기본값 하나(#26)를 PR #27로 바꿨다. 루프 판정에 영향을 주는 변경은 없다. 새 설치에서 기획 스킬(workflow 묶음)은 늘 꺼져 있었고, `mattpocock-skills` 플러그인이 켜진 저장소에서는 체크리스트가 "Disable plugin"을 기본 켜짐으로 띄웠다 — 두 토글이 독립이라 플러그인을 끄면 기획 스킬이 이 저장소에서 사라지는데 벤더링은 꺼진 채라 사용자가 빈손이 됐고, 플러그인이 없는 새 설치는 `--workflow-skills`를 기억해야 스펙 → 티켓 → 회고 흐름을 쓸 수 있었다.
