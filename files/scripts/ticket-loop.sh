@@ -1519,14 +1519,25 @@ wait_checks_appear() {
 
 # --watch는 GitHub API 오류 한 번에도 1로 끝난다 — 체크 실패와 같은 코드다. 그대로 실패로 읽으면 워커에게 할 일 없는 수리를 보낸다.
 # 1이면 체크 상태(bucket)를 다시 읽어 실패·취소가 있을 때만 실패, 다 통과했으면 통과, 아직 도는 체크가 있으면 다시 본다(GH_TRIES번까지).
-# 못 읽으면 전처럼 실패다
+# 체크 목록이 비었거나 못 읽었으면 실패가 아니라 재등록 중으로 본다 — GitHub가 job을 다시 큐에 넣는 순간(재시도·장애 복구) PR의 체크
+# 목록이 잠깐 비고 --watch는 "no checks reported"로 끝난다(이슈 #24: 2026-10-23 rental-portal #316, run은 success인데 check-run 하나가
+# 장애로 in_progress에 굳었다가 27분 뒤 attempt 2로 다시 돌았다 — 0.9.12는 그 빈 목록을 실패로 읽어 할 일 없는 수리를 보냈다).
+# 그래서 빈 목록이면 체크가 다시 나타나기를 기다린 뒤(wait_checks_appear, CI_APPEAR_TIMEOUT_SEC) 다시 본다. 그 안에 나타나지 않거나
+# GH_TRIES번 뒤에도 비어 있으면 전처럼 실패다. --watch의 stderr는 버린다 — 타임스탬프 없는 줄이 루프 로그에 그대로 섞이기 때문이고,
+# 결과는 어차피 bucket으로 다시 읽는다
 ci_passed() {
   local try buckets
   wait_checks_appear "$1" || { log warn "PR #$1: no checks were registered"; return 1; }
   for (( try = 1; try <= GH_TRIES; try++ )); do
-    bg_wait gh pr checks "$1" --watch --fail-fast >/dev/null && return 0   # 끝날 때까지 블록, 실패 시 비0
+    bg_wait gh pr checks "$1" --watch --fail-fast >/dev/null 2>&1 && return 0   # 끝날 때까지 블록, 실패 시 비0
     buckets="$(gh pr checks "$1" --json bucket --jq '[.[].bucket] | unique | join(" ")' 2>/dev/null || true)"
-    [[ -n "$buckets" && " $buckets " != *" fail "* && " $buckets " != *" cancel "* ]] || return 1
+    if [[ -z "$buckets" ]]; then
+      [[ $try -lt $GH_TRIES ]] || { log warn "PR #$1: the check list was empty after ${GH_TRIES} CI watches — treating it as a failure"; break; }
+      log warn "PR #$1: CI watch ended with an empty check list (checks being re-registered?) — waiting for them to reappear (${try}/${GH_TRIES})"
+      wait_checks_appear "$1" || { log warn "PR #$1: the checks did not reappear within ${CI_APPEAR_TIMEOUT_SEC}s"; return 1; }
+      continue
+    fi
+    [[ " $buckets " != *" fail "* && " $buckets " != *" cancel "* ]] || return 1
     [[ " $buckets " == *" pending "* ]] || { log warn "PR #$1: CI watch failed but every check passed (GitHub error?) — going on"; return 0; }
     [[ $try -lt $GH_TRIES ]] || break
     log warn "PR #$1: CI watch failed with no failed check (GitHub error?) — watching again (${try}/${GH_TRIES})"
