@@ -18,7 +18,9 @@ set -euo pipefail
 #      (GitHub tracker facts the vendored skills read)
 #   3. Vendors the mattpocock skills the loop uses into .agents/skills/: always tdd and code-review (→ ticket-review), which the
 #      implement skill calls; the planning set (grill-with-docs, to-spec, to-tickets, retro + their 3 dependencies) only with
-#      --workflow-skills (default: keep what the previous install chose). Skills an earlier install vendored outside those sets
+#      --workflow-skills. Without the flag a reinstall keeps the previous choice; a fresh install vendors them unless the
+#      mattpocock-skills plugin is enabled for this repo (then the plugin provides them on this machine; the picker shows
+#      /tdd and /mattpocock-skills:tdd side by side, which is harmless). Skills an earlier install vendored outside those sets
 #      are kept and synced, never removed, unless --prune-skills is given. Before touching anything it checks for the same skills
 #      installed another way (plugin, ~/.claude/skills, `npx skills`) and stops when two tools would fight over the same files
 #   4. Adds /.ticket-loop/*.log, /.ticket-loop/*.jsonl and /.ticket-loop/stops/ to .gitignore; merges deny rules into .claude/settings.json
@@ -39,6 +41,7 @@ set -euo pipefail
 #                        from .ticket-loop/loop.env; the npx shell writes it there, this script does not
 #   --no-skills          skip the mattpocock skill sync
 #   --workflow-skills    also vendor the planning skills (grill-with-docs, to-spec, to-tickets, retro + deps); --no-workflow-skills removes them
+#                        (default: previous install's choice; fresh install: on unless the mattpocock-skills plugin is enabled for this repo)
 #   --force-skills       vendor even when another tool (npx skills) manages mattpocock skills in this repo
 #   --prune-skills       remove skills an earlier install vendored outside the selected sets (default: keep and sync them)
 #   --no-github          do not create the labels

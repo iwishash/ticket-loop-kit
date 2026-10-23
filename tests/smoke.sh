@@ -158,7 +158,7 @@ W="$T/sync"; mkdir -p "$W/.claude/skills/implement"; git -C "$W" init -q -b main
 SYNC="$KIT/files/scripts/sync-mattpocock-skills.sh"
 sync_run() { (cd "$W" && HOME="$T/emptyhome" CLAUDE_CONFIG_DIR="$T/emptyhome/.claude" MATTPOCOCK_UPSTREAM="$U" bash "$SYNC" "$@" 2>&1); }
 mkdir -p "$T/emptyhome/.claude"
-out="$(sync_run)" || fail "동기화(core) 실패: $out"
+out="$(sync_run --no-workflow)" || fail "동기화(core) 실패: $out"   # 새 설치의 플래그 없는 기본값(플러그인 없으면 workflow 도)은 아래 #26 블록에서 본다
 [[ -f "$W/.claude/skills/tdd/SKILL.md" && -f "$W/.claude/skills/ticket-review/SKILL.md" && -f "$W/.claude/skills/ticket-review/agents/openai.yaml" ]] || fail "core 스킬이 없음"
 [[ -d "$W/.agents/skills/tdd" && ! -L "$W/.agents/skills/tdd" && -L "$W/.claude/skills/tdd" && "$(readlink "$W/.claude/skills/tdd")" == "../../.agents/skills/tdd" ]] || fail "정본이 .agents/skills 가 아니거나 .claude/skills/tdd 가 링크가 아님"
 [[ ! -e "$W/.claude/skills/.mattpocock.json" ]] || fail "매니페스트가 옛 자리(.claude/skills)에 생김"
@@ -299,6 +299,51 @@ rc=0; out="$(cd "$K" && HOME="$H" CLAUDE_CONFIG_DIR="$H/.claude" CODEX_AGENTS_HO
 grep -q '~/.agents/skills/tdd exists' <<<"$out" || fail "--agent codex 가 ~/.agents/skills 의 같은 이름을 알리지 않음: $out"
 (cd "$K" && bash "$SYNC" --check --agent bogus >/dev/null 2>&1) && fail "모르는 --agent 를 거절해야 한다"
 echo "ok  --check 다섯 경우·종료 코드·--json·배치 링크·--agent codex"
+
+# 새 설치의 workflow 기본값(#26): 플러그인이 이 저장소에 켜져 있으면 core 만(2개), 없으면 core + workflow(9개). 매니페스트가 있으면 지난 선택.
+# plugin finding 은 알림(rc 0). --agent codex 는 플러그인을 보지 않는다. npx 껍질 --yes 와 install.sh 도 같은 규칙
+F="$T/fresh"; mkdir -p "$F"; git -C "$F" init -q -b main
+fsync() { (cd "$F" && HOME="$T/emptyhome" CLAUDE_CONFIG_DIR="$T/emptyhome/.claude" MATTPOCOCK_UPSTREAM="$U" bash "$SYNC" "$@" 2>&1); }
+out="$(fsync)" || fail "새 설치(플러그인 없음) 동기화 실패: $out"
+[[ "$(jq -r '.skills | length' "$F/.agents/skills/.mattpocock.json")" == 9 && "$(jq -r .workflow "$F/.agents/skills/.mattpocock.json")" == true ]] || fail "플러그인 없는 새 설치가 core + workflow(9개)가 아님: $(jq -c . "$F/.agents/skills/.mattpocock.json")"
+grep -q 'planning skills: vendored — no mattpocock-skills plugin' <<<"$out" || fail "새 설치 요약에 기본값 근거가 없음: $out"
+out="$(fsync --no-workflow)" || fail "--no-workflow 실패: $out"
+[[ "$(jq -r '.skills | length' "$F/.agents/skills/.mattpocock.json")" == 2 ]] || fail "--no-workflow 가 7개를 지우지 않음"
+grep -q 'planning skills:' <<<"$out" && fail "명시 플래그인데 기본값 근거가 찍힘: $out"
+out="$(fsync)" || fail "재동기화 실패: $out"
+[[ "$(jq -r '.skills | length' "$F/.agents/skills/.mattpocock.json")" == 2 ]] && grep -q "planning skills: not vendored — the previous install's choice" <<<"$out" || fail "재설치가 지난 선택(끔)을 잇지 않음: $out"
+P="$T/fresh-plugin"; mkdir -p "$P/.claude"; git -C "$P" init -q -b main
+printf '{"enabledPlugins":{"mattpocock-skills@mattpocock":true}}\n' > "$P/.claude/settings.json"
+psync() { (cd "$P" && HOME="$T/emptyhome" CLAUDE_CONFIG_DIR="$T/emptyhome/.claude" MATTPOCOCK_UPSTREAM="$U" bash "$SYNC" "$@" 2>&1); }
+rc=0; out="$(psync --check)" || rc=$?
+[[ $rc -eq 0 ]] && grep -q 'plugin mattpocock-skills@mattpocock is enabled for this repo' <<<"$out" || fail "플러그인만 켜진 저장소의 --check 가 알림(0)이 아님: rc=$rc $out"
+out="$(psync)" || fail "새 설치(플러그인 켜짐) 동기화 실패: $out"
+[[ "$(jq -r '.skills | length' "$P/.agents/skills/.mattpocock.json")" == 2 && "$(jq -r .workflow "$P/.agents/skills/.mattpocock.json")" == false ]] || fail "플러그인 켜진 새 설치가 core 만(2개)이 아님: $(jq -c . "$P/.agents/skills/.mattpocock.json")"
+grep -q 'planning skills: not vendored — plugin mattpocock-skills@mattpocock is enabled' <<<"$out" || fail "플러그인 요약 근거 없음: $out"
+out="$(psync --workflow)" || fail "플러그인 켜진 저장소 --workflow 실패: $out"
+[[ "$(jq -r '.skills | length' "$P/.agents/skills/.mattpocock.json")" == 9 ]] || fail "--workflow 가 플러그인 기본값을 덮지 못함"
+out="$(psync)" || fail "재동기화 실패: $out"
+[[ "$(jq -r '.skills | length' "$P/.agents/skills/.mattpocock.json")" == 9 ]] || fail "재설치가 지난 선택(켬)을 플러그인 때문에 뒤집음"
+X="$T/fresh-codex"; mkdir -p "$X/.claude"; git -C "$X" init -q -b main
+printf '{"enabledPlugins":{"mattpocock-skills@mattpocock":true}}\n' > "$X/.claude/settings.json"
+out="$(cd "$X" && HOME="$T/emptyhome" CLAUDE_CONFIG_DIR="$T/emptyhome/.claude" MATTPOCOCK_UPSTREAM="$U" bash "$SYNC" --agent codex 2>&1)" || fail "codex 새 설치 실패: $out"
+[[ "$(jq -r '.skills | length' "$X/.agents/skills/.mattpocock.json")" == 9 ]] || fail "--agent codex 새 설치가 플러그인을 보고 workflow 를 껐다"
+# 설치기 두 경로: npx 껍질 --yes(플러그인 없음 → 9개, 켜짐 → 2개), install.sh(플러그인 켜짐 → 2개)
+N1="$T/init-noplugin"; mkdir -p "$N1"; git -C "$N1" init -q -b main; git -C "$N1" commit -q --allow-empty -m init
+out="$(cd "$N1" && HOME="$T/emptyhome" CLAUDE_CONFIG_DIR="$T/emptyhome/.claude" MATTPOCOCK_UPSTREAM="$U" node "$KIT/bin/ticket-loop-kit.js" init --yes --no-github --no-git-credential --no-orca 2>&1)" || fail "npx 껍질 init(플러그인 없음) 실패: $out"
+[[ "$(jq -r '.skills | length' "$N1/.agents/skills/.mattpocock.json")" == 9 && -L "$N1/.claude/skills/to-spec" ]] || fail "npx 껍질 --yes 가 플러그인 없는 새 설치에 기획 스킬을 들이지 않음: $out"
+N2="$T/init-plugin"; mkdir -p "$N2/.claude"; git -C "$N2" init -q -b main; git -C "$N2" commit -q --allow-empty -m init
+printf '{"enabledPlugins":{"mattpocock-skills@mattpocock":true}}\n' > "$N2/.claude/settings.json"
+out="$(cd "$N2" && HOME="$T/emptyhome" CLAUDE_CONFIG_DIR="$T/emptyhome/.claude" MATTPOCOCK_UPSTREAM="$U" node "$KIT/bin/ticket-loop-kit.js" init --yes --no-github --no-git-credential --no-orca 2>&1)" || fail "npx 껍질 init(플러그인 켜짐) 실패: $out"
+[[ "$(jq -r '.skills | length' "$N2/.agents/skills/.mattpocock.json")" == 2 && ! -e "$N2/.claude/skills/to-spec" ]] || fail "npx 껍질 --yes 가 플러그인 켜진 새 설치에 기획 스킬을 들임: $out"
+grep -q 'plugin mattpocock-skills@mattpocock is enabled' <<<"$out" || fail "npx 껍질이 플러그인 알림을 보여 주지 않음: $out"
+jq -e '.enabledPlugins["mattpocock-skills@mattpocock"] == true' "$N2/.claude/settings.json" >/dev/null || fail "--yes 가 플러그인을 껐다(기본은 두는 것)"
+N3="$T/install-plugin"; mkdir -p "$N3/.claude"; git -C "$N3" init -q -b main; git -C "$N3" commit -q --allow-empty -m init
+printf '{"enabledPlugins":{"mattpocock-skills@mattpocock":true}}\n' > "$N3/.claude/settings.json"
+out="$(cd "$N3" && HOME="$T/emptyhome" CLAUDE_CONFIG_DIR="$T/emptyhome/.claude" MATTPOCOCK_UPSTREAM="$U" KIT_DIR="$KIT" bash "$KIT/install.sh" --no-github --no-git-credential --no-orca 2>&1)" || fail "install.sh(플러그인 켜짐) 실패: $out"
+[[ "$(jq -r '.skills | length' "$N3/.agents/skills/.mattpocock.json")" == 2 ]] || fail "install.sh 가 플러그인 켜진 새 설치에 기획 스킬을 들임"
+grep -q 'Skill conflicts found' <<<"$out" && fail "플러그인 알림만 있는데 install.sh 가 충돌 경고를 냄: $out"
+echo "ok  새 설치 workflow 기본값: 플러그인 없음 9개 · 켜짐 2개 · 지난 선택 유지 · codex · npx/install.sh"
 
 # 차단 충돌이면 install.sh 와 npx 껍질은 파일을 놓기 전에 멈춘다. --no-skills 면 진행한다
 B="$T/blocked"; mkdir -p "$B"; git -C "$B" init -q -b main; git -C "$B" commit -q --allow-empty -m init
