@@ -103,6 +103,9 @@ set -euo pipefail
 #   RECORDS_FILE        티켓별 기록 JSONL (기본 .ticket-loop/tickets.jsonl, 기계별 — 커밋하지 않는다). 상대 경로는 저장소 루트 기준
 #   REPORT_DIR          스펙 리포트 HTML 디렉터리 (기본 docs/loop-reports — 리포트는 사람이 PR로 커밋). 상대 경로는 저장소 루트 기준
 #   REPORT_OPEN         리포트를 쓴 뒤 브라우저로 여는지 (기본 1). 0이면 안 연다. SSH 세션·화면 없는 Linux에서는 값과 무관하게 안 연다
+#   REPORT_DECISIONS_HEADING  PR 본문에서 사람이 봐야 할 절의 마크다운 제목(글자 그대로, 예: "사람 확인 필요"). 지정하면 리포트가 각 티켓 PR 본문에서
+#                       그 절을 뽑아 머리의 목록(PR 링크 포함)으로 모으고, 절이 있는 행에 표시를 단다. 절이 없거나 빈 PR은 목록에 없다.
+#                       기본 비움 = 모으지 않는다(지금까지와 같다). 저장소마다 절 이름이 다르므로 키트는 이름만 받는다(이슈 #25)
 #   MODEL_REGEX         워커 터미널에서 모델 이름을 뽑는 정규식(ERE) (claude: 상태줄·배너의 "Opus 5.5" 꼴, codex: "gpt-5.1-codex" 꼴).
 #                       못 찾으면 리포트에 not recorded
 #   USAGE_LIMIT_REGEX   워커 화면 끝 25줄에서 사용량 한도 문구를 찾는 정규식(ERE) (claude: "reached your .* limit|usage limit", codex·그 외: 없음).
@@ -202,6 +205,7 @@ LOG_FILE="${LOG_FILE:-.ticket-loop/loop-$(date +%m%d).log}"
 RECORDS_FILE="${RECORDS_FILE:-.ticket-loop/tickets.jsonl}"
 REPORT_DIR="${REPORT_DIR:-docs/loop-reports}"
 REPORT_OPEN="${REPORT_OPEN:-1}"
+REPORT_DECISIONS_HEADING="${REPORT_DECISIONS_HEADING:-}"
 PROGRESS_SEC="${PROGRESS_SEC:-60}"
 HEARTBEAT_SEC="${HEARTBEAT_SEC:-300}"
 SLACK_WEBHOOK_URL="${SLACK_WEBHOOK_URL:-}"
@@ -2240,7 +2244,7 @@ spec_logs() {
 
 # 끝난 스펙이 있으면 회고를 권한다 — 안내일 뿐, 아무것도 실행하지 않는다. /retro 는 사람이 후보를 보고 고르는 스킬이라 무인 단계로 두지 않는다
 suggest_retro() {
-  local spec report skill="${SKILL_PREFIX:-/}retro" logs
+  local spec report skill="${SKILL_PREFIX:-/}retro" logs decs
   [[ -n "${CLOSED_SPECS// /}" ]] || return 0
   [[ -d "${ROOT:-.}/.agents/skills/retro" || -d "${ROOT:-.}/.claude/skills/retro" ]] || skill="${skill} (not in this repository yet — install it with the kit's --workflow-skills)"
   for spec in $CLOSED_SPECS; do
@@ -2251,7 +2255,10 @@ suggest_retro() {
     if [[ -z "$logs" ]]; then logs="log (none — logging is off)"
     elif [[ "$logs" == *", "* ]]; then logs="logs ${logs}"
     else logs="log ${logs}"; fi
-    log "spec #${spec} complete. If you like, review this batch with ${skill} — material to read: ${logs}, ${report}, and the 'remaining decisions' / 'not verified' sections of the merged PR bodies. If you end up changing the environment (skills, worker-rules.md, automated checks), a PR is recommended"
+    decs=""
+    [[ -z "${REPORT_DECISIONS_HEADING:-}" || "$spec" != "${PARENT:-}" || -z "${REPORT_DECISIONS:-}" ]] \
+      || decs=" (its '${REPORT_DECISIONS_HEADING}' list collects ${REPORT_DECISIONS} PR$([[ "$REPORT_DECISIONS" == 1 ]] || echo s) for a human)"
+    log "spec #${spec} complete. If you like, review this batch with ${skill} — material to read: ${logs}, ${report}${decs}, and the 'remaining decisions' / 'not verified' sections of the merged PR bodies. If you end up changing the environment (skills, worker-rules.md, automated checks), a PR is recommended"
   done
 }
 
@@ -2353,7 +2360,19 @@ def tok: def d1($u; $s): (. / ($u / 10) | floor) as $d | "\($d / 10 | floor).\($
          if . == null then "—" elif . >= 1e9 then d1(1e9; "B") elif . >= 1e6 then d1(1e6; "M") elif . >= 1e3 then "\(. / 1e3 | floor)k" else "\(.)" end;
 def tcell($v; $note): "<td class=\"nw\">" + (if $v == -1 then "none" else ($v | dur) end) + (if $note == "" then "" else "<div class=\"muted small\">\($note)</div>" end) + "</td>";
 def seg($v; $c; $den): if ($v // 0) > 0 then "<i class=\"\($c)\" style=\"width:\($v * 1000 / $den | floor / 10)%\"></i>" else "" end;
-($issues | sort_by(order, .number) | map(. as $i
+# PR 본문에서 제목이 $h와 글자 그대로 같은 마크다운 절(#~######)의 본문 — 다음 같은·상위 수준 제목 앞까지(하위 절은 포함). 제목이 비었거나
+# 절이 없거나 본문이 비면 null. 리포트 머리의 "사람 확인 필요" 목록이 쓴다(REPORT_DECISIONS_HEADING, 이슈 #25)
+def section($h): if $h == "" or . == null then null else
+  split("\n") as $lines
+  | ($lines | map(capture("^(?<l>#{1,6})[ \t]+(?<t>.*?)[ \t]*#*[ \t]*$") // null)) as $hs
+  | ($hs | to_entries | map(select(.value != null and .value.t == $h)) | first) as $start
+  | if $start == null then null else
+      ($start.value.l | length) as $lvl
+      | (($hs | to_entries | map(select(.key > $start.key and .value != null and (.value.l | length) <= $lvl)) | first | .key) // ($lines | length)) as $end
+      | $lines[$start.key + 1:$end] | join("\n") | gsub("^\\s+|\\s+$"; "") | if . == "" then null else . end
+    end end;
+($ARGS.named.heading // "") as $heading   # REPORT_DECISIONS_HEADING — --arg heading 이 없으면(지난 호출 꼴) 비움
+| ($issues | sort_by(order, .number) | map(. as $i
   | ($recs | map(select(.issue == $i.number)) | sort_by(.finished)) as $rs | ($rs | last) as $r
   | ($prefix + ($i.number | tostring)) as $b
   | ($prs | map(select(.headRefName == $b or (.headRefName | startswith($b + "-"))))
@@ -2380,7 +2399,10 @@ def seg($v; $c; $den): if ($v // 0) > 0 then "<i class=\"\($c)\" style=\"width:\
             post: ($r.post_merge // "" | post | [scan(" in ([0-9]+)s") | .[0] | tonumber] | add | pos), est: true} end),
      # 토큰 — 기록의 tokens(0.9.8부터), 없으면 write_spec_report가 세션 기록에서 메운 값. total은 네 값의 합
      tk: ($r.tokens | if type == "object" then . + {total: ((.input // 0) + (.output // 0) + (.cache_write // 0) + (.cache_read // 0))} else null end),
-     model: ($r.model // "not recorded")})) as $rows
+     model: ($r.model // "not recorded"),
+     # 그 PR 본문의 REPORT_DECISIONS_HEADING 절(없으면 null) — 머리 목록과 행 표시가 쓴다
+     dec: ($pr.body // "" | section($heading))})) as $rows
+| ($rows | map(select(.dec != null))) as $decs
 | ($rows | map(select(.status == "merged" or .status == "merged-after-stop")) | length) as $merged
 | ($rows | map(select(.issue.state == "closed")) | length) as $closed
 | ($rows | map(select(.wall.src == "loop") | .wall.sec) | add // 0) as $total
@@ -2400,7 +2422,9 @@ def seg($v; $c; $den): if ($v // 0) > 0 then "<i class=\"\($c)\" style=\"width:\
   + ".badge{display:inline-block;font-size:12px;font-weight:700;border-radius:10px;padding:0 8px;border:1px solid var(--line);white-space:nowrap}.badge.ok{color:var(--ok);background:var(--ok-soft)}"
   + ".badge.warn{color:var(--warn);background:var(--warn-soft)}.badge.bad{color:var(--bad);background:var(--bad-soft)}.badge.muted{color:var(--muted);background:var(--soft)}footer{margin-top:20px;color:var(--muted);font-size:12px}"
   + ".bar{display:flex;height:6px;min-width:96px;margin-top:6px;border-radius:3px;overflow:hidden;background:var(--line)}.bar i{display:block;height:100%}"
-  + ".dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:5px}.s-impl{background:var(--accent)}th.tm{white-space:normal}th.tm .k{white-space:nowrap}td.tk{min-width:130px}td.br{min-width:220px}.s-ci{background:var(--warn)}.s-post{background:var(--ok)}</style></head>"
+  + ".dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:5px}.s-impl{background:var(--accent)}th.tm{white-space:normal}th.tm .k{white-space:nowrap}td.tk{min-width:130px}td.br{min-width:220px}.s-ci{background:var(--warn)}.s-post{background:var(--ok)}"
+  + ".dec{margin:0 0 20px;padding:12px 14px;border:1px solid var(--warn);border-left-width:4px;border-radius:8px;background:var(--warn-soft)}.dec h2{font-size:15px;margin:0 0 8px}.dec .item{margin-top:10px}.dec .item:first-of-type{margin-top:0}.dec .who{font-weight:700;font-size:13px}.dec .md{margin:4px 0 0;white-space:pre-wrap;font-size:13px}"
+  + ".flag{margin-top:4px;font-size:12px}.flag a{color:var(--warn);font-weight:700}</style></head>"
   + "<body><main><div class=\"kicker\">Unattended ticket loop · Spec report</div>"
   + @html "<h1><a href=\"\($spec.url)\">#\($spec.number)</a> \($spec.title)</h1>"
   + "<p class=\"meta\">Spec " + (if ($rows | length) > 0 and $closed == ($rows | length) then "complete (all sub-tickets closed)" else "in progress (\($closed)/\($rows | length) closed)" end)
@@ -2411,13 +2435,22 @@ def seg($v; $c; $den): if ($v // 0) > 0 then "<i class=\"\($c)\" style=\"width:\
   + "<div class=\"kpi\"><div class=\"v\">\($ci_total | dur)</div><div class=\"l\"><span class=\"dot s-ci\"></span>CI</div></div>"
   + "<div class=\"kpi\"><div class=\"v\">\($post_total | dur)</div><div class=\"l\"><span class=\"dot s-post\"></span>Post-merge check</div></div>"
   + "<div class=\"kpi\"><div class=\"v\">\($tok_total | tok)</div><div class=\"l\">Tokens (output \($tok_out | tok))</div></div>"
-  + @html "<div class=\"kpi\"><div class=\"v\">\(if $models == "" then "not recorded" else $models end)</div><div class=\"l\">Models used</div></div></div>"
+  + @html "<div class=\"kpi\"><div class=\"v\">\(if $models == "" then "not recorded" else $models end)</div><div class=\"l\">Models used</div></div>"
+  + (if $heading == "" then "" else @html "<div class=\"kpi\"><div class=\"v\">\($decs | length)</div><div class=\"l\">\($heading)</div></div>" end) + "</div>"
+  # 사람이 봐야 할 절 모음 — 설정한 제목의 절이 있는 PR만, 티켓·PR 링크와 절 본문 그대로(마크다운 원문, 줄 바꿈 유지). 하나도 없으면 블록도 없다.
+  # data-count는 write_spec_report가 로그 한 줄에 건수를 적을 때 읽는다
+  + (if ($decs | length) == 0 then "" else
+       "<section class=\"dec\" id=\"decisions\" data-count=\"\($decs | length)\">"
+       + @html "<h2>\($heading) <span class=\"muted\">— \($decs | length) PR\(if ($decs | length) == 1 then "" else "s" end)</span></h2>"
+       + ($decs | map(@html "<div class=\"item\"><div class=\"who\"><a href=\"\(.issue.url)\">#\(.issue.number)</a> \(.issue.title) · <a href=\"\(.pr.url)\">PR #\(.pr.number)</a></div><div class=\"md\">\(.dec)</div></div>") | join(""))
+       + "</section>" end)
   + "<div class=\"wrap\"><table><thead><tr><th>Issue</th><th>Ticket</th><th>Status</th><th>Result brief</th><th class=\"tm\"><span class=\"k\"><span class=\"dot s-impl\"></span>Implementation</span></th><th class=\"tm\"><span class=\"k\"><span class=\"dot s-ci\"></span>CI</span></th><th class=\"tm\"><span class=\"k\"><span class=\"dot s-post\"></span>Post-merge</span> check</th><th>Elapsed</th><th>Tokens</th><th>Model</th><th>Finished</th></tr></thead><tbody>"
   + ($rows | map(
       @html "<tr><td class=\"nw\"><a href=\"\(.issue.url)\">#\(.issue.number)</a></td><td class=\"tk\">\(.issue.title)</td>"
       + "<td><span class=\"badge \(.status | badge | .[1])\">\(.status | badge | .[0])</span></td><td class=\"br\">"
       + (if .pr then @html "<div><a href=\"\(.pr.url)\">PR #\(.pr.number)</a> \(.pr.title)</div>"
                       + ((.pr.body // "" | checks) | if .total > 0 then "<div>Acceptance criteria \(.checked)/\(.total)</div>" else "" end)
+                      + (if .dec != null then @html "<div class=\"flag\"><a href=\"#decisions\">⚑ \($heading)</a></div>" else "" end)
          elif .rec == null then "<span class=\"muted\">no record</span>" else "" end)
       + (if .rec.result == "stopped" then @html "<div class=\"reason\">Stop reason: \(.rec.reason // "—")</div>" else "" end)
       + (if .rec then "<div class=\"bits\">" + ([
@@ -2481,6 +2514,7 @@ report_tokens() {
 
 # --parent 실행이 정상 종료하면 스펙 리포트 HTML을 쓰고 브라우저로 연다. 생성 실패는 루프 결과를 바꾸지 않는다(로그만).
 # 리포트는 커밋하지 않는다 — 사람이 보고 PR로 올린다(루프가 도는 동안 기본 브랜치 직접 커밋 금지).
+REPORT_DECISIONS=""   # 마지막으로 쓴 리포트의 "사람 확인 필요" 건수(REPORT_DECISIONS_HEADING이 있을 때) — suggest_retro가 안내 줄에 적는다
 write_spec_report() {
   [[ -n "$PARENT" ]] || return 0
   local out="$REPORT_DIR/spec-${PARENT}.html" records="$RECORDS_FILE" spec issues prs recs   # 둘 다 시작 때 절대 경로로 굳혔다
@@ -2491,8 +2525,10 @@ write_spec_report() {
     && recs="$( { [[ -f "$records" ]] && grep '^{' "$records" || true; } | jq -s --argjson spec "$PARENT" 'map(select(.spec == $spec))' | report_tokens)" \
     && mkdir -p "$(dirname "$out")" \
     && jq -rn --argjson spec "$spec" --argjson issues "$issues" --argjson prs "$prs" --argjson recs "$recs" \
-         --arg prefix "$BRANCH_PREFIX" --arg now "$(date '+%Y-%m-%d %H:%M')" "$REPORT_JQ" > "$out"; then
-    log ok "spec #${PARENT} report: ${out#"$ROOT"/} — review it, then commit it via a PR"
+         --arg prefix "$BRANCH_PREFIX" --arg now "$(date '+%Y-%m-%d %H:%M')" --arg heading "$REPORT_DECISIONS_HEADING" "$REPORT_JQ" > "$out"; then
+    # 사람이 봐야 할 절의 건수(REPORT_DECISIONS_HEADING) — 리포트 블록의 data-count에서 읽는다. 블록이 없으면 0
+    REPORT_DECISIONS="$(sed -n 's/.*id="decisions" data-count="\([0-9]*\)".*/\1/p' "$out" | head -n1)"; [[ -n "$REPORT_DECISIONS" ]] || REPORT_DECISIONS=0
+    log ok "spec #${PARENT} report: ${out#"$ROOT"/}$([[ -z "$REPORT_DECISIONS_HEADING" ]] || echo " — '${REPORT_DECISIONS_HEADING}': ${REPORT_DECISIONS} PR$([[ "$REPORT_DECISIONS" == 1 ]] || echo s)") — review it, then commit it via a PR"
     open_report "$out"
   else
     log warn "spec #${PARENT}: report generation failed — rerun ticket-loop.sh --parent ${PARENT} to regenerate it"

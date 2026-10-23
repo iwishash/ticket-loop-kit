@@ -573,6 +573,11 @@ out="$(retro_case " 40" "reports" "$T/nowhere")" || fail "suggest_retro(스킬 �
 grep -q '/retro (not in this repository yet' <<<"$out" || fail "retro 스킬이 없을 때 안내가 다름: $out"
 out="$(retro_case "" "reports" "$S")" || fail "suggest_retro(빈) 실패"
 [[ -z "$out" ]] || fail "끝난 스펙이 없는데 회고 안내가 나옴: $out"
+# REPORT_DECISIONS_HEADING(#25): 리포트를 쓴 스펙(PARENT)이면 그 목록의 건수를 안내에 붙인다. 다른 스펙·제목 없음·건수 없음이면 그대로
+out="$(cd "$S" && CLOSED_SPECS=" 40" REPORT_DIR=reports ROOT="$S" LOG_FILE=".ticket-loop/loop-0101.log" PARENT=40 REPORT_DECISIONS_HEADING="사람 확인 필요" REPORT_DECISIONS=2 bash -c 'set -euo pipefail; log() { echo "$*"; }; source fn.sh; suggest_retro')" || fail "suggest_retro(사람 확인 필요) 실패"
+grep -qF "report reports/spec-40.html (its '사람 확인 필요' list collects 2 PRs for a human), and the 'remaining decisions'" <<<"$out" || fail "회고 안내에 사람 확인 필요 건수가 없음: $out"
+out="$(cd "$S" && CLOSED_SPECS=" 40" REPORT_DIR=reports ROOT="$S" LOG_FILE=".ticket-loop/loop-0101.log" PARENT=41 REPORT_DECISIONS_HEADING="사람 확인 필요" REPORT_DECISIONS=1 bash -c 'set -euo pipefail; log() { echo "$*"; }; source fn.sh; suggest_retro')" || fail "suggest_retro(다른 스펙) 실패"
+! grep -q 'for a human' <<<"$out" || fail "리포트를 쓰지 않은 스펙의 안내에 건수가 붙음: $out"
 grep -c -E '^suggest_retro$|; suggest_retro; ' "$KIT/files/scripts/ticket-loop.sh" | grep -qx 2 || fail "suggest_retro 호출이 두 곳(티켓 없음·정상 종료)이 아니다"
 # 멈췄다가 다른 날 이어 간 스펙: 그 스펙 기록이 지나간 로그를 모두 적는다 — 기록의 log(0.9.7부터), log 없는 지난 기록은 loop-*.log 의
 # 머리줄(=== #N)로 찾고, 지워진 로그와 다른 스펙의 로그는 빼고, 이번 실행의 로그는 늘 넣는다. 0.9.6까지는 이번 실행의 로그만 적었다
@@ -1025,6 +1030,7 @@ grep -F 'https://x/61"' "$W/report.html" | grep -qF '0 repairs · post-merge che
   && grep -F 'https://x/62"' "$W/report.html" | grep -qF '0 repairs · post-merge check passed, covering #61 #62</div></td><td class="nw">30m</td><td class="nw">10m</td><td class="nw">50m</td>' \
   && grep -qF '<div class="v">50m</div><div class="l"><span class="dot s-post"></span>Post-merge check</div>' "$W/report.html" && grep -qF 'say "post-merge check deferred"' "$W/report.html" \
   || fail "묶음 리포트: $(grep -F 'https://x/6' "$W/report.html")"
+! grep -q 'id="decisions"\|class="flag"\|class="kpi"><div class="v">0</div><div class="l"></div>' "$W/report.html" || fail "리포트: REPORT_DECISIONS_HEADING 이 없는데 사람 확인 필요 목록·표시·KPI 를 그림"
 echo "ok  묶어 돌리는 검증 — 멈춤 사유·수습 뒤 검증·루프 끝 검증·멈춤 기록"
 
 # 연결: 병합 뒤 창에 넣고(CI 없는 PR 은 빼고) pm_due 로 정한다. 실패 뒤처리는 post_merge_recover. 시작 때 창을 읽고, 끝날 때(대상 없음 포함)
@@ -2188,7 +2194,7 @@ echo "ok  무거운 테스트 자리표"
 # 고정 문구는 영어, GitHub에서 온 제목과 기록의 중단 사유는 원문(한국어) 그대로여야 한다
 REPORT_JQ="$(sed -n "/^read -r -d '' REPORT_JQ <<'JQ'/,/^JQ\$/p" "$KIT/files/scripts/ticket-loop.sh" | sed '1d;$d')"
 [[ -n "$REPORT_JQ" ]] || fail "REPORT_JQ 블록을 찾지 못함"
-jq -rn --arg prefix issue- --arg now "2026-10-12 09:00" \
+jq -rn --arg prefix issue- --arg now "2026-10-12 09:00" --arg heading "사람 확인 필요" \
   --argjson spec '{"number":40,"title":"스펙","state":"OPEN","url":"https://x/40"}' \
   --argjson issues '[{"number":41,"title":"T01: 하나","state":"closed","url":"https://x/41","assignees":0},
                      {"number":42,"title":"T02: 둘","state":"open","url":"https://x/42","assignees":1},
@@ -2199,9 +2205,9 @@ jq -rn --arg prefix issue- --arg now "2026-10-12 09:00" \
                      {"number":46,"title":"T07: 일곱","state":"closed","url":"https://x/46","assignees":0},
                      {"number":47,"title":"T08: 여덟","state":"closed","url":"https://x/47","assignees":0},
                      {"number":48,"title":"T09: 아홉","state":"closed","url":"https://x/48","assignees":0}]' \
-  --argjson prs '[{"number":50,"title":"T01 PR","body":"- [x] a\n- [ ] b","state":"MERGED","url":"https://x/p50","createdAt":"2026-10-12T00:20:00Z","mergedAt":"2026-10-12T00:30:00Z","headRefName":"issue-41-one"},
-                  {"number":51,"title":"T03 PR","body":"","state":"MERGED","url":"https://x/p51","createdAt":"2026-10-11T00:40:00Z","mergedAt":"2026-10-11T01:00:00Z","headRefName":"issue-43-three"},
-                  {"number":52,"title":"T04 PR","body":"","state":"MERGED","url":"https://x/p52","createdAt":"2026-10-11T02:00:00Z","mergedAt":"2026-10-11T03:00:00Z","headRefName":"issue-44"},
+  --argjson prs '[{"number":50,"title":"T01 PR","body":"- [x] a\n- [ ] b\n\n## 사람 확인 필요\n\n- 산식을 기획과 <다르게> 구현했다\n### 근거\n- 용어집도 고쳤다\n\n## Remaining judgement calls\n- 기록용","state":"MERGED","url":"https://x/p50","createdAt":"2026-10-12T00:20:00Z","mergedAt":"2026-10-12T00:30:00Z","headRefName":"issue-41-one"},
+                  {"number":51,"title":"T03 PR","body":"## 사람 확인 필요 ##\n\n\n## Remaining judgement calls\n- x","state":"MERGED","url":"https://x/p51","createdAt":"2026-10-11T00:40:00Z","mergedAt":"2026-10-11T01:00:00Z","headRefName":"issue-43-three"},
+                  {"number":52,"title":"T04 PR","body":"## Remaining judgement calls\n- 사람 확인 필요 라는 글자만 있고 제목은 아님","state":"MERGED","url":"https://x/p52","createdAt":"2026-10-11T02:00:00Z","mergedAt":"2026-10-11T03:00:00Z","headRefName":"issue-44"},
                   {"number":53,"title":"T06 PR","body":"","state":"MERGED","url":"https://x/p53","createdAt":"2026-10-12T01:50:00Z","mergedAt":"2026-10-12T03:30:00Z","headRefName":"issue-45-six"},
                   {"number":54,"title":"T07 PR","body":"","state":"MERGED","url":"https://x/p54","createdAt":"2026-10-12T04:00:00Z","mergedAt":"2026-10-12T04:10:00Z","headRefName":"issue-46-seven"},
                   {"number":55,"title":"T08 PR","body":"","state":"MERGED","url":"https://x/p55","createdAt":"2026-10-13T00:40:00Z","mergedAt":"2026-10-13T00:50:00Z","headRefName":"issue-47-eight"},
@@ -2233,6 +2239,16 @@ grep -qF "$(jq -rn '"2026-10-12T03:30:00Z" | fromdate | strflocaltime("%Y-%m-%d<
 grep -qF 'badge ok">Merged<' <<<"$row46" && grep -qF 'Stop reason: 정리 중 예기치 않은 종료' <<<"$row46" && grep -qF 'post-merge check passed</div>' <<<"$row46" && ! grep -q 'after the stop' <<<"$row46" \
   || fail "스펙 리포트: 루프가 병합한 뒤 멈춘 행이 다름: $row46"
 [[ "$(grep -o 'badge muted">Not started<' "$T/report.html" | wc -l | tr -d ' ')" == "1" ]] || fail "스펙 리포트: 이슈 4 가 Not started 여야 함(issue-44 PR 이 #4 에 붙음?)"
+# 사람 확인 필요 절(REPORT_DECISIONS_HEADING, #25): 제목이 글자 그대로 같은 절이 있고 본문이 비지 않은 PR(#50)만 머리 목록에 — 하위 절(###)은 본문에
+# 포함, 다음 같은 수준 제목 앞까지, 글자는 이스케이프. 빈 절(#51)·제목 아닌 글자(#52)는 없다. KPI 타일에 건수, 그 행에만 표시(flag), data-count 로 건수
+grep -qF '<section class="dec" id="decisions" data-count="1"><h2>사람 확인 필요 <span class="muted">— 1 PR</span></h2>' "$T/report.html" || fail "스펙 리포트: 사람 확인 필요 목록 머리가 다름: $(grep -o '<section class="dec"[^>]*><h2>[^<]*<[^<]*' "$T/report.html")"
+grep -qF '<div class="item"><div class="who"><a href="https://x/41">#41</a> T01: 하나 · <a href="https://x/p50">PR #50</a></div><div class="md">- 산식을 기획과 &lt;다르게&gt; 구현했다
+### 근거
+- 용어집도 고쳤다</div></div></section>' "$T/report.html" || fail "스펙 리포트: 사람 확인 필요 항목이 다름: $(grep -o '<div class="item">.*</section>' "$T/report.html")"
+grep -qF '<div class="kpi"><div class="v">1</div><div class="l">사람 확인 필요</div></div>' "$T/report.html" || fail "스펙 리포트: 사람 확인 필요 KPI 가 1 이 아님"
+[[ "$(grep -o 'class="flag"' "$T/report.html" | wc -l | tr -d ' ')" == "1" ]] && grep -F 'https://x/41"' "$T/report.html" | grep -qF '<div class="flag"><a href="#decisions">⚑ 사람 확인 필요</a></div>' \
+  || fail "스펙 리포트: 사람 확인 필요 표시가 #41 행에만 있어야 함"
+! grep -F 'https://x/43"' "$T/report.html" | grep -q 'class="flag"' || fail "스펙 리포트: 빈 절인 #43 행에 표시가 붙음"
 # 구현·CI·병합 뒤 검증 열과 경과 막대. 0.9.8 기록(#47·#48)은 단계별 시간 그대로(구현에 수리 포함), 지난 기록은 어림한다: 구현은 PR 생성
 # 시각 − 시작(수리가 있었으면 "excl. repairs", PR 생성이 시작과 같으면 —), PR 없이 멈춘 기록은 경과 전부, CI 는 ci_sec(수리가 있었으면
 # "last run only"), 병합 뒤 검증은 결과 문자열의 초를 더한 값. 결과 브리프에는 걸린 시간을 다시 적지 않는다
@@ -2258,6 +2274,30 @@ for want in '<div class="v">84.3M</div><div class="l">Tokens (output 222k)</div>
   grep -qF "$want" "$T/report.html" || fail "스펙 리포트: 단계 합계 KPI '$want' 없음"
 done
 echo "ok  스펙 리포트 렌더(head 가 issue-N 그대로인 PR, 멈춘 뒤 병합된 티켓, 구현·CI·병합 뒤 검증 열 포함)"
+
+# write_spec_report(#25): 가짜 gh 로 리포트를 쓰고, REPORT_DECISIONS_HEADING 이 있으면 블록의 data-count 를 REPORT_DECISIONS 로 읽어 로그 줄에
+# "'<제목>': N PR(s)" 를 붙인다. 제목이 없으면 0 이고 로그 줄은 전과 같다
+WS="$T/wsr"; mkdir -p "$WS/bin"
+{ sed -n "/^read -r -d '' REPORT_JQ <<'JQ'/,/^JQ\$/p" "$KIT/files/scripts/ticket-loop.sh"
+  sed -n '/^open_report() {/,/^}/p; /^report_tokens() {/,/^}/p; /^REPORT_DECISIONS=""/p; /^write_spec_report() {/,/^}/p' "$KIT/files/scripts/ticket-loop.sh"; } > "$WS/fn.sh"
+grep -q '^write_spec_report() {' "$WS/fn.sh" && grep -q '^REPORT_DECISIONS=""' "$WS/fn.sh" || fail "write_spec_report·REPORT_DECISIONS 를 찾지 못함"
+cat > "$WS/bin/gh" <<'GH'
+#!/usr/bin/env bash
+case "$1 $2" in
+  "issue view") echo '{"number":40,"title":"스펙","state":"OPEN","url":"https://x/40"}' ;;
+  "api repos/o/r/issues/40/sub_issues?per_page=100") echo '{"number":41,"title":"T01","state":"closed","url":"https://x/41","assignees":0}' ;;
+  "pr list") echo '[{"number":50,"title":"P","body":"## 사람 확인 필요\n- 정했다","state":"MERGED","url":"https://x/p50","createdAt":"2026-10-12T00:20:00Z","mergedAt":"2026-10-12T00:30:00Z","headRefName":"issue-41-one"}]' ;;
+  *) echo "unexpected gh $*" >&2; exit 9 ;;
+esac
+GH
+chmod +x "$WS/bin/gh"
+wsr_case() {  # $1 REPORT_DECISIONS_HEADING → "로그 줄|REPORT_DECISIONS|리포트의 data-count 유무"
+  (cd "$WS" && PATH="$WS/bin:$PATH" PARENT=40 REPORT_DIR="$WS/reports" RECORDS_FILE="$WS/none.jsonl" ROOT="$WS" OWNER_REPO=o/r BRANCH_PREFIX=issue- REPORT_OPEN=0 WORKTREE_DIR="" REPORT_DECISIONS_HEADING="$1" \
+    bash -c 'set -euo pipefail; log() { shift; echo "$*"; }; source fn.sh; write_spec_report; echo "|$REPORT_DECISIONS|$(grep -c "id=\"decisions\" data-count=\"1\"" reports/spec-40.html || true)"' | tr -d '\n')
+}
+[[ "$(wsr_case "사람 확인 필요")" == "spec #40 report: reports/spec-40.html — '사람 확인 필요': 1 PR — review it, then commit it via a PR|1|1" ]] || fail "write_spec_report(제목 있음): $(wsr_case "사람 확인 필요")"
+[[ "$(wsr_case "")" == "spec #40 report: reports/spec-40.html — review it, then commit it via a PR|0|0" ]] || fail "write_spec_report(제목 없음): $(wsr_case "")"
+echo "ok  write_spec_report — REPORT_DECISIONS_HEADING 의 건수를 로그 줄과 REPORT_DECISIONS 에"
 
 # npx 껍질: 새 저장소에 --yes 로 설치하면 install.sh 결과에 더해 loop.env(BACKEND 줄)와 kit.json(커밋·ref)이 생긴다.
 # 두 번째 실행은 loop.env 를 건드리지 않고, cmux 는 아직 거절한다

@@ -756,6 +756,7 @@ bash scripts/ticket-loop.sh --parent 40             # 끝난 스펙이면 "No ti
   <tr><td><code>RECORDS_FILE</code></td><td><code>.ticket-loop/tickets.jsonl</code></td><td>티켓마다 한 줄씩 남기는 기록(벽시계와 그 단계별 몫 — 구현·수리·CI·병합 뒤 검증, 수리 횟수, 병합 뒤 검증 결과, 모델, 에이전트 토큰, 그 실행의 로그 파일). 기계별 원자료라 커밋하지 않는다(<code>.gitignore</code>에 <code>/.ticket-loop/*.jsonl</code>). 스펙 리포트가 읽는다(7장 9단계)</td></tr>
   <tr><td><code>REPORT_DIR</code></td><td><code>docs/loop-reports</code></td><td><code>--parent</code> 실행이 끝나면 <code>spec-&lt;N&gt;.html</code>을 쓰는 디렉터리. 리포트는 사람이 PR로 커밋한다</td></tr>
   <tr><td><code>REPORT_OPEN</code></td><td><code>1</code></td><td>리포트를 쓴 뒤 기본 브라우저로 연다(macOS <code>open</code>, Linux <code>xdg-open</code>). <code>0</code>이면 끔. SSH 세션·화면 없는 Linux에서는 값과 무관하게 열지 않는다</td></tr>
+  <tr><td><code>REPORT_DECISIONS_HEADING</code></td><td>없음(모으지 않음)</td><td>PR 본문에서 사람이 봐야 할 절의 마크다운 제목(글자 그대로, 예: <code>사람 확인 필요</code>). 지정하면 스펙 리포트가 각 티켓 PR 본문에서 그 절을 뽑아 머리의 목록으로 모으고(티켓·PR 링크와 절 본문 그대로), KPI에 건수를, 절이 있는 행에 표시를 단다. 절이 없거나 본문이 빈 PR은 목록에 없다. 저장소마다 절 이름이 다르므로 키트는 이름만 받는다 — <code>pr</code> 스킬에 그 절을 두고, 워커가 스펙과 다르게 정했거나 스펙이 사람에게 남긴 결정을 내렸을 때만 적게 한다(기록용 "남은 판단 사항"과 분리). 7장 9단계</td></tr>
   <tr><td><code>MODEL_REGEX</code></td><td>Claude Code 상태줄의 <code>Opus 5.5</code> 꼴 / Codex 기동 블록의 <code>gpt-5.1-codex</code> 꼴</td><td>워커 터미널 화면에서 모델 이름을 뽑는 정규식(ERE). 못 찾으면 리포트에 "not recorded"(Codex는 상태줄 설정에 따라 모델이 안 보일 수 있다)</td></tr>
   <tr><td><code>SLACK_WEBHOOK_URL</code></td><td>없음(Slack 끔)</td><td>Slack Incoming Webhook URL. 루프 시작·티켓 완료·멈춤·루프 종료를 그 채널에 올린다. 시작에는 대상 수·백엔드·에이전트·키트 버전과 대상 목록이 붙는다. 멈춤에는 사유와 로그 끝 12줄(워커 화면 꼬리 포함)이 붙는다. 잠금을 잡은 실행만 보낸다(<code>--dry-run</code>, 이미 도는 루프와 겹친 실행은 안 보낸다). 비밀 값이라 커밋하는 <code>loop.env</code>가 아니라 <code>~/.config/ticket-loop/loop.env</code>에 둔다(아래)</td></tr>
   <tr><td><code>SLACK_MENTION</code></td><td>없음</td><td>멈춤 알림 앞에 붙일 멘션, 예 <code>&lt;@U012AB3CD&gt;</code>(자기 멤버 ID) 또는 <code>&lt;!channel&gt;</code>. 채널 알림을 "멘션만"으로 두고도 멈출 때만 폰이 울린다. Ctrl-C로 멈춘 것에는 붙이지 않는다</td></tr>
@@ -900,7 +901,7 @@ pnpm exec vitest run --config vitest.integration.config.ts $files</code></pre>
   <tr><td>Model</td><td>기록의 모델. 없으면 "not recorded"</td></tr>
   <tr><td>Finished</td><td>기록의 종료 시각. 기록이 없거나 멈춘 뒤 병합된 티켓은 PR 병합 시각</td></tr>
 </table>
-<p>머리에는 스펙 완료 여부(하위 티켓 전부 닫힘), 병합 건수, 기록 있는 티켓의 벽시계 합계, 구현·CI·병합 뒤 검증 시간의 합계, 토큰 합계(출력 토큰), 쓰인 모델이 요약된다. 같은 스펙은 같은 파일을 덮어쓰므로, 끝난 스펙의 리포트를 다시 뽑으려면 <code>--parent</code>로 한 번 더 돌리면 된다(티켓이 없으면 리포트만 만들고 끝난다). 생성에 실패해도 루프 결과는 바뀌지 않는다(로그 한 줄). 리포트는 jq 하나로 그리므로 의존 도구가 늘지 않는다. 표를 더 풍부하게 만들고 싶으면(PR 본문의 "검증"·"남은 판단 사항" 절까지) 저장소 스크립트로 분리한다 — 예시 저장소는 TypeScript 생성기(<code>scripts/loop-report.ts</code>)와 단위 테스트로 뽑아 갔다.</p>
+<p>머리에는 스펙 완료 여부(하위 티켓 전부 닫힘), 병합 건수, 기록 있는 티켓의 벽시계 합계, 구현·CI·병합 뒤 검증 시간의 합계, 토큰 합계(출력 토큰), 쓰인 모델이 요약된다. <code>REPORT_DECISIONS_HEADING</code>을 지정하면(예: <code>사람 확인 필요</code>) 그 아래에 <b>사람이 봐야 할 절 모음</b>이 붙는다 — 각 티켓 PR 본문에서 제목이 글자 그대로 같은 마크다운 절을 뽑아 티켓·PR 링크와 함께 원문 그대로 보이고, KPI에 건수를, 절이 있는 행의 Result brief에 표시(⚑)를 단다. 절이 없거나 비어 있는 PR은 나오지 않고, 하나도 없으면 블록도 없다. 무인 루프의 워커는 스펙과 다르게 정했거나 스펙이 사람에게 남긴 결정을 내린 것을 PR 본문에 적는데, 0.9.15까지는 그것을 보려면 병합된 PR을 하나씩 열어야 했다(rental-portal 스펙 #313: 14개 PR의 "남은 판단 사항" 116줄 가운데 사람이 정할 것은 두 건). 리포트 로그 줄과 회고 안내 줄에도 건수가 붙는다. 같은 스펙은 같은 파일을 덮어쓰므로, 끝난 스펙의 리포트를 다시 뽑으려면 <code>--parent</code>로 한 번 더 돌리면 된다(티켓이 없으면 리포트만 만들고 끝난다). 생성에 실패해도 루프 결과는 바뀌지 않는다(로그 한 줄). 리포트는 jq 하나로 그리므로 의존 도구가 늘지 않는다. 표를 더 풍부하게 만들고 싶으면(PR 본문의 "검증" 절까지) 저장소 스크립트로 분리한다 — 예시 저장소는 TypeScript 생성기(<code>scripts/loop-report.ts</code>)와 단위 테스트로 뽑아 갔다.</p>
 <div class="note"><b>왜 로그가 아니라 리포트인가.</b> 로그의 <code>summary:</code> 줄은 한 실행 안에서만 이어지고, 루프가 죽었다 다시 돌면 흩어진다. 스펙 단위 리포트는 실행 횟수와 무관하게 GitHub의 하위 이슈 목록을 뼈대로 삼고 기록을 붙이므로, 사후 검수(9장 S1 7단계)와 <code>/retro</code>가 티켓 묶음 하나를 한 표에서 본다.</div></div></div>
 
 <div class="note"><b>구현 메모.</b> 루프 안에서 실행하는 <code>gh</code>·<code>orca</code>·<code>git</code>이 표준 입력을 읽으면 남은 티켓 목록을 삼켜 버린다. 그래서 대상 목록은 변수에 담고, 티켓마다 표준 입력을 닫고(<code>&lt;/dev/null</code>) 실행한다. 스크립트를 고칠 때 이 구조를 유지한다.</div>
@@ -1548,6 +1549,9 @@ set -euo pipefail
 #   RECORDS_FILE        티켓별 기록 JSONL (기본 .ticket-loop/tickets.jsonl, 기계별 — 커밋하지 않는다). 상대 경로는 저장소 루트 기준
 #   REPORT_DIR          스펙 리포트 HTML 디렉터리 (기본 docs/loop-reports — 리포트는 사람이 PR로 커밋). 상대 경로는 저장소 루트 기준
 #   REPORT_OPEN         리포트를 쓴 뒤 브라우저로 여는지 (기본 1). 0이면 안 연다. SSH 세션·화면 없는 Linux에서는 값과 무관하게 안 연다
+#   REPORT_DECISIONS_HEADING  PR 본문에서 사람이 봐야 할 절의 마크다운 제목(글자 그대로, 예: "사람 확인 필요"). 지정하면 리포트가 각 티켓 PR 본문에서
+#                       그 절을 뽑아 머리의 목록(PR 링크 포함)으로 모으고, 절이 있는 행에 표시를 단다. 절이 없거나 빈 PR은 목록에 없다.
+#                       기본 비움 = 모으지 않는다(지금까지와 같다). 저장소마다 절 이름이 다르므로 키트는 이름만 받는다(이슈 #25)
 #   MODEL_REGEX         워커 터미널에서 모델 이름을 뽑는 정규식(ERE) (claude: 상태줄·배너의 "Opus 5.5" 꼴, codex: "gpt-5.1-codex" 꼴).
 #                       못 찾으면 리포트에 not recorded
 #   USAGE_LIMIT_REGEX   워커 화면 끝 25줄에서 사용량 한도 문구를 찾는 정규식(ERE) (claude: "reached your .* limit|usage limit", codex·그 외: 없음).
@@ -1647,6 +1651,7 @@ LOG_FILE="${LOG_FILE:-.ticket-loop/loop-$(date +%m%d).log}"
 RECORDS_FILE="${RECORDS_FILE:-.ticket-loop/tickets.jsonl}"
 REPORT_DIR="${REPORT_DIR:-docs/loop-reports}"
 REPORT_OPEN="${REPORT_OPEN:-1}"
+REPORT_DECISIONS_HEADING="${REPORT_DECISIONS_HEADING:-}"
 PROGRESS_SEC="${PROGRESS_SEC:-60}"
 HEARTBEAT_SEC="${HEARTBEAT_SEC:-300}"
 SLACK_WEBHOOK_URL="${SLACK_WEBHOOK_URL:-}"
@@ -3685,7 +3690,7 @@ spec_logs() {
 
 # 끝난 스펙이 있으면 회고를 권한다 — 안내일 뿐, 아무것도 실행하지 않는다. /retro 는 사람이 후보를 보고 고르는 스킬이라 무인 단계로 두지 않는다
 suggest_retro() {
-  local spec report skill="${SKILL_PREFIX:-/}retro" logs
+  local spec report skill="${SKILL_PREFIX:-/}retro" logs decs
   [[ -n "${CLOSED_SPECS// /}" ]] || return 0
   [[ -d "${ROOT:-.}/.agents/skills/retro" || -d "${ROOT:-.}/.claude/skills/retro" ]] || skill="${skill} (not in this repository yet — install it with the kit's --workflow-skills)"
   for spec in $CLOSED_SPECS; do
@@ -3696,7 +3701,10 @@ suggest_retro() {
     if [[ -z "$logs" ]]; then logs="log (none — logging is off)"
     elif [[ "$logs" == *", "* ]]; then logs="logs ${logs}"
     else logs="log ${logs}"; fi
-    log "spec #${spec} complete. If you like, review this batch with ${skill} — material to read: ${logs}, ${report}, and the 'remaining decisions' / 'not verified' sections of the merged PR bodies. If you end up changing the environment (skills, worker-rules.md, automated checks), a PR is recommended"
+    decs=""
+    [[ -z "${REPORT_DECISIONS_HEADING:-}" || "$spec" != "${PARENT:-}" || -z "${REPORT_DECISIONS:-}" ]] \
+      || decs=" (its '${REPORT_DECISIONS_HEADING}' list collects ${REPORT_DECISIONS} PR$([[ "$REPORT_DECISIONS" == 1 ]] || echo s) for a human)"
+    log "spec #${spec} complete. If you like, review this batch with ${skill} — material to read: ${logs}, ${report}${decs}, and the 'remaining decisions' / 'not verified' sections of the merged PR bodies. If you end up changing the environment (skills, worker-rules.md, automated checks), a PR is recommended"
   done
 }
 
@@ -3798,7 +3806,19 @@ def tok: def d1($u; $s): (. / ($u / 10) | floor) as $d | "\($d / 10 | floor).\($
          if . == null then "—" elif . &gt;= 1e9 then d1(1e9; "B") elif . &gt;= 1e6 then d1(1e6; "M") elif . &gt;= 1e3 then "\(. / 1e3 | floor)k" else "\(.)" end;
 def tcell($v; $note): "&lt;td class=\"nw\"&gt;" + (if $v == -1 then "none" else ($v | dur) end) + (if $note == "" then "" else "&lt;div class=\"muted small\"&gt;\($note)&lt;/div&gt;" end) + "&lt;/td&gt;";
 def seg($v; $c; $den): if ($v // 0) &gt; 0 then "&lt;i class=\"\($c)\" style=\"width:\($v * 1000 / $den | floor / 10)%\"&gt;&lt;/i&gt;" else "" end;
-($issues | sort_by(order, .number) | map(. as $i
+# PR 본문에서 제목이 $h와 글자 그대로 같은 마크다운 절(#~######)의 본문 — 다음 같은·상위 수준 제목 앞까지(하위 절은 포함). 제목이 비었거나
+# 절이 없거나 본문이 비면 null. 리포트 머리의 "사람 확인 필요" 목록이 쓴다(REPORT_DECISIONS_HEADING, 이슈 #25)
+def section($h): if $h == "" or . == null then null else
+  split("\n") as $lines
+  | ($lines | map(capture("^(?&lt;l&gt;#{1,6})[ \t]+(?&lt;t&gt;.*?)[ \t]*#*[ \t]*$") // null)) as $hs
+  | ($hs | to_entries | map(select(.value != null and .value.t == $h)) | first) as $start
+  | if $start == null then null else
+      ($start.value.l | length) as $lvl
+      | (($hs | to_entries | map(select(.key &gt; $start.key and .value != null and (.value.l | length) &lt;= $lvl)) | first | .key) // ($lines | length)) as $end
+      | $lines[$start.key + 1:$end] | join("\n") | gsub("^\\s+|\\s+$"; "") | if . == "" then null else . end
+    end end;
+($ARGS.named.heading // "") as $heading   # REPORT_DECISIONS_HEADING — --arg heading 이 없으면(지난 호출 꼴) 비움
+| ($issues | sort_by(order, .number) | map(. as $i
   | ($recs | map(select(.issue == $i.number)) | sort_by(.finished)) as $rs | ($rs | last) as $r
   | ($prefix + ($i.number | tostring)) as $b
   | ($prs | map(select(.headRefName == $b or (.headRefName | startswith($b + "-"))))
@@ -3825,7 +3845,10 @@ def seg($v; $c; $den): if ($v // 0) &gt; 0 then "&lt;i class=\"\($c)\" style=\"w
             post: ($r.post_merge // "" | post | [scan(" in ([0-9]+)s") | .[0] | tonumber] | add | pos), est: true} end),
      # 토큰 — 기록의 tokens(0.9.8부터), 없으면 write_spec_report가 세션 기록에서 메운 값. total은 네 값의 합
      tk: ($r.tokens | if type == "object" then . + {total: ((.input // 0) + (.output // 0) + (.cache_write // 0) + (.cache_read // 0))} else null end),
-     model: ($r.model // "not recorded")})) as $rows
+     model: ($r.model // "not recorded"),
+     # 그 PR 본문의 REPORT_DECISIONS_HEADING 절(없으면 null) — 머리 목록과 행 표시가 쓴다
+     dec: ($pr.body // "" | section($heading))})) as $rows
+| ($rows | map(select(.dec != null))) as $decs
 | ($rows | map(select(.status == "merged" or .status == "merged-after-stop")) | length) as $merged
 | ($rows | map(select(.issue.state == "closed")) | length) as $closed
 | ($rows | map(select(.wall.src == "loop") | .wall.sec) | add // 0) as $total
@@ -3845,7 +3868,9 @@ def seg($v; $c; $den): if ($v // 0) &gt; 0 then "&lt;i class=\"\($c)\" style=\"w
   + ".badge{display:inline-block;font-size:12px;font-weight:700;border-radius:10px;padding:0 8px;border:1px solid var(--line);white-space:nowrap}.badge.ok{color:var(--ok);background:var(--ok-soft)}"
   + ".badge.warn{color:var(--warn);background:var(--warn-soft)}.badge.bad{color:var(--bad);background:var(--bad-soft)}.badge.muted{color:var(--muted);background:var(--soft)}footer{margin-top:20px;color:var(--muted);font-size:12px}"
   + ".bar{display:flex;height:6px;min-width:96px;margin-top:6px;border-radius:3px;overflow:hidden;background:var(--line)}.bar i{display:block;height:100%}"
-  + ".dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:5px}.s-impl{background:var(--accent)}th.tm{white-space:normal}th.tm .k{white-space:nowrap}td.tk{min-width:130px}td.br{min-width:220px}.s-ci{background:var(--warn)}.s-post{background:var(--ok)}&lt;/style&gt;&lt;/head&gt;"
+  + ".dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:5px}.s-impl{background:var(--accent)}th.tm{white-space:normal}th.tm .k{white-space:nowrap}td.tk{min-width:130px}td.br{min-width:220px}.s-ci{background:var(--warn)}.s-post{background:var(--ok)}"
+  + ".dec{margin:0 0 20px;padding:12px 14px;border:1px solid var(--warn);border-left-width:4px;border-radius:8px;background:var(--warn-soft)}.dec h2{font-size:15px;margin:0 0 8px}.dec .item{margin-top:10px}.dec .item:first-of-type{margin-top:0}.dec .who{font-weight:700;font-size:13px}.dec .md{margin:4px 0 0;white-space:pre-wrap;font-size:13px}"
+  + ".flag{margin-top:4px;font-size:12px}.flag a{color:var(--warn);font-weight:700}&lt;/style&gt;&lt;/head&gt;"
   + "&lt;body&gt;&lt;main&gt;&lt;div class=\"kicker\"&gt;Unattended ticket loop · Spec report&lt;/div&gt;"
   + @html "&lt;h1&gt;&lt;a href=\"\($spec.url)\"&gt;#\($spec.number)&lt;/a&gt; \($spec.title)&lt;/h1&gt;"
   + "&lt;p class=\"meta\"&gt;Spec " + (if ($rows | length) &gt; 0 and $closed == ($rows | length) then "complete (all sub-tickets closed)" else "in progress (\($closed)/\($rows | length) closed)" end)
@@ -3856,13 +3881,22 @@ def seg($v; $c; $den): if ($v // 0) &gt; 0 then "&lt;i class=\"\($c)\" style=\"w
   + "&lt;div class=\"kpi\"&gt;&lt;div class=\"v\"&gt;\($ci_total | dur)&lt;/div&gt;&lt;div class=\"l\"&gt;&lt;span class=\"dot s-ci\"&gt;&lt;/span&gt;CI&lt;/div&gt;&lt;/div&gt;"
   + "&lt;div class=\"kpi\"&gt;&lt;div class=\"v\"&gt;\($post_total | dur)&lt;/div&gt;&lt;div class=\"l\"&gt;&lt;span class=\"dot s-post\"&gt;&lt;/span&gt;Post-merge check&lt;/div&gt;&lt;/div&gt;"
   + "&lt;div class=\"kpi\"&gt;&lt;div class=\"v\"&gt;\($tok_total | tok)&lt;/div&gt;&lt;div class=\"l\"&gt;Tokens (output \($tok_out | tok))&lt;/div&gt;&lt;/div&gt;"
-  + @html "&lt;div class=\"kpi\"&gt;&lt;div class=\"v\"&gt;\(if $models == "" then "not recorded" else $models end)&lt;/div&gt;&lt;div class=\"l\"&gt;Models used&lt;/div&gt;&lt;/div&gt;&lt;/div&gt;"
+  + @html "&lt;div class=\"kpi\"&gt;&lt;div class=\"v\"&gt;\(if $models == "" then "not recorded" else $models end)&lt;/div&gt;&lt;div class=\"l\"&gt;Models used&lt;/div&gt;&lt;/div&gt;"
+  + (if $heading == "" then "" else @html "&lt;div class=\"kpi\"&gt;&lt;div class=\"v\"&gt;\($decs | length)&lt;/div&gt;&lt;div class=\"l\"&gt;\($heading)&lt;/div&gt;&lt;/div&gt;" end) + "&lt;/div&gt;"
+  # 사람이 봐야 할 절 모음 — 설정한 제목의 절이 있는 PR만, 티켓·PR 링크와 절 본문 그대로(마크다운 원문, 줄 바꿈 유지). 하나도 없으면 블록도 없다.
+  # data-count는 write_spec_report가 로그 한 줄에 건수를 적을 때 읽는다
+  + (if ($decs | length) == 0 then "" else
+       "&lt;section class=\"dec\" id=\"decisions\" data-count=\"\($decs | length)\"&gt;"
+       + @html "&lt;h2&gt;\($heading) &lt;span class=\"muted\"&gt;— \($decs | length) PR\(if ($decs | length) == 1 then "" else "s" end)&lt;/span&gt;&lt;/h2&gt;"
+       + ($decs | map(@html "&lt;div class=\"item\"&gt;&lt;div class=\"who\"&gt;&lt;a href=\"\(.issue.url)\"&gt;#\(.issue.number)&lt;/a&gt; \(.issue.title) · &lt;a href=\"\(.pr.url)\"&gt;PR #\(.pr.number)&lt;/a&gt;&lt;/div&gt;&lt;div class=\"md\"&gt;\(.dec)&lt;/div&gt;&lt;/div&gt;") | join(""))
+       + "&lt;/section&gt;" end)
   + "&lt;div class=\"wrap\"&gt;&lt;table&gt;&lt;thead&gt;&lt;tr&gt;&lt;th&gt;Issue&lt;/th&gt;&lt;th&gt;Ticket&lt;/th&gt;&lt;th&gt;Status&lt;/th&gt;&lt;th&gt;Result brief&lt;/th&gt;&lt;th class=\"tm\"&gt;&lt;span class=\"k\"&gt;&lt;span class=\"dot s-impl\"&gt;&lt;/span&gt;Implementation&lt;/span&gt;&lt;/th&gt;&lt;th class=\"tm\"&gt;&lt;span class=\"k\"&gt;&lt;span class=\"dot s-ci\"&gt;&lt;/span&gt;CI&lt;/span&gt;&lt;/th&gt;&lt;th class=\"tm\"&gt;&lt;span class=\"k\"&gt;&lt;span class=\"dot s-post\"&gt;&lt;/span&gt;Post-merge&lt;/span&gt; check&lt;/th&gt;&lt;th&gt;Elapsed&lt;/th&gt;&lt;th&gt;Tokens&lt;/th&gt;&lt;th&gt;Model&lt;/th&gt;&lt;th&gt;Finished&lt;/th&gt;&lt;/tr&gt;&lt;/thead&gt;&lt;tbody&gt;"
   + ($rows | map(
       @html "&lt;tr&gt;&lt;td class=\"nw\"&gt;&lt;a href=\"\(.issue.url)\"&gt;#\(.issue.number)&lt;/a&gt;&lt;/td&gt;&lt;td class=\"tk\"&gt;\(.issue.title)&lt;/td&gt;"
       + "&lt;td&gt;&lt;span class=\"badge \(.status | badge | .[1])\"&gt;\(.status | badge | .[0])&lt;/span&gt;&lt;/td&gt;&lt;td class=\"br\"&gt;"
       + (if .pr then @html "&lt;div&gt;&lt;a href=\"\(.pr.url)\"&gt;PR #\(.pr.number)&lt;/a&gt; \(.pr.title)&lt;/div&gt;"
                       + ((.pr.body // "" | checks) | if .total &gt; 0 then "&lt;div&gt;Acceptance criteria \(.checked)/\(.total)&lt;/div&gt;" else "" end)
+                      + (if .dec != null then @html "&lt;div class=\"flag\"&gt;&lt;a href=\"#decisions\"&gt;⚑ \($heading)&lt;/a&gt;&lt;/div&gt;" else "" end)
          elif .rec == null then "&lt;span class=\"muted\"&gt;no record&lt;/span&gt;" else "" end)
       + (if .rec.result == "stopped" then @html "&lt;div class=\"reason\"&gt;Stop reason: \(.rec.reason // "—")&lt;/div&gt;" else "" end)
       + (if .rec then "&lt;div class=\"bits\"&gt;" + ([
@@ -3926,6 +3960,7 @@ report_tokens() {
 
 # --parent 실행이 정상 종료하면 스펙 리포트 HTML을 쓰고 브라우저로 연다. 생성 실패는 루프 결과를 바꾸지 않는다(로그만).
 # 리포트는 커밋하지 않는다 — 사람이 보고 PR로 올린다(루프가 도는 동안 기본 브랜치 직접 커밋 금지).
+REPORT_DECISIONS=""   # 마지막으로 쓴 리포트의 "사람 확인 필요" 건수(REPORT_DECISIONS_HEADING이 있을 때) — suggest_retro가 안내 줄에 적는다
 write_spec_report() {
   [[ -n "$PARENT" ]] || return 0
   local out="$REPORT_DIR/spec-${PARENT}.html" records="$RECORDS_FILE" spec issues prs recs   # 둘 다 시작 때 절대 경로로 굳혔다
@@ -3936,8 +3971,10 @@ write_spec_report() {
     &amp;&amp; recs="$( { [[ -f "$records" ]] &amp;&amp; grep '^{' "$records" || true; } | jq -s --argjson spec "$PARENT" 'map(select(.spec == $spec))' | report_tokens)" \
     &amp;&amp; mkdir -p "$(dirname "$out")" \
     &amp;&amp; jq -rn --argjson spec "$spec" --argjson issues "$issues" --argjson prs "$prs" --argjson recs "$recs" \
-         --arg prefix "$BRANCH_PREFIX" --arg now "$(date '+%Y-%m-%d %H:%M')" "$REPORT_JQ" &gt; "$out"; then
-    log ok "spec #${PARENT} report: ${out#"$ROOT"/} — review it, then commit it via a PR"
+         --arg prefix "$BRANCH_PREFIX" --arg now "$(date '+%Y-%m-%d %H:%M')" --arg heading "$REPORT_DECISIONS_HEADING" "$REPORT_JQ" &gt; "$out"; then
+    # 사람이 봐야 할 절의 건수(REPORT_DECISIONS_HEADING) — 리포트 블록의 data-count에서 읽는다. 블록이 없으면 0
+    REPORT_DECISIONS="$(sed -n 's/.*id="decisions" data-count="\([0-9]*\)".*/\1/p' "$out" | head -n1)"; [[ -n "$REPORT_DECISIONS" ]] || REPORT_DECISIONS=0
+    log ok "spec #${PARENT} report: ${out#"$ROOT"/}$([[ -z "$REPORT_DECISIONS_HEADING" ]] || echo " — '${REPORT_DECISIONS_HEADING}': ${REPORT_DECISIONS} PR$([[ "$REPORT_DECISIONS" == 1 ]] || echo s)") — review it, then commit it via a PR"
     open_report "$out"
   else
     log warn "spec #${PARENT}: report generation failed — rerun ticket-loop.sh --parent ${PARENT} to regenerate it"
