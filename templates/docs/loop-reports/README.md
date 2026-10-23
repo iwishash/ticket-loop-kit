@@ -7,3 +7,4 @@
 - 경과 시간 · 모델의 원자료는 기계별 `.ticket-loop/tickets.jsonl`(커밋 안 함)이다. 기록이 없는 티켓(다른 PC · 사람이 처리 · 이 기능 이전)은 PR 생성→병합 시간으로 대신하고 그렇게 표시하며 모델은 "not recorded"로 나온다
 - 리포트를 쓰면 기본 브라우저로 연다(macOS `open`, Linux `xdg-open`). SSH 세션이나 화면 없는 Linux에서는 열지 않는다. 끄려면 `.ticket-loop/loop.env`에 `REPORT_OPEN=0`
 - 위치를 바꾸려면 `.ticket-loop/loop.env`에 `REPORT_DIR`, `RECORDS_FILE`을 적는다
+- `.ticket-loop/loop.env`에 `REPORT_DECISIONS_HEADING="사람 확인 필요"`처럼 PR 본문 절의 제목을 적으면, 리포트 머리에 그 절이 있는 PR의 절 본문을 티켓·PR 링크와 함께 모아 보인다(절이 없거나 빈 PR은 제외). 워커가 스펙과 다르게 정했거나 스펙이 사람에게 남긴 결정을 내린 것을 PR 본문의 그 절에 적게 해 두면, 병합된 PR을 하나씩 열지 않고 리포트에서 본다
