@@ -2062,7 +2062,7 @@ grep -qF 'USAGE_LIMIT_REGEX="${USAGE_LIMIT_REGEX:-reached your .* limit|usage li
   && [[ "$(grep -cF 'USAGE_LIMIT_REGEX="${USAGE_LIMIT_REGEX:-}"' "$KIT/files/scripts/ticket-loop.sh")" == 2 && "$(grep -cF 'PERMISSION_PROMPT_REGEX="${PERMISSION_PROMPT_REGEX:-}"' "$KIT/files/scripts/ticket-loop.sh")" == 2 ]] \
   && grep -q '^PROMPT_STALL_SEC=300 ' "$KIT/files/scripts/ticket-loop.sh" || fail "프리셋(claude 기본값, codex·그 외 빈 값)·PROMPT_STALL_SEC 상수가 다름"
 grep -q 'worker_no_pr) ;; \*) return 1 ;; esac' "$KIT/files/scripts/ticket-loop.sh" && ! grep -q 'usage_limit) resumable' "$KIT/files/scripts/ticket-loop.sh" || fail "usage_limit 가 수습 대상에 들어감"
-for f in README.md README.ko.md; do grep -q 'USAGE_LIMIT_REGEX' "$KIT/$f" && grep -q 'PERMISSION_PROMPT_REGEX' "$KIT/$f" && grep -q 'PROMPT_STALL_SEC' "$KIT/$f" || fail "$f 변수 목록에 화면 분류 정규식이 없음"; done
+for f in docs/loop.md docs/loop.ko.md; do grep -q 'USAGE_LIMIT_REGEX' "$KIT/$f" && grep -q 'PERMISSION_PROMPT_REGEX' "$KIT/$f" && grep -q 'PROMPT_STALL_SEC' "$KIT/$f" || fail "$f 변수 목록에 화면 분류 정규식이 없음"; done
 grep -q '`usage_limit`' "$KIT/files/.agents/skills/loop-triage/SKILL.md" || fail "loop-triage 스킬 종류 표에 usage_limit 가 없음"
 ! grep -q 'USAGE_LIMIT_REGEX\|PERMISSION_PROMPT_REGEX' "$KIT/files/.agents/skills/setup-ticket-loop/SKILL.md" || fail "setup-ticket-loop 결정 표에 화면 분류 정규식을 넣지 않기로 했다"
 echo "ok  strike 전 화면 분류(#10 — 사용량 한도는 수습 없이 usage_limit, 확인 창 PROMPT_STALL_SEC 체류는 idle 없이도 worker_no_pr, 빈 정규식은 전처럼)"
