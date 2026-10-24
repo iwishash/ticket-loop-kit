@@ -106,7 +106,6 @@ A ticket is ready when it is open, labelled `ready-for-agent`, unassigned, not b
 | [Running the loop](docs/loop.md) | Settings worth knowing (post-merge checks, retries, batching, screen classification), outputs, backends |
 | [When the loop stops](docs/stops.md) | Slack and GitHub notifications, triage sessions, stop records |
 | [Verification](docs/verification.md) | What ran on real tickets, and what has not |
-| [Guidebook](docs/ticket-loop-guide.pdf) (Korean, PDF) | Why the loop works the way it does, and how to run it day to day |
 | [Working on the kit](CONTRIBUTING.md) | Tests, guidebook sync, releases |
 
 ## License
