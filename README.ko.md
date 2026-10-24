@@ -108,7 +108,6 @@ bash scripts/ticket-loop.sh 12 15          # 지정한 티켓만, 적은 순서�
 | [루프 돌리기](docs/loop.ko.md) | 알아둘 설정(병합 뒤 검증·재실행·묶음·화면 분류), 산출물, 백엔드 |
 | [루프가 멈출 때](docs/stops.ko.md) | Slack·GitHub 알림, 수습 세션, 멈춤 기록 |
 | [검증 상태](docs/verification.ko.md) | 실제 티켓으로 돌린 것과 아직 안 돌린 것 |
-| [「티켓 무인 루프 가이드북」](docs/ticket-loop-guide.pdf) (PDF) | 루프가 왜 이렇게 생겼는지, 날마다 어떻게 돌리는지 |
 | [키트를 고칠 때](CONTRIBUTING.ko.md) | 테스트, 가이드북 동기화, 릴리스 |
 
 ## 라이선스
