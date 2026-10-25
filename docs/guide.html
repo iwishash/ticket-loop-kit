@@ -744,8 +744,8 @@ bash scripts/ticket-loop.sh --parent 40             # 끝난 스펙이면 "No ti
   <tr><td><code>REPAIR_ROUNDS</code></td><td><code>1</code></td><td>충돌·CI 수리를 합친 허용 횟수</td></tr>
   <tr><td><code>CI_SKIP_REGEX</code></td><td>(없음)</td><td>저장소 CI에 경로 필터가 있을 때 그 필터를 루프에 알려 주는 값. 바뀐 파일이 전부 이 정규식(ERE)에 맞으면 체크가 안 붙는 게 정상인 PR로 보고 체크 없이 병합한다. 루프의 규칙이 아니라 워크플로의 <code>paths-ignore</code>를 따라 하는 것이다 — 필터가 없으면 비운다(4장 8단계)</td></tr>
   <tr><td><code>CI_SKIP_CMD</code></td><td>(없음)</td><td>같은 목적의 명령. 순서 규칙이 있는 <code>paths</code> 목록처럼 정규식 하나로 못 쓰는 필터용. 바뀐 파일 목록을 stdin으로 받아 <code>run</code>/<code>skip</code>을 출력하는 저장소 스크립트를 적는다. 있으면 정규식보다 먼저 보고, 실패하면 체크를 기다린다</td></tr>
-  <tr><td><code>POST_MERGE_CMD</code></td><td>(없음 = 끔)</td><td>병합 뒤 기본 브랜치에서 한 번 돌릴 명령. 실패하면 루프가 멈춘다(7장 6단계)</td></tr>
-  <tr><td><code>POST_MERGE_RETRY_CMD</code></td><td>(없음 = 재실행 없음)</td><td><code>POST_MERGE_CMD</code>가 실패했을 때 딱 한 번 돌릴 재실행 명령. 같은 검증 워크트리에서 <code>POST_MERGE_FAILED_LOG</code>(첫 실행 로그의 절대 경로)를 받아 돌고, 출력은 <code>post-merge-N-retry.log</code>. 통과하면 루프는 계속 가고 이슈 코멘트·Slack에 플레이크 의심을 남긴다. 실패한 테스트를 못 찾으면 다시 돌리지 않고 비0으로 끝나야 한다(7장 6단계)</td></tr>
+  <tr><td><code>POST_MERGE_CMD</code></td><td>(없음 = 끔)</td><td>병합 뒤 기본 브랜치에서 한 번 돌릴 명령. 실패하면 루프가 멈춘다. 왜 도는지(<code>TICKET_LOOP_POST_MERGE_WHY</code>: <code>every</code>·<code>spec_end</code>·<code>run_end</code>)와 스펙을 끝낸 병합을 덮는지(<code>TICKET_LOOP_POST_MERGE_SPEC_COMPLETE</code>: 스펙 번호 또는 빈 값)를 env로 받는다 — 스펙 끝에만 무거운 검증을 돌리는 식이다(7장 6단계)</td></tr>
+  <tr><td><code>POST_MERGE_RETRY_CMD</code></td><td>(없음 = 재실행 없음)</td><td><code>POST_MERGE_CMD</code>가 실패했을 때 딱 한 번 돌릴 재실행 명령. 같은 검증 워크트리에서 <code>POST_MERGE_FAILED_LOG</code>(첫 실행 로그의 절대 경로)를 받아 돌고, 출력은 <code>post-merge-N-retry.log</code>. 통과하면 루프는 계속 가고 이슈 코멘트·Slack에 플레이크 의심을 남긴다. 실패한 테스트를 못 찾으면 다시 돌리지 않고 비0으로 끝나야 한다. <code>POST_MERGE_CMD</code>와 같은 env(<code>TICKET_LOOP_POST_MERGE_WHY</code>·<code>TICKET_LOOP_POST_MERGE_SPEC_COMPLETE</code>)를 첫 실행과 같은 값으로 받는다(7장 6단계)</td></tr>
   <tr><td><code>POST_MERGE_EVERY</code></td><td>4</td><td>병합 뒤 검증을 병합 몇 개마다 돌리나. 4면 네 번째 병합 뒤에 앞의 넷을 한 번에 검증한다. 그 전이라도 티켓의 스펙이 끝나거나 이번 실행의 마지막 티켓이면 돌린다. 1이면 병합마다, 0이면 스펙·실행이 끝날 때만. 아직 검증하지 않은 병합은 <code>.git/ticket-loop-post-merge.json</code>에 남는다. 묶음이 재실행까지 실패하면 <code>POST_MERGE_RETRY_CMD</code>로 처음 실패하는 병합을 찾는다(7장 6단계)</td></tr>
   <tr><td><code>POST_MERGE_COPY</code></td><td>(없음)</td><td>그 전에 메인 체크아웃에서 복사할 파일(공백 구분), 예 <code>.env.local</code></td></tr>
   <tr><td><code>POST_MERGE_PORT</code></td><td>(없음)</td><td>그 명령이 쓰는 포트. 지정하면 비기를 최대 10분 기다린다</td></tr>
@@ -849,11 +849,17 @@ pnpm exec vitest run --config vitest.integration.config.ts $files</code></pre>
 <p class="small muted">실패한 파일을 못 찾으면(설치·환경 점검 단계에서 실패) 다시 돌리지 않고 실패로 끝내는 것이 요점이다 — 진짜 깨진 기본 브랜치가 재실행에 묻히지 않게. 로그에 색 코드가 섞여 있고 macOS 기본 <code>sed</code>는 <code>\x1b</code>를 못 알아들어 <code>perl</code>로 지운다.</p>
 <p><b>묶어 돌리기 (선택).</b> 병합 뒤 검증은 누적이다 — 기본 브랜치 끝에서 도는 검증은 그 전의 병합을 모두 덮는다. 그래서 병합 <code>POST_MERGE_EVERY</code>개(기본 4)마다 한 번만 돌려도 검증을 거치지 않는 병합은 없다. 1이면 전처럼 병합마다 돌고, 0이면 개수로는 돌지 않고 스펙·실행이 끝날 때만 돈다. 루프는 한 번에 한 티켓이라 병합 직전 기본 브랜치는 워커가 테스트한 그 상태이고, 워커가 관련 테스트를 PR 전에 이미 돌렸다면 병합마다 도는 전체 스위트가 더해 주는 것은 "관련 테스트 선별이 놓친 테스트"뿐이다. 실측(rental-portal, 키트 0.9.5): 통합 테스트가 티켓마다 47~52분, 스펙 #248의 12티켓에서 9.8시간이었고, 워커가 PR 전에 관련 통합 테스트를 돌리기 시작한 뒤 34회 동안 잡은 회귀가 없었다.</p>
 <ul>
-  <li><b>언제 돌리나.</b> 아직 검증하지 않은 병합이 <code>POST_MERGE_EVERY</code>개가 되면(0이면 이 조건은 없다), 또는 그 전이라도 티켓의 스펙이 끝났거나(루프가 스펙 이슈를 닫음) 이번 실행의 마지막 티켓이면(<code>--max</code>, 번호 지정, 자동 선택이면 다음 대상이 없을 때) 그 티켓의 병합 뒤에 돌린다. 그 밖의 티켓은 요약에 "post-merge check deferred (k/N pending)"로 남는다. 루프가 끝날 때 남은 병합이 있으면 한 번 더 돈다(<code>post-merge-N-end.log</code>). CI가 붙지 않는 문서 PR은 세지 않는다.</li>
+  <li><b>언제 돌리나.</b> 아직 검증하지 않은 병합이 <code>POST_MERGE_EVERY</code>개가 되면(0이면 이 조건은 없다), 또는 그 전이라도 티켓의 스펙이 끝났거나(루프가 스펙 이슈를 닫음) 이번 실행의 마지막 티켓이면(<code>--max</code>, 번호 지정, 자동 선택이면 다음 대상이 없을 때) 그 티켓의 병합 뒤에 돌린다. 그 밖의 티켓은 요약에 "post-merge check deferred (k/N pending)"로 남는다. 루프가 끝날 때 남은 병합이 있으면 한 번 더 돈다(<code>post-merge-N-end.log</code>). CI가 붙지 않는 문서 PR은 세지 않는다 — 다만 스펙을 끝낸 문서 PR은 넣는다. 창이 비어 있어도(<code>POST_MERGE_EVERY=1</code>) 스펙 끝의 검증이 돌게 하려는 것이다.</li>
   <li><b>결과.</b> 검증이 다른 병합까지 덮었으면 결과에 ", covering #a #b …"가 붙고, 통과하면 그 커밋이 다음 묶음의 시작이 된다. 아직 검증하지 않은 병합과 마지막으로 통과한 커밋은 <code>.git/ticket-loop-post-merge.json</code>에 남는다 — 루프가 멈췄다 다시 실행돼도 묶음이 이어지고, 시작 줄에 "not checked yet"으로 알린다.</li>
   <li><b>어느 병합이 깨뜨렸나.</b> 묶는 대가는 이것을 모르는 것이다. 묶음이 재실행까지 실패하면 루프가 같은 검증 워크트리에서 <code>POST_MERGE_RETRY_CMD</code>(실패한 테스트만)를 마지막으로 통과한 커밋에서 한 번 돌리고(통과해야 탐색이 성립한다), 그 뒤의 병합 커밋들을 이분 탐색한다. 병합 넷이면 세 번, 한 번에 1~2분이다. 찾은 병합("first failing merge: #13 (PR #23, commit …)")은 결과·멈춤 사유와 멈춤 기록의 <code>post_merge_window</code>에 실려 무인 수습에 넘어간다. 시작 커밋에서도 실패하면 "not found"로 적는다 — 플레이크·환경, 또는 재실행 명령이 테스트를 못 고른 것이다. 로그는 <code>post-merge-N-bisect-&lt;커밋&gt;.log</code>. 재실행 명령이 없으면 탐색하지 않는다 — 전체 스위트로 탐색하면 묶어서 아낀 시간을 도로 쓴다. 지난 커밋에서 돌리므로 설치된 의존성에 기대는 재실행 명령이면 앞에 설치를 붙인다(<code>pnpm install --frozen-lockfile --prefer-offline &amp;&amp; …</code>).</li>
   <li><b>잃는 것.</b> 깨진 기본 브랜치 위에 다음 티켓이 최대 <code>POST_MERGE_EVERY</code>−1개 쌓인다. 그 깨짐은 관련 테스트가 못 잡은 것이라 다음 워커도 대개 알아채지 못하고, 고칠 때 그 위에 쌓인 변경까지 봐야 할 수 있다. 무거운 스위트가 짧으면(몇 분) <code>POST_MERGE_EVERY=1</code>로 병합마다 돌리는 편이 낫다. 0은 이 쌓임이 스펙 전체로 커진다.</li>
 </ul>
+<p><b>상황에 따라 다른 검증 (선택).</b> 평소에는 가벼운 검증을, 스펙이 끝날 때만 무거운 검증을 돌리고 싶을 때가 있다. 루프는 <code>POST_MERGE_CMD</code>·<code>POST_MERGE_RETRY_CMD</code>에 env 둘을 넘긴다. <code>TICKET_LOOP_POST_MERGE_WHY</code>는 왜 도는지다 — <code>every</code>(병합 <code>POST_MERGE_EVERY</code>개), <code>spec_end</code>(스펙 끝), <code>run_end</code>(이번 실행의 마지막 티켓·남은 티켓 없음·루프 끝). <code>TICKET_LOOP_POST_MERGE_SPEC_COMPLETE</code>는 이 검증이 덮는 병합 가운데 스펙(<code>--parent</code> 또는 티켓의 부모)을 끝낸 것이 있으면 그 스펙 번호(드물게 여럿이면 공백 구분), 없으면 빈 값이다. 둘을 따로 보는 까닭은 루프가 창이 찼는지를 먼저 보기 때문이다 — <code>POST_MERGE_EVERY=1</code>이면 스펙의 마지막 병합 뒤 검증도 이유가 <code>every</code>다. 스펙을 끝낸 병합은 아직 검증하지 않은 병합과 함께 <code>.git/ticket-loop-post-merge.json</code>에 남는다. 그래서 스펙 끝의 검증이 실패해 멈춘 뒤 다시 실행한 루프의 검증도 같은 값을 받는다. 루프 끝에서 처음 닫히는 스펙(사람이 마지막 티켓을 닫은 경우 등)은 스펙을 닫은 뒤 남은 병합을 검증하므로 그 검증이 스펙 번호를 받는다. 재실행·이분 탐색·수습 뒤 재검증도 첫 실행과 같은 값을 받아, 실패한 검증과 같은 조건(같은 DB 등)으로 다시 돈다. 받은 값은 검증 로그마다 첫 줄(<code># ticket-loop: TICKET_LOOP_POST_MERGE_WHY="…" TICKET_LOOP_POST_MERGE_SPEC_COMPLETE="…"</code>)과 티켓 기록(<code>post_merge_why</code>·<code>post_merge_spec_complete</code>)에 남고, 스펙 리포트는 결과 뒤 괄호에 적는다(예: "post-merge check passed, covering #61 #62 (every, spec #60 complete)"). 예 — <code>POST_MERGE_EVERY=1</code>로 병합마다 돌리되, 스펙을 끝낸 병합을 덮는 검증만 공유 DB로:</p>
+<pre><code># scripts/post-merge.sh — POST_MERGE_CMD="${POST_MERGE_CMD:-bash scripts/post-merge.sh}"
+if [ -n "$TICKET_LOOP_POST_MERGE_SPEC_COMPLETE" ]; then
+  export DATABASE_URL="$SHARED_TEST_DATABASE_URL"   # 스펙 끝: 공유 DB(느리다)
+fi                                                 # 평소: 로컬 DB
+pnpm run test:integration</code></pre>
 <p><b>포트 대기는 멈춤이 아니다.</b> 포트가 차 있으면 루프는 점유 프로세스와 기한을 한 줄 적고, 30초마다 다시 보며 조용히 기다린다. 대개 메인 체크아웃에서 사람이 띄워 둔 개발 서버다(실측: 아침에 띄운 <code>npm run dev</code>가 남아 4분을 기다렸다). 그 서버를 끄면 30초 안에 알아서 검증을 시작한다 — 루프를 다시 실행하지 않는다. 10분이 지나면 "port … did not free up"으로 멈춘다.</p>
 <pre class="out">[2026-10-12 15:36:03] #67: PR #75 merged
 [2026-10-12 15:36:04] #67: port 3000 in use (node pid 48213) — waiting for it to free up until 15:46:04. Stop that server and the loop continues right away
@@ -865,7 +871,7 @@ pnpm exec vitest run --config vitest.integration.config.ts $files</code></pre>
 <pre class="out">[2026-10-08 22:36:14] #42 summary: wall-clock 54m, PR #46 (picked up after 19s), CI 258s, repairs 0, idle false positives 0, post-merge check passed in 212s</pre>
 <p class="small muted">"picked up after"는 PR 생성부터 루프가 다음 단계(충돌·CI 확인)로 넘어가기까지다. 몇십 초를 넘으면 2단계의 정리 대기가 상한까지 간 것이다.</p>
 <p class="small muted">이 줄들이 <code>/retro</code>의 1차 자료다. 오래 걸린 티켓, 수리가 잦은 티켓, idle 오판이 많은 티켓을 찾아 원인을 본다.</p>
-<p>같은 내용에 모델(터미널 화면에서 읽은 <code>MODEL_REGEX</code> 결과)과 시작·종료 시각을 더한 한 줄을 <code>RECORDS_FILE</code>(JSONL)에도 덧붙인다. <code>--no-merge</code>로 끝난 티켓은 <code>no-merge</code>, 처리 중 루프가 멈춘 티켓은 <code>stopped</code>(멈춘 이유 포함)로 남는다. 병합 뒤 검증 결과(<code>post_merge</code>)는 루프가 병합한 티켓에만 있다 — 병합 전에 멈춘 티켓에는 없다. <code>log</code>는 그 티켓을 처리한 실행의 로그 파일이다. 로그는 날짜별 파일이라, 멈췄다가 다른 날 이어 간 스펙은 로그가 여러 파일로 나뉜다. 로그는 사람이 읽고, 기록은 리포트와 회고 안내가 읽는다.</p>
+<p>같은 내용에 모델(터미널 화면에서 읽은 <code>MODEL_REGEX</code> 결과)과 시작·종료 시각을 더한 한 줄을 <code>RECORDS_FILE</code>(JSONL)에도 덧붙인다. <code>--no-merge</code>로 끝난 티켓은 <code>no-merge</code>, 처리 중 루프가 멈춘 티켓은 <code>stopped</code>(멈춘 이유 포함)로 남는다. 병합 뒤 검증 결과(<code>post_merge</code>)는 루프가 병합한 티켓에만 있다 — 병합 전에 멈춘 티켓에는 없다. 검증을 돌린 티켓에는 그 검증 명령이 받은 env(<code>post_merge_why</code>, 스펙을 끝낸 병합을 덮었으면 <code>post_merge_spec_complete</code> — 6단계)도 남는다. <code>log</code>는 그 티켓을 처리한 실행의 로그 파일이다. 로그는 날짜별 파일이라, 멈췄다가 다른 날 이어 간 스펙은 로그가 여러 파일로 나뉜다. 로그는 사람이 읽고, 기록은 리포트와 회고 안내가 읽는다.</p>
 <p><code>impl_sec</code>·<code>repair_sec</code>·<code>ci_wait_sec</code>·<code>post_merge_sec</code>는 경과 시간(<code>wall_sec</code>)을 단계별로 나눈 값이다(0.9.8부터, 초).</p>
 <ul>
   <li><b>구현</b>: 에이전트가 뜬 때부터 PR이 열린 때(GitHub 시각)까지.</li>
@@ -1526,7 +1532,13 @@ set -euo pipefail
 #   CI_SKIP_CMD         같은 목적의 명령 — 순서 규칙이 있는 paths 목록처럼 정규식 하나로 못 쓰는 필터용. 바뀐 파일 목록을 stdin으로
 #                       (한 줄에 하나) 받아 CI가 돌면 "run", 전부 제외 경로면 "skip"을 출력한다. 저장소 루트에서 실행되고, 있으면
 #                       CI_SKIP_REGEX보다 먼저 본다. 실패하거나 다른 출력이면 체크를 기다리는 쪽으로 간다
-#   POST_MERGE_CMD      병합 뒤 기본 브랜치에서 돌릴 명령, 예 "npm ci &amp;&amp; npm run test:e2e" (기본 없음 = 끔)
+#   POST_MERGE_CMD      병합 뒤 기본 브랜치에서 돌릴 명령, 예 "npm ci &amp;&amp; npm run test:e2e" (기본 없음 = 끔). 검증을 상황에 따라 다르게
+#                       돌릴 수 있게 env 둘을 받는다(POST_MERGE_RETRY_CMD도 같다): TICKET_LOOP_POST_MERGE_WHY — 왜 도는지, every(병합
+#                       POST_MERGE_EVERY개) · spec_end(스펙 끝) · run_end(이번 실행의 마지막 티켓·남은 티켓 없음·루프 끝).
+#                       TICKET_LOOP_POST_MERGE_SPEC_COMPLETE — 이 검증이 덮는 병합 가운데 스펙(--parent 또는 티켓의 부모)을 끝낸 것이
+#                       있으면 그 스펙 번호(드물게 여럿이면 공백 구분), 없으면 빈 값. 이유와 따로 본다 — POST_MERGE_EVERY=1이면 스펙 끝의
+#                       검증도 every다. 재실행·이분 탐색·수습 뒤 재검증은 첫 실행과 같은 값이다. 예: 스펙 끝에만 무거운 DB로
+#                       [ -n "$TICKET_LOOP_POST_MERGE_SPEC_COMPLETE" ]. 받은 값은 검증 로그 첫 줄과 RECORDS_FILE에 남는다
 #   POST_MERGE_RETRY_CMD POST_MERGE_CMD가 실패했을 때 딱 한 번 돌려 볼 재실행 명령 (기본 없음 = 재실행 없이 멈춤). 같은 검증 워크트리에서
 #                       POST_MERGE_FAILED_LOG(첫 실행 로그의 절대 경로)를 받아 돈다 — 그 로그에서 실패한 테스트만 골라 다시 돌리는 식이다.
 #                       출력은 post-merge-N-retry.log. 통과하면 계속 가고 이슈 코멘트·Slack에 플레이크 의심을 남긴다. 실패한 테스트를
@@ -3097,8 +3109,9 @@ post_merge_worktree_path() {
 # 티켓마다 47~52분, 스펙 #248에서 12회 9.8시간이었고, 워커가 PR 전에 관련 통합 테스트를 돌리기 시작한 뒤 34회 동안 잡은 회귀는 없었다.
 #   PM_BASE     창의 시작 — 마지막으로 검증을 통과한 커밋(없으면 창 첫 병합의 부모)
 #   PM_PENDING  아직 검증을 거치지 않은 루프의 병합, 한 줄에 "이슈&lt;탭&gt;PR&lt;탭&gt;병합 커밋"(병합 순서)
-# 둘 다 PM_STATE_FILE에 남는다. 이분 탐색은 PM_PENDING이 아니라 git의 PM_BASE..끝을 훑는다 — 사람이 병합한 커밋도 범위에 든다
-PM_BASE=""; PM_PENDING=""; PM_WHY=""; PM_BISECT=""; PM_FIRST_FAILING=""; PM_REASON=""
+#   PM_SPEC_COMPLETE  창의 병합이 끝낸 스펙 번호들(공백 구분, 보통 하나) — 검증 명령이 TICKET_LOOP_POST_MERGE_SPEC_COMPLETE로 받는다
+# 셋 다 PM_STATE_FILE에 남는다. 이분 탐색은 PM_PENDING이 아니라 git의 PM_BASE..끝을 훑는다 — 사람이 병합한 커밋도 범위에 든다
+PM_BASE=""; PM_PENDING=""; PM_SPEC_COMPLETE=""; PM_WHY=""; PM_WHY_KEY=""; PM_BISECT=""; PM_FIRST_FAILING=""; PM_REASON=""
 NEXT_TARGETS=""; NEXT_TARGETS_SET=0   # pm_due가 미리 계산한 다음 대상 — 메인 고리가 그대로 쓴다
 
 pm_count() { local c; c="$(grep -c . &lt;&lt;&lt;"$PM_PENDING" || true)"; printf '%s' "${c:-0}"; }
@@ -3111,19 +3124,21 @@ pm_of() { printf '%s' "$(pm_count)"; [[ "$POST_MERGE_EVERY" -eq 0 ]] || printf '
 pm_save() {
   [[ -n "${PM_STATE_FILE:-}" ]] || return 0
   if [[ -z "$PM_BASE" &amp;&amp; -z "$PM_PENDING" ]]; then rm -f "$PM_STATE_FILE"; return 0; fi
-  jq -Rn --arg base "$PM_BASE" '
+  jq -Rn --arg base "$PM_BASE" --arg specs "$PM_SPEC_COMPLETE" '
     {base: (if $base == "" then null else $base end),
      pending: [inputs | split("\t") | select(length == 3 and .[0] != "")
-               | {issue: (.[0] | tonumber), pr: (if .[1] == "" then null else (.[1] | tonumber) end), commit: (if .[2] == "" then null else .[2] end)}]}' \
+               | {issue: (.[0] | tonumber), pr: (if .[1] == "" then null else (.[1] | tonumber) end), commit: (if .[2] == "" then null else .[2] end)}],
+     spec_complete: ($specs | split(" ") | map(select(. != "") | tonumber))}' \
     &lt;&lt;&lt;"$PM_PENDING" &gt; "$PM_STATE_FILE" 2&gt;/dev/null || log warn "could not save the post-merge check state (${PM_STATE_FILE})"
 }
 
 # 시작 때 지난 실행이 남긴 창을 읽는다. 창의 시작이 기본 브랜치에 없으면(강제 push 등) 시작만 버린다 — 병합들은 여전히 검증해야 한다
 pm_load() {
   [[ -n "${PM_STATE_FILE:-}" &amp;&amp; -f "$PM_STATE_FILE" ]] || return 0
-  local base pending
+  local base pending specs
   if ! base="$(jq -r '.base // ""' "$PM_STATE_FILE" 2&gt;/dev/null)" \
-     || ! pending="$(jq -r '.pending[]? | [(.issue | tostring), (.pr // "" | tostring), (.commit // "")] | join("\t")' "$PM_STATE_FILE" 2&gt;/dev/null)"; then
+     || ! pending="$(jq -r '.pending[]? | [(.issue | tostring), (.pr // "" | tostring), (.commit // "")] | join("\t")' "$PM_STATE_FILE" 2&gt;/dev/null)" \
+     || ! specs="$(jq -r '[.spec_complete[]? | tostring] | join(" ")' "$PM_STATE_FILE" 2&gt;/dev/null)"; then
     log warn "post-merge check: unreadable state ${PM_STATE_FILE} — ignored"
     return 0
   fi
@@ -3134,7 +3149,7 @@ pm_load() {
       base=""
     fi
   fi
-  PM_BASE="$base"; PM_PENDING="$pending"
+  PM_BASE="$base"; PM_PENDING="$pending"; PM_SPEC_COMPLETE="$specs"
 }
 
 # 루프가 병합한 티켓을 창에 넣는다. $1 이슈 $2 PR $3 병합 커밋(모르면 빈 값). 창이 처음 열리면 시작은 그 병합의 부모다
@@ -3147,23 +3162,36 @@ pm_add() {
   pm_save
 }
 
+# 스펙 $1(없으면 0)이 끝났나 — 이번 실행이 그 스펙 이슈를 닫았다(close_spec_if_done). pm_due의 spec_end와 창에 적는 스펙 완료가 같은 조건을 쓴다
+spec_closed_this_run() { [[ "${1:-0}" != 0 &amp;&amp; " ${CLOSED_SPECS:-} " == *" $1 "* ]]; }
+
+# 스펙 $1이 끝났으면 창에 적는다 — 창을 덮는 검증이 받는다(pm_exec). POST_MERGE_EVERY=1이면 스펙 끝의 검증도 이유가 every라 이유만으로는
+# 모른다. 창이 비었으면 덮을 검증이 없다(스펙을 끝낸 문서 PR은 run_ticket이 창에 넣는다). 검증이 꺼진 실행은 창을 건드리지 않는다
+pm_spec_closed() {
+  local spec="${1:-0}"
+  [[ ${POST_MERGE:-0} -eq 1 &amp;&amp; -n "$PM_PENDING" &amp;&amp; " ${PM_SPEC_COMPLETE} " != *" ${spec} "* ]] &amp;&amp; spec_closed_this_run "$spec" || return 0
+  PM_SPEC_COMPLETE="${PM_SPEC_COMPLETE:+${PM_SPEC_COMPLETE} }${spec}"
+  pm_save
+}
+
 # 검증이 $1 커밋에서 통과했다 — 창을 닫고 그 커밋이 다음 창의 시작이 된다
-pm_passed() { PM_BASE="${1:-$PM_BASE}"; PM_PENDING=""; pm_save; }
+pm_passed() { PM_BASE="${1:-$PM_BASE}"; PM_PENDING=""; PM_SPEC_COMPLETE=""; pm_save; }
 
 # 이번 병합 뒤에 검증을 돌릴 때인가. 창이 POST_MERGE_EVERY개 찼거나(0이면 이 조건은 없다), 이 티켓의 스펙이 끝났거나(이번 실행이 스펙 이슈를 닫음), 이번 실행의
 # 마지막 티켓이면 0. 마지막인지는 다음 대상을 미리 계산해 본다 — 미룰 때는 그 목록을 메인 고리가 그대로 쓴다(NEXT_TARGETS, 같은 조회를 두 번
-# 하지 않게). 검증을 돌린 뒤에는 메인 고리가 다시 계산한다(검증이 도는 동안 바뀌었을 수 있다). PM_WHY에 이유를 남긴다. $1 이슈 $2 스펙(없으면 0)
+# 하지 않게). 검증을 돌린 뒤에는 메인 고리가 다시 계산한다(검증이 도는 동안 바뀌었을 수 있다). PM_WHY에 이유를, PM_WHY_KEY에 검증 명령이
+# 받는 고정 값(every·spec_end·run_end — pm_exec)을 남긴다. $1 이슈 $2 스펙(없으면 0)
 pm_due() {
   local n="$1" spec="${2:-0}" cand ctitle next=""
-  PM_WHY=""; NEXT_TARGETS_SET=0
+  PM_WHY=""; PM_WHY_KEY=""; NEXT_TARGETS_SET=0
   [[ -n "$PM_PENDING" ]] || return 1
   if [[ "$POST_MERGE_EVERY" -gt 0 &amp;&amp; "$(pm_count)" -ge "$POST_MERGE_EVERY" ]]; then
-    PM_WHY="every ${POST_MERGE_EVERY} merged ticket$([[ $POST_MERGE_EVERY -eq 1 ]] || echo s)"; return 0
+    PM_WHY="every ${POST_MERGE_EVERY} merged ticket$([[ $POST_MERGE_EVERY -eq 1 ]] || echo s)"; PM_WHY_KEY=every; return 0
   fi
-  if [[ "$spec" != 0 &amp;&amp; " ${CLOSED_SPECS:-} " == *" ${spec} "* ]]; then PM_WHY="spec #${spec} complete"; return 0; fi
+  if spec_closed_this_run "$spec"; then PM_WHY="spec #${spec} complete"; PM_WHY_KEY=spec_end; return 0; fi
   if [[ ${MAX:-0} -gt 0 &amp;&amp; $(( ${done_count:-0} + 1 )) -ge ${MAX:-0} ]] \
      || [[ ${#TICKETS[@]} -gt 0 &amp;&amp; $(( ${done_count:-0} + 1 )) -ge ${#TICKETS[@]} ]]; then
-    PM_WHY="last ticket of this run"; return 0
+    PM_WHY="last ticket of this run"; PM_WHY_KEY=run_end; return 0
   fi
   if [[ ${#TICKETS[@]} -eq 0 ]]; then
     # 조회가 실패하거나, 두 번 다 빈 목록인데 스펙에 열린 하위 이슈가 남으면(pick_next_targets 2) 미룬다 — 빈 목록을 "남은 티켓 없음"으로
@@ -3173,10 +3201,20 @@ pm_due() {
       [[ -n "$cand" &amp;&amp; "$cand" != "$n" &amp;&amp; " ${PROCESSED:-} " != *" ${cand} "* ]] || continue
       next="$cand"; break
     done &lt;&lt;&lt;"$NEXT_TARGETS"
-    if [[ -z "$next" ]]; then PM_WHY="no more tickets"; return 0; fi
+    if [[ -z "$next" ]]; then PM_WHY="no more tickets"; PM_WHY_KEY=run_end; return 0; fi
     NEXT_TARGETS_SET=1
   fi
   return 1
+}
+
+# 검증 명령 하나를 검증 워크트리 $1에서 돌린다 — bg_wait로 부르고 출력은 검증 로그로 보낸다. $2 명령, $3 첫 실행 로그(재실행·이분 탐색이
+# POST_MERGE_FAILED_LOG로 받는다). 왜 도는지와 창이 끝낸 스펙을 env로 넘기고(머리 주석 POST_MERGE_CMD, #32) 로그 첫 줄에 남긴다.
+# 재실행·이분 탐색·수습 뒤 재검증도 같은 창이라 같은 값이다 — 실패한 검증과 같은 조건으로 다시 돈다
+pm_exec() {
+  local vars=("TICKET_LOOP_POST_MERGE_WHY=${PM_WHY_KEY}" "TICKET_LOOP_POST_MERGE_SPEC_COMPLETE=${PM_SPEC_COMPLETE}")
+  [[ -z "${3:-}" ]] || vars+=("POST_MERGE_FAILED_LOG=$3")
+  printf '# ticket-loop: TICKET_LOOP_POST_MERGE_WHY="%s" TICKET_LOOP_POST_MERGE_SPEC_COMPLETE="%s"\n' "$PM_WHY_KEY" "$PM_SPEC_COMPLETE"
+  env "${vars[@]}" bash -c 'cd "$1" &amp;&amp; exec bash -c "$2"' _ "$1" "$2"
 }
 
 # 이분 탐색의 한 번 — 검증 워크트리를 $3 커밋으로 옮겨 POST_MERGE_RETRY_CMD를 첫 실행 로그($4)와 함께 돌린다.
@@ -3187,7 +3225,7 @@ pm_probe() {
   wait_post_merge_port "$n" || return 2
   plog="${failed_log%.log}-bisect-${c:0:7}.log"
   phase post
-  bg_wait env POST_MERGE_FAILED_LOG="$failed_log" bash -c 'cd "$1" &amp;&amp; exec bash -c "$2"' _ "$wt" "$POST_MERGE_RETRY_CMD" &gt;"$plog" 2&gt;&amp;1 || rc=$?
+  bg_wait pm_exec "$wt" "$POST_MERGE_RETRY_CMD" "$failed_log" &gt;"$plog" 2&gt;&amp;1 || rc=$?
   phase ""
   log "#${n}: failed tests at ${c:0:7} $(git -C "$wt" log -1 --format=%s "$c" 2&gt;/dev/null | cut -c1-60) — $([[ $rc -eq 0 ]] &amp;&amp; echo pass || echo fail) (log ${plog})"
   [[ $rc -eq 0 ]] || return 1
@@ -3243,11 +3281,12 @@ pm_bisect() {
 # 스펙 리포트·멈춤 기록에 싣는 창 — 비었으면 null
 pm_window_json() {
   [[ -n "$PM_PENDING" ]] || { echo null; return 0; }
-  jq -Rnc --arg base "$PM_BASE" --arg bisect "$PM_BISECT" --arg first "$PM_FIRST_FAILING" '
+  jq -Rnc --arg base "$PM_BASE" --arg bisect "$PM_BISECT" --arg first "$PM_FIRST_FAILING" --arg specs "$PM_SPEC_COMPLETE" '
     def str: if . == "" then null else . end;
     {base: ($base | str), first_failing_commit: ($first | str), bisect: ($bisect | str),
      pending: [inputs | split("\t") | select(length == 3 and .[0] != "")
-               | {issue: (.[0] | tonumber), pr: (if .[1] == "" then null else (.[1] | tonumber) end), commit: (.[2] | str)}]}' &lt;&lt;&lt;"$PM_PENDING"
+               | {issue: (.[0] | tonumber), pr: (if .[1] == "" then null else (.[1] | tonumber) end), commit: (.[2] | str)}],
+     spec_complete: ($specs | split(" ") | map(select(. != "") | tonumber))}' &lt;&lt;&lt;"$PM_PENDING"
 }
 
 # POST_MERGE_PORT가 비기를 기다린다. 반환 0: 비었음(포트 설정이 없으면 바로), 1: PORT_WAIT_SEC 안에 비지 않음.
@@ -3275,6 +3314,7 @@ run_post_merge() {
   wt="$(post_merge_worktree_path)"
   POST_MERGE_WT="$wt"
   POST_MERGE_RESULT="did not start"   # 검증 명령을 돌리기 전에 끝나면(워크트리·포트) 이 값이 남는다
+  POST_MERGE_WHY="$PM_WHY_KEY"; POST_MERGE_SPEC_COMPLETE="$PM_SPEC_COMPLETE"   # 기록용(record_ticket) — 통과하면 창과 함께 비므로 떠 둔다
   PM_BISECT=""; PM_FIRST_FAILING=""   # 앞 검증의 이분 탐색 결과가 이번 멈춤 사유에 섞이지 않게
   if [[ ! -d "$wt/.git" &amp;&amp; ! -f "$wt/.git" ]]; then
     mkdir -p "$(dirname "$wt")"
@@ -3297,7 +3337,7 @@ run_post_merge() {
   log step "#${n}: post-merge check started (${wt}, log ${logfile})"
   [[ -z "$cover" ]] || log step "#${n}: this check covers the merged tickets ${cover#, covering }${PM_WHY:+ (${PM_WHY})}"
   phase post   # 명령이 도는 동안만(포트 대기는 빼고) — 리포트의 병합 뒤 검증 시간
-  if bg_wait bash -c 'cd "$1" &amp;&amp; exec bash -c "$2"' _ "$wt" "$POST_MERGE_CMD" &gt;"$logfile" 2&gt;&amp;1; then
+  if bg_wait pm_exec "$wt" "$POST_MERGE_CMD" &gt;"$logfile" 2&gt;&amp;1; then
     phase ""
     POST_MERGE_RESULT="passed in $(( $(date +%s) - started ))s${cover}"
     log ok "#${n}: post-merge check ${POST_MERGE_RESULT}"
@@ -3318,7 +3358,7 @@ run_post_merge() {
   started="$(date +%s)"
   log step "#${n}: retrying the post-merge check once (log ${retry_log})"
   phase post
-  if bg_wait env POST_MERGE_FAILED_LOG="$logfile" bash -c 'cd "$1" &amp;&amp; exec bash -c "$2"' _ "$wt" "$POST_MERGE_RETRY_CMD" &gt;"$retry_log" 2&gt;&amp;1; then
+  if bg_wait pm_exec "$wt" "$POST_MERGE_RETRY_CMD" "$logfile" &gt;"$retry_log" 2&gt;&amp;1; then
     phase ""
     retry_sec=$(( $(date +%s) - started ))
     POST_MERGE_RESULT="passed on retry in ${retry_sec}s (first run failed in ${first_sec}s)${cover}"
@@ -3374,11 +3414,11 @@ pm_flush_end() {
   [[ $POST_MERGE -eq 1 &amp;&amp; -n "$PM_PENDING" ]] || return 0
   local n
   n="$(tail -n 1 &lt;&lt;&lt;"$PM_PENDING" | cut -f1)"
-  PM_WHY="end of run"
+  PM_WHY="end of run"; PM_WHY_KEY=run_end
   STOP_ISSUE="$n"; STOP_KIND=""; STOP_RECORD=""; TRIAGE_RESULT=""
   # 멈춤 기록·GitHub 기록이 앞 티켓의 PR·시작 시각·워크트리를 싣지 않게 — 창의 마지막 병합으로 채운다
   CUR_PR="$(tail -n 1 &lt;&lt;&lt;"$PM_PENDING" | cut -f2)"; CUR_TITLE="$(issue_title "$n" 2&gt;/dev/null || true)"; CUR_STARTED=""; WT_PATH=""
-  POST_MERGE_RESULT=""; POST_MERGE_LOG=""; POST_MERGE_RETRY_LOG=""
+  POST_MERGE_RESULT=""; POST_MERGE_LOG=""; POST_MERGE_RETRY_LOG=""; POST_MERGE_WHY=""; POST_MERGE_SPEC_COMPLETE=""
   log step "post-merge check for the merged tickets not checked yet ($(pm_list))"
   if ! run_post_merge "$n" -end; then
     post_merge_recover "$n" || die "$PM_REASON"
@@ -3765,6 +3805,7 @@ record_ticket() {
     --arg pr "$CUR_PR" --arg pickup "${CUR_PICKUP_SEC:-}" --arg started "$CUR_STARTED_ISO" --arg finished "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" \
     --argjson wall "$(( $(date +%s) - CUR_STARTED ))" --arg ci "$CUR_CI_SEC" --argjson repairs "$CUR_ROUND" \
     --argjson idle "$(idle_fp_count)" --arg post "${POST_MERGE_RESULT:-}" --arg model "$CUR_MODEL" --arg agent "$AGENT" \
+    --arg pmwhy "${POST_MERGE_WHY:-}" --arg pmspec "${POST_MERGE_SPEC_COMPLETE:-}" \
     --arg triage "${TRIAGE_RESULT:-}" --arg log "${LOG_FILE#"$ROOT"/}" \
     --argjson impl "${PH_IMPL:-0}" --argjson repair "${PH_REPAIR:-0}" --argjson ciwait "${PH_CI:-0}" --argjson postsec "${PH_POST:-0}" \
     --arg tokens "$tokens" '
@@ -3777,6 +3818,8 @@ record_ticket() {
     + (if $pickup != "" then {pr_pickup_sec: ($pickup | tonumber)} else {} end)
     + (if $ci != "" then {ci_sec: ($ci | tonumber)} else {} end)
     + (if $post != "" then {post_merge: $post} else {} end)
+    + (if $pmwhy != "" then {post_merge_why: $pmwhy} else {} end)
+    + (if $pmspec != "" then {post_merge_spec_complete: ($pmspec | split(" ") | map(select(. != "") | tonumber))} else {} end)
     + (if $tokens != "" then {tokens: ($tokens | fromjson)} else {} end)
     + (if $model != "" then {model: $model} else {} end)' &gt;&gt; "$file" 2&gt;/dev/null \
     || log warn "#${CUR_N}: failed to write the ticket record (${file})"
@@ -3801,6 +3844,9 @@ def badge: {merged: ["Merged", "ok"], "merged-after-stop": ["Merged after stop",
 def post: if . == "건너뜀" then "skipped"
           else (capture("^(?&lt;k&gt;통과|실패) (?&lt;s&gt;[0-9]+)초$") // null) as $m
           | if $m == null then . else "\(if $m.k == "통과" then "passed" else "failed" end) in \($m.s)s" end end;
+# 기록 하나의 병합 뒤 검증이 받은 env(#32) — " (every, spec #60 complete)". 그 값이 없는 기록(미룬 티켓, 그 전 기록)은 빈 문자열
+def pmenv: [.post_merge_why // empty, ((.post_merge_spec_complete // []) | if length &gt; 0 then "spec \(map("#\(.)") | join(" ")) complete" else empty end)]
+           | if length &gt; 0 then " (\(join(", ")))" else "" end;
 def pos: if . != null and . &gt; 0 then . else null end;
 def tok: def d1($u; $s): (. / ($u / 10) | floor) as $d | "\($d / 10 | floor).\($d % 10)\($s)";   # 소수 한 자리(2.0M)
          if . == null then "—" elif . &gt;= 1e9 then d1(1e9; "B") elif . &gt;= 1e6 then d1(1e6; "M") elif . &gt;= 1e3 then "\(. / 1e3 | floor)k" else "\(.)" end;
@@ -3902,7 +3948,7 @@ def section($h): if $h == "" or . == null then null else
       + (if .rec then "&lt;div class=\"bits\"&gt;" + ([
             "\(.rec.repairs // 0) repair\(if (.rec.repairs // 0) == 1 then "" else "s" end)",
             # 0.9.6까지는 병합 전에 멈춘 기록에도 "skipped"가 남았다 — 멈춘 기록의 skipped는 그리지 않는다. 걸린 시간은 열에 있으니 결과만
-            (if .rec.post_merge and (.rec.result != "stopped" or .rec.post_merge != "skipped") then @html "post-merge check \(.rec.post_merge | post | gsub(" in [0-9]+s"; ""))" else empty end),
+            (if .rec.post_merge and (.rec.result != "stopped" or .rec.post_merge != "skipped") then @html "post-merge check \(.rec.post_merge | post | gsub(" in [0-9]+s"; ""))\(.rec | pmenv)" else empty end),
             (if .status == "merged-after-stop" then "merged outside the loop \(.stop_gap | dur) after the stop" else empty end),
             (if .rec.triage then @html "triage \(.rec.triage)" else empty end),
             (if .attempts &gt; 1 then "\(.attempts) attempts" else empty end)] | join(" · ")) + "&lt;/div&gt;" else "" end)
@@ -3989,7 +4035,7 @@ run_ticket() {
   started_at="$(date +%s)"
   IDLE_FP_FILE="$(mktemp "${TMPDIR:-/tmp}/ticket-loop-idle-${n}.XXXXXX")"   # idle 오판 한 번에 한 줄(idle_fp_count)
   # 병합 뒤 검증 결과는 병합한 뒤에야 정한다 — 0.9.6까지는 "skipped"로 시작해, 병합 전에 멈춘 티켓의 기록이 "검증을 건너뜀"으로 남았다
-  POST_MERGE_RESULT=""; POST_MERGE_LOG=""; POST_MERGE_RETRY_LOG=""
+  POST_MERGE_RESULT=""; POST_MERGE_LOG=""; POST_MERGE_RETRY_LOG=""; POST_MERGE_WHY=""; POST_MERGE_SPEC_COMPLETE=""
   log title "=== #${n} ${title} ==="
   CUR_N="$n"; CUR_TITLE="$title"; CUR_STARTED="$started_at"; CUR_STARTED_ISO="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"; STOP_ISSUE="$n"
   CUR_PR=""; CUR_MODEL=""; CUR_CI_SEC=""; CUR_PICKUP_SEC=""; CUR_ROUND=0; CUR_AGENT_PATHS=""
@@ -4107,15 +4153,17 @@ run_ticket() {
   local spec; spec="$(spec_of_ticket "${n}")"
   close_spec_if_done "$spec"
 
-  # 병합된 기본 브랜치로 무거운 검증 — CI가 안 붙는 문서 PR은 창에 넣지 않는다. 창이 찼거나(POST_MERGE_EVERY, 기본 4) 스펙·실행이
+  # 병합된 기본 브랜치로 무거운 검증 — CI가 안 붙는 문서 PR은 창에 넣지 않는다. 단 스펙을 끝낸 문서 PR은 넣는다 — 창이 비어 있어도
+  # (POST_MERGE_EVERY=1) 스펙 끝의 검증이 TICKET_LOOP_POST_MERGE_SPEC_COMPLETE를 달고 돌게(#32). 창이 찼거나(POST_MERGE_EVERY, 기본 4) 스펙·실행이
   # 끝날 때만 돌리고 나머지는 미룬다(pm_due). 실패하면 기본 브랜치가 깨진 것이므로 다음 티켓을 쌓지 않고 멈춘다(워커
   # 워크트리는 이미 병합됐으니 정리하고, 검증 워크트리와 로그를 남긴다).
   local post_rc=0
   if [[ $POST_MERGE -eq 1 ]]; then
-    if [[ $ci_sec -ge 0 ]]; then
+    if [[ $ci_sec -ge 0 ]] || spec_closed_this_run "$spec"; then
       git -C "$ROOT" fetch -q origin "$BASE_BRANCH" || true   # 병합 커밋의 부모(창의 시작)를 읽으려고
       pm_add "${n}" "${pr}" "$(gh pr view "${pr}" --json mergeCommit -q '.mergeCommit.oid // empty' 2&gt;/dev/null || true)"
     fi
+    pm_spec_closed "$spec"   # 이 병합이 스펙을 끝냈으면 창에 — 창을 덮는 검증이 TICKET_LOOP_POST_MERGE_SPEC_COMPLETE로 받는다
     if pm_due "${n}" "$spec"; then
       run_post_merge "${n}" || post_rc=$?
     elif [[ $ci_sec -lt 0 ]]; then
@@ -4178,7 +4226,7 @@ if [[ $POST_MERGE -eq 1 &amp;&amp; -n "$POST_MERGE_PORT" ]] &amp;&amp; port_in_u
   log warn "note: port ${POST_MERGE_PORT} in use ($(port_holder "$POST_MERGE_PORT" || true)) — keep it free while the loop runs. Otherwise each merge waits up to $((PORT_WAIT_SEC / 60))m for it (or use --skip-post-merge)"
 fi
 # 티켓이 더 없어도 --parent면 스펙 닫기·리포트는 다시 한다(사람이 마지막 티켓을 닫은 스펙, 끝난 스펙의 리포트를 다시 뽑는 길)
-[[ -n "$targets" ]] || { log "No tickets to process."; [[ $DRY_RUN -eq 1 ]] || { pm_flush_end; close_spec_if_done "$PARENT"; write_spec_report; suggest_retro; }; exit 0; }
+[[ -n "$targets" ]] || { log "No tickets to process."; [[ $DRY_RUN -eq 1 ]] || { close_spec_if_done "$PARENT"; pm_spec_closed "$PARENT"; pm_flush_end; write_spec_report; suggest_retro; }; exit 0; }
 log "targets (all blocking issues currently closed):"; printf '%s\n' "$targets" | dim_lines "  #"
 [[ $DRY_RUN -eq 0 ]] || exit 0
 target_count="$(grep -c . &lt;&lt;&lt;"$targets")"
@@ -4228,8 +4276,9 @@ while :; do
   [[ $MAX -eq 0 || $done_count -lt $MAX ]] || { log "--max $MAX reached"; break; }
 done
 
+# 스펙을 닫은 뒤 남은 창을 검증한다 — 여기서 처음 닫히는 스펙(사람이 마지막 티켓을 닫음·하위 이슈 반영 지연)도 그 검증이 SPEC_COMPLETE로 받게
+close_spec_if_done "$PARENT"; pm_spec_closed "$PARENT"
 pm_flush_end
-close_spec_if_done "$PARENT"
 write_spec_report
 suggest_retro
 log ok "done: ${done_count} ticket$([[ $done_count -eq 1 ]] || echo s)"

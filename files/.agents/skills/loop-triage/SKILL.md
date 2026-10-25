@@ -31,7 +31,7 @@ disable-model-invocation: true
 | `worker_worktree` | 남아 있는 워커 워크트리(있으면) |
 | `logs.loop`, `logs.loop_from_byte` | 루프 로그와 이 실행이 쓰기 시작한 바이트. 이 실행 부분은 `tail -c +$((loop_from_byte + 1)) <loop>` |
 | `logs.post_merge`, `logs.post_merge_retry`, `post_merge_worktree` | 병합 뒤 검증 로그(첫 실행·재실행)와 검증 워크트리 |
-| `post_merge_window` | 아직 병합 뒤 검증을 통과하지 않은 병합(`POST_MERGE_EVERY`로 묶었을 때). `base`(마지막으로 통과한 커밋), `pending`(병합 순서의 `issue`·`pr`·`commit`), `bisect`(처음 실패하는 병합을 찾은 결과 문장), `first_failing_commit`. 묶지 않았거나 창이 비었으면 null |
+| `post_merge_window` | 아직 병합 뒤 검증을 통과하지 않은 병합(`POST_MERGE_EVERY`로 묶었을 때). `base`(마지막으로 통과한 커밋), `pending`(병합 순서의 `issue`·`pr`·`commit`), `bisect`(처음 실패하는 병합을 찾은 결과 문장), `first_failing_commit`, `spec_complete`(창의 병합이 끝낸 스펙 번호들 — 검증 명령이 `TICKET_LOOP_POST_MERGE_SPEC_COMPLETE`로 받았다). 묶지 않았거나 창이 비었으면 null |
 | `commands.*` | 이 저장소의 `POST_MERGE_CMD`, `POST_MERGE_RETRY_CMD`, `WORKTREE_SETUP_CMD` |
 | `rerun` | 루프를 같은 인자로 다시 실행하는 명령 |
 | `verdict_file` | 판정 파일을 쓸 곳 |
@@ -69,7 +69,7 @@ disable-model-invocation: true
    - 원인 PR의 코드가 인수 조건과도 어긋나면 → 코드를 고친다.
    - 원인 PR과 무관한 실패(다른 영역, 시간 초과)면 → 그 테스트 파일만 두세 번 다시 돌린다. 매번 통과하면 `flake`.
    - 테스트가 돌기 전 단계에서 실패했으면 → 저장소 스크립트 문제면 `project`, 아니면 `environment`.
-3. 고친 뒤 실패했던 테스트 파일만 이 저장소의 방식(`worker-rules.md`의 무거운 테스트 파일 명령)으로 돌려 통과를 확인한다. 전체 스위트는 루프가 병합 뒤 다시 돌린다. 검증 워크트리(`post_merge_worktree`)는 루프의 것이라 쓰지 않는다 — 이 세션의 워크트리에서 돌린다.
+3. 고친 뒤 실패했던 테스트 파일만 이 저장소의 방식(`worker-rules.md`의 무거운 테스트 파일 명령)으로 돌려 통과를 확인한다. 전체 스위트는 루프가 병합 뒤 다시 돌린다. 검증 워크트리(`post_merge_worktree`)는 루프의 것이라 쓰지 않는다 — 이 세션의 워크트리에서 돌린다. 검증 로그의 첫 줄(`# ticket-loop: TICKET_LOOP_POST_MERGE_WHY="…" TICKET_LOOP_POST_MERGE_SPEC_COMPLETE="…"`)은 루프가 검증 명령에 넘긴 값이다. 저장소의 검증이 그 값으로 환경(DB 등)을 고르면 같은 값을 주고 돌린다 — 다른 환경에서의 통과는 확인이 아니다.
 4. 수정 PR: 이 브랜치에 커밋하고 push한 뒤 `gh pr create --base <기본 브랜치>`. 제목은 `fix: <요약> — #<issue> 병합 뒤 검증`(닫기 키워드 바로 뒤에 `#<issue>`를 두지 않는다 — 5절). 본문에 멈춘 이유, 원인(원인 PR의 어떤 변경 때문인지), 고친 것, 돌린 검증과 결과를 적고 `Refs #<issue>`를 단다(그 이슈는 이미 닫혔다 — `Closes`를 쓰지 않는다). 라벨은 루프가 붙인다.
 5. 판정: `resume`과 `fix_pr`. `flake`면 수정 없이 `resume`(`fix_pr`은 null) — 루프가 검증을 다시 돌린다.
 

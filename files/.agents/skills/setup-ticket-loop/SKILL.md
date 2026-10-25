@@ -47,7 +47,7 @@ disable-model-invocation: true
 | `__HEAVY_TESTS__` | 워커가 전체를 돌리지 않을 무거운 스위트의 이름·경로(예 `통합 테스트(tests/integration/)·E2E`). 없으면 "없음" — `worker-rules.md`의 그 줄과 `implement`·`pr`의 그 문단·줄을 지운다 |
 | `__HEAVY_TEST_FILE__` | 그 스위트의 파일 하나를 돌리는 명령(예 `pnpm exec vitest run --config vitest.integration.config.ts <file>`). 워커는 자기가 추가·수정한 파일만 PR 직전 1회 돌리고, 전체는 루프가 병합 뒤(`POST_MERGE_CMD`) 돌린다 |
 | `orca.yaml` setup | 의존성 설치 명령, 복사할 env 파일과 안전 조건 |
-| `POST_MERGE_CMD` 등 | 병합 뒤 검증 명령·복사 파일, 또는 끔 |
+| `POST_MERGE_CMD` 등 | 병합 뒤 검증 명령·복사 파일, 또는 끔. 검증을 상황에 따라 다르게 돌려야 하면(예: 평소엔 로컬 DB, 스펙 끝에만 공유 DB) 명령이 루프가 넘기는 env로 고른다 — `TICKET_LOOP_POST_MERGE_SPEC_COMPLETE`(이 검증이 스펙을 끝낸 병합을 덮으면 그 스펙 번호, 아니면 빈 값), `TICKET_LOOP_POST_MERGE_WHY`(`every`·`spec_end`·`run_end`). 스펙 끝은 이유가 아니라 `TICKET_LOOP_POST_MERGE_SPEC_COMPLETE`로 본다 — `POST_MERGE_EVERY=1`이면 스펙 끝의 검증도 `every`다 |
 | `POST_MERGE_PORT` | 그 명령이 띄우는 고정 포트(예 `next dev`의 3000). 루프가 병합마다 비기를 기다리고, 시작할 때 차 있으면 알린다. 없으면 비움 |
 | `POST_MERGE_RETRY_CMD` | `POST_MERGE_CMD`가 실패했을 때 딱 한 번 돌릴 재실행 명령. 그 스위트에 병합과 무관한 플레이크(시간 초과 등)가 있을 때만 — 사용자에게 묻는다. 같은 검증 워크트리에서 `POST_MERGE_FAILED_LOG`(첫 실행 로그 절대 경로)를 받아 돌고, 통과하면 루프는 계속 가며 이슈에 플레이크 의심 코멘트를 남긴다. 실패한 테스트만 다시 돌리는 저장소 스크립트(아래)를 만들어 커밋하고 그 스크립트를 건다. `POST_MERGE_EVERY`가 1이 아니면(기본 4) 묶음 실패의 원인 병합을 찾는 데도 이 명령을 지난 커밋에서 돌린다 — 설치된 의존성에 기대면 앞에 설치 명령을 붙인다(아래 예). 없으면 비움 |
 | `POST_MERGE_EVERY` | 병합 뒤 검증을 병합 몇 개마다 돌리나. 기본 4 — 그대로면 `loop.env`에 쓰지 않는다. 그 명령이 짧으면(몇 분) 사용자에게 묻고 1(병합마다)을 권한다 — 묶어도 아끼는 시간이 없고 어느 병합이 깨뜨렸는지만 흐려진다. 0이면 개수로는 돌리지 않고 스펙·실행이 끝날 때만 돈다(깨진 기본 브랜치 위에 스펙 전체가 쌓일 수 있다). 스펙·실행이 끝날 때는 늘 돌고, 그 사이 병합은 다음 검증이 덮는다. 묶음이 실패하면 루프가 `POST_MERGE_RETRY_CMD`로 처음 실패하는 병합을 찾으므로, 묶을 때는 재실행 명령도 두기를 권한다 |
