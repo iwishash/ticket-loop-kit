@@ -26,6 +26,7 @@
 아직 확인하지 않은 것:
 
 - 실제 루프에서의 묶음 검증(`POST_MERGE_EVERY`가 1이 아닐 때)과 묶음 실패의 이분 탐색(`tests/smoke.sh`가 실제 git 저장소와 가짜 명령으로 다룬다).
+- 실제 루프에서 검증 명령이 받는 env(`TICKET_LOOP_POST_MERGE_WHY`·`TICKET_LOOP_POST_MERGE_SPEC_COMPLETE`, 0.9.17) — 특히 스펙 끝 검증이 실패해 멈춘 뒤 다시 실행했을 때와 스펙을 끝낸 문서 PR(`tests/smoke.sh`가 가짜 명령과 구조 검사로 다룬다).
 - 실제 티켓에서의 `POST_MERGE_PORT`·`POST_MERGE_RETRY_CMD`·`CI_SKIP_CMD`·`CI_SKIP_REGEX`와 수리 프롬프트(`POST_MERGE_CMD`는 위 수습 실측에서 돌았다. 모든 실측이 수리 0회). rental-portal(PR #82)에 설정돼 있다.
 - `install.sh`의 라벨 생성·Orca 등록 단계(시험에서 껐다).
 - boiler-webapp 1회 이후의 `/setup-ticket-loop`.
