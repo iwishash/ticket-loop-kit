@@ -68,7 +68,7 @@ pnpm exec vitest run --config vitest.integration.config.ts $files
 
 실패한 파일을 못 찾으면(설치·환경 점검 단계에서 실패) 다시 돌리지 않고 실패로 끝내야 한다 — 진짜 깨진 기본 브랜치가 재실행에 묻히지 않게. 로그에 ANSI 색 코드가 섞여 있고 macOS 기본 `sed`는 `\x1b`를 못 알아들어 `perl`로 지운다.
 
-**스펙 끝 분기.** 루프는 병합 뒤 검증 명령(첫 실행·재실행·이분 탐색·수습 뒤 재검증)에 env 둘을 넘긴다. `TICKET_LOOP_POST_MERGE_SPEC_COMPLETE`는 이 검증이 스펙을 끝낸 병합을 덮으면 그 스펙 번호, 아니면 빈 값이다. `TICKET_LOOP_POST_MERGE_WHY`는 `every`·`spec_end`·`run_end`다. 무거운 쪽은 `TICKET_LOOP_POST_MERGE_SPEC_COMPLETE`로 고른다 — 루프가 창이 찼는지를 먼저 보므로 `POST_MERGE_EVERY=1`이면 스펙 끝의 검증도 `WHY`가 `every`다. 고르는 부분은 한 파일에 두고 첫 실행 스크립트와 재실행 스크립트(`POST_MERGE_RETRY_CMD`를 쓰면)가 둘 다 맨 앞에서 source 한다. 재실행도 같은 값을 받으므로, 실패한 검증과 같은 쪽에서 다시 돈다. 스크립트를 커밋하고(검증 워크트리는 병합된 기본 브랜치다) `POST_MERGE_CMD="${POST_MERGE_CMD:-bash scripts/post-merge.sh}"`로 건다. `POST_MERGE_EVERY`는 가벼운 쪽의 길이로 정한다(몇 분이면 1 — 평소 검증은 병합마다, 무거운 쪽은 스펙마다 한 번). 무거운 쪽이 쓰는 비밀 값(공유 DB 주소 등)은 스크립트에 쓰지 않고 `POST_MERGE_COPY`로 복사되는 env 파일에서 읽게 한다:
+**스펙 끝 분기.** 루프는 병합 뒤 검증 명령(첫 실행·재실행·이분 탐색·수습 뒤 재검증)에 env 둘을 넘긴다. `TICKET_LOOP_POST_MERGE_SPEC_COMPLETE`는 이 검증이 스펙을 끝낸 병합을 덮으면 그 스펙 번호, 아니면 빈 값이다(병합이 모두 검증을 거친 뒤에 스펙이 닫히면 루프 끝에 그 번호로 한 번 더 돈다). `TICKET_LOOP_POST_MERGE_WHY`는 `every`·`spec_end`·`run_end`다. 무거운 쪽은 `TICKET_LOOP_POST_MERGE_SPEC_COMPLETE`로 고른다 — 루프가 창이 찼는지를 먼저 보므로 `POST_MERGE_EVERY=1`이면 스펙 끝의 검증도 `WHY`가 `every`다. 고르는 부분은 한 파일에 두고 첫 실행 스크립트와 재실행 스크립트(`POST_MERGE_RETRY_CMD`를 쓰면)가 둘 다 맨 앞에서 source 한다. 재실행도 같은 값을 받으므로, 실패한 검증과 같은 쪽에서 다시 돈다. 스크립트를 커밋하고(검증 워크트리는 병합된 기본 브랜치다) `POST_MERGE_CMD="${POST_MERGE_CMD:-bash scripts/post-merge.sh}"`로 건다. `POST_MERGE_EVERY`는 가벼운 쪽의 길이로 정한다(몇 분이면 1 — 평소 검증은 병합마다, 무거운 쪽은 스펙마다 한 번). 무거운 쪽이 쓰는 비밀 값(공유 DB 주소 등)은 스크립트에 쓰지 않고 `POST_MERGE_COPY`로 복사되는 env 파일에서 읽게 한다:
 
 ```bash
 # scripts/post-merge-env.sh — 첫 실행·재실행 스크립트가 맨 앞에서 source 한다

@@ -1054,8 +1054,8 @@ due_key() { pmw "PM_PENDING=\"\$(printf '%s\n' \"$WIN4\" | awk 'NR <= $1')\"; PM
    && "$(due_key 2 'PICK="15\tT05\n"')" == $'PICK\nKEY=[]' && "$(due_key 0 'CLOSED_SPECS=" 40"' 12 40)" == 'KEY=[]' ]] \
   || fail "pm_due 의 이유 키: $(due_key 4 : 14) $(due_key 1 'POST_MERGE_EVERY=1; CLOSED_SPECS=" 40"' 12 40) $(due_key 2 'CLOSED_SPECS=" 40"' 12 40) $(due_key 2 'MAX=3; done_count=2') $(due_key 2 'PICK="12\tT02\n"') $(due_key 2 'PICK="15\tT05\n"')"
 # 스펙을 끝낸 병합(이번 실행이 스펙 이슈를 닫음 — CLOSED_SPECS)은 창에 적힌다. 같은 스펙은 한 번, 스펙이 없거나(0) 안 끝났으면 적지 않는다.
-# 창과 함께 저장돼, 스펙 끝의 검증이 실패해 멈춘 뒤 다시 실행한 루프의 검증도 같은 값을 받는다. 통과하면 비운다. 창이 비었으면(CI 없는 문서 PR만)
-# 덮을 검증이 없어 적지 않는다. 0.9.16 의 상태 파일(spec_complete 없음)은 빈 값으로 읽는다
+# 창과 함께 저장돼, 스펙 끝의 검증이 실패해 멈춘 뒤 다시 실행한 루프의 검증도 같은 값을 받는다. 통과하면 비우고, 그 검증이 받은 스펙은 이번
+# 실행에서 다시 적지 않는다(창이 빈 채 닫힌 스펙은 아래 #34 절). 0.9.16 의 상태 파일(spec_complete 없음)은 빈 값으로 읽는다
 out="$(pmw "pm_add 11 21 $C1; CLOSED_SPECS=' 40 41'; pm_spec_closed 0; pm_spec_closed 39; pm_spec_closed 40; pm_spec_closed 40; pm_spec_closed 41
   echo \"S=[\$PM_SPEC_COMPLETE]\"; jq -c .spec_complete \"\$PM_STATE_FILE\"
   PM_SPEC_COMPLETE=; PM_PENDING=; pm_load; echo \"LOADED=[\$PM_SPEC_COMPLETE]|\$(pm_list)\"; pm_window_json | jq -c .spec_complete
@@ -1076,6 +1076,36 @@ out="$(pmw "PM_BASE=$C0; PM_PENDING=\"$WIN4\"; PM_WHY_KEY=spec_end; PM_SPEC_COMP
 out="$(pmw "PM_BASE=$C0; PM_PENDING=\"$WIN4\"; PM_WHY_KEY=spec_end; PM_SPEC_COMPLETE=40; run_post_merge 14 2>/dev/null; echo \"REC=\$POST_MERGE_WHY|\$POST_MERGE_SPEC_COMPLETE|[\$PM_SPEC_COMPLETE]\"")"
 [[ "$out" == 'REC=spec_end|40|[]' ]] || fail "기록할 env 값을 남기지 않음: $out"
 echo "ok  병합 뒤 검증 env — 첫 실행·재실행·이분 탐색에 같은 값, 검증 로그 첫 줄"
+
+# 검증할 병합이 남지 않은 채 스펙이 닫힐 때(#34): POST_MERGE_EVERY=1 이면 병합마다 검증이 통과해 창이 빈다. 그 뒤 루프 끝에서 처음 닫힌 스펙
+# (사람이 마지막 티켓을 닫음·하위 이슈 반영 지연)은 그 번호를 받는 검증이 없었다. 이번 실행이 닫은 스펙에 그 번호를 싣고 통과한 검증이 없으면
+# 창이 비어 있어도 루프 끝에서 기본 브랜치 끝으로 한 번 돈다 — spec_end 와 그 스펙 번호. 로그·멈춤 이슈는 스펙 이슈다
+out="$(pmw "PM_BASE=$C4; STOP_ISSUE=; POST_MERGE_CMD='$ENVC'; issue_title() { echo \"스펙 \$1\"; }; CLOSED_SPECS=' 40'; pm_spec_closed 40
+  pm_flush_end; echo \"AFTER=[\$STOP_ISSUE]|[\$PM_SPEC_COMPLETE]|\$(jq -c .spec_complete \"\$PM_STATE_FILE\")\"; grep '^env ' .ticket-loop/post-merge-40-end.log")" || true
+grep -qxF 'post-merge check for the completed spec #40 — no passed check has covered it yet' <<<"$out" && grep -qE '^post-merge check at the end of the run: passed in [0-9]+s$' <<<"$out" \
+  && grep -qxF 'AFTER=[]|[]|[]' <<<"$out" && grep -qxF 'env why=[spec_end] spec=[40]' <<<"$out" || fail "창이 빈 채 닫힌 스펙의 루프 끝 검증: $out"
+# 이번 실행에서 그 번호를 싣고 통과한 검증(스펙의 마지막 병합 뒤 검증)이 있었으면 루프 끝에 다시 돌지 않는다
+out="$(pmw "PM_BASE=$C0; PM_PENDING=\"$WIN4\"; STOP_ISSUE=; POST_MERGE_CMD='$ENVC'; CLOSED_SPECS=' 40'; pm_spec_closed 40; run_post_merge 14 2>/dev/null
+  pm_spec_closed 40; pm_flush_end; echo \"AFTER=[\$PM_SPEC_COMPLETE]\"; ls .ticket-loop")"
+[[ "$out" == $'AFTER=[]\npost-merge-14.log' ]] || fail "그 스펙 번호를 싣고 통과한 검증이 있었는데 루프 끝에 또 돎: $out"
+# 실패하면 무인 수습을 거쳐 스펙 이슈로 멈춘다(앞 티켓의 PR 은 싣지 않는다). 스펙 완료는 창이 비어도 상태 파일에 남아 다시 실행한 루프가 같은 번호로
+# 다시 돌고, 수습 세션이 읽는 멈춤 기록의 창(post_merge_window)에도 실린다
+out="$(pmw "PM_BASE=$C4; STOP_ISSUE=; CUR_PR=99; POST_MERGE_CMD='exit 1'; issue_title() { echo \"스펙 \$1\"; }; CLOSED_SPECS=' 40'; pm_spec_closed 40
+  triage() { echo \"TRIAGE \$1 [\$STOP_ISSUE] [\$CUR_PR] \$CUR_TITLE | \$(pm_window_json)\"; TRIAGE_NOTE=' (no triage: t)'; return 1; }
+  die() { echo \"DIE \$*\"; jq -c . \"\$PM_STATE_FILE\"; exit 7; }; pm_flush_end 2>/dev/null")" || true
+grep -qxF "TRIAGE post_merge_failed [40] [] 스펙 40 | {\"base\":\"$C4\",\"first_failing_commit\":null,\"bisect\":null,\"pending\":[],\"spec_complete\":[40]}" <<<"$out" \
+  && grep -qxF "DIE #40: post-merge check failed on the merged main (spec-end check for spec #40 — no merge was left unchecked). Check the log ($W/repo/.ticket-loop/post-merge-40-end.log) and the check worktree ($W/wt), then rerun after a fix PR. (no triage: t)" <<<"$out" \
+  && grep -qxF "{\"base\":\"$C4\",\"pending\":[],\"spec_complete\":[40]}" <<<"$out" \
+  || fail "창이 빈 스펙 끝 검증의 실패(수습·멈춤 이슈·상태 파일·멈춤 기록의 창): $out"
+# 그 뒤 다시 실행: 스펙 이슈는 이미 닫혀 이번 실행의 CLOSED_SPECS 에 들지 않지만 상태 파일의 스펙 완료로 같은 검증이 돌고, 통과하면 비운다.
+# 검증이 꺼진 실행(--skip-post-merge)은 돌리지도 비우지도 않는다
+st="{\"base\":\"$C4\",\"pending\":[],\"spec_complete\":[40]}"
+out="$(pmw "STOP_ISSUE=; POST_MERGE_CMD='$ENVC'; issue_title() { echo t; }; printf '%s' '$st' > \"\$PM_STATE_FILE\"; pm_load; pm_spec_closed 40
+  pm_flush_end 2>/dev/null; grep '^env ' .ticket-loop/post-merge-40-end.log; jq -c .spec_complete \"\$PM_STATE_FILE\"")"
+[[ "$out" == $'env why=[spec_end] spec=[40]\n[]' ]] || fail "멈춘 뒤 다시 실행한 루프의 스펙 끝 검증: $out"
+out="$(pmw "POST_MERGE=0; printf '%s' '$st' > \"\$PM_STATE_FILE\"; pm_load; pm_flush_end; jq -c .spec_complete \"\$PM_STATE_FILE\"")"
+[[ "$out" == '[40]' ]] || fail "검증이 꺼진 실행이 스펙 끝 검증을 돌리거나 비움: $out"
+echo "ok  창이 빈 채 닫힌 스펙의 루프 끝 검증(#34)"
 
 # 연결: 병합 뒤 창에 넣고(CI 없는 PR 은 빼고) pm_due 로 정한다. 실패 뒤처리는 post_merge_recover. 시작 때 창을 읽고, 끝날 때(대상 없음 포함)
 # 스펙을 닫고(스펙을 끝냈으면 창에 적고) 남은 창을 검증한다 — 루프 끝에서 처음 닫히는 스펙(사람이 마지막 티켓을 닫음·하위 이슈 반영 지연)도
