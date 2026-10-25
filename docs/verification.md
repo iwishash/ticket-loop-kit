@@ -27,6 +27,7 @@ Not yet verified:
 
 - Batched post-merge checks (`POST_MERGE_EVERY` other than 1) and bisecting a batched failure on a real loop (`tests/smoke.sh` covers them with a real git repository and fake commands).
 - The environment the check commands get (`TICKET_LOOP_POST_MERGE_WHY`, `TICKET_LOOP_POST_MERGE_SPEC_COMPLETE`, 0.9.17) on a real loop, especially a rerun after a failed spec-end check and a documentation PR that completes a spec (`tests/smoke.sh` covers them with fake commands and structural checks).
+- The loop-end check for a spec that closes once every merge has been checked (`spec_end` with an empty window, 0.9.18) on a real loop: a person closing the last ticket, a lagging sub-issue list, and a rerun after that check fails and stops on the spec issue (`tests/smoke.sh` covers them with a real git repository and fake commands).
 - `POST_MERGE_PORT`, `POST_MERGE_RETRY_CMD`, `CI_SKIP_CMD`, `CI_SKIP_REGEX`, and the repair prompt on a real ticket (`POST_MERGE_CMD` ran in the triage runs above; every run had 0 repairs). rental-portal (PR #82) has them configured.
 - The label creation and Orca registration steps of `install.sh` (turned off in testing).
 - `/setup-ticket-loop` beyond one run on boiler-webapp.
