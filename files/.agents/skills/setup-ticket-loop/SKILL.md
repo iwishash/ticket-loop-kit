@@ -47,7 +47,8 @@ disable-model-invocation: true
 | `__HEAVY_TESTS__` | 워커가 전체를 돌리지 않을 무거운 스위트의 이름·경로(예 `통합 테스트(tests/integration/)·E2E`). 없으면 "없음" — `worker-rules.md`의 그 줄과 `implement`·`pr`의 그 문단·줄을 지운다 |
 | `__HEAVY_TEST_FILE__` | 그 스위트의 파일 하나를 돌리는 명령(예 `pnpm exec vitest run --config vitest.integration.config.ts <file>`). 워커는 자기가 추가·수정한 파일만 PR 직전 1회 돌리고, 전체는 루프가 병합 뒤(`POST_MERGE_CMD`) 돌린다 |
 | `orca.yaml` setup | 의존성 설치 명령, 복사할 env 파일과 안전 조건 |
-| `POST_MERGE_CMD` 등 | 병합 뒤 검증 명령·복사 파일, 또는 끔. 검증을 상황에 따라 다르게 돌려야 하면(예: 평소엔 로컬 DB, 스펙 끝에만 공유 DB) 명령이 루프가 넘기는 env로 고른다 — `TICKET_LOOP_POST_MERGE_SPEC_COMPLETE`(이 검증이 스펙을 끝낸 병합을 덮으면 그 스펙 번호, 아니면 빈 값), `TICKET_LOOP_POST_MERGE_WHY`(`every`·`spec_end`·`run_end`). 스펙 끝은 이유가 아니라 `TICKET_LOOP_POST_MERGE_SPEC_COMPLETE`로 본다 — `POST_MERGE_EVERY=1`이면 스펙 끝의 검증도 `every`다 |
+| `POST_MERGE_CMD` 등 | 병합 뒤 검증 명령·복사 파일, 또는 끔 |
+| 스펙 끝 분기 | 무거운 스위트가 있을 때만 사용자에게 묻는다: 스펙이 끝날 때만 더 무겁게 돌릴 것이 있나(공유·클라우드 DB, 더 넓은 스위트·E2E). 있으면 그 무거운 쪽과 고르는 방법을 적고 아래 "스펙 끝 분기"대로 건다. 없으면 "없음" |
 | `POST_MERGE_PORT` | 그 명령이 띄우는 고정 포트(예 `next dev`의 3000). 루프가 병합마다 비기를 기다리고, 시작할 때 차 있으면 알린다. 없으면 비움 |
 | `POST_MERGE_RETRY_CMD` | `POST_MERGE_CMD`가 실패했을 때 딱 한 번 돌릴 재실행 명령. 그 스위트에 병합과 무관한 플레이크(시간 초과 등)가 있을 때만 — 사용자에게 묻는다. 같은 검증 워크트리에서 `POST_MERGE_FAILED_LOG`(첫 실행 로그 절대 경로)를 받아 돌고, 통과하면 루프는 계속 가며 이슈에 플레이크 의심 코멘트를 남긴다. 실패한 테스트만 다시 돌리는 저장소 스크립트(아래)를 만들어 커밋하고 그 스크립트를 건다. `POST_MERGE_EVERY`가 1이 아니면(기본 4) 묶음 실패의 원인 병합을 찾는 데도 이 명령을 지난 커밋에서 돌린다 — 설치된 의존성에 기대면 앞에 설치 명령을 붙인다(아래 예). 없으면 비움 |
 | `POST_MERGE_EVERY` | 병합 뒤 검증을 병합 몇 개마다 돌리나. 기본 4 — 그대로면 `loop.env`에 쓰지 않는다. 그 명령이 짧으면(몇 분) 사용자에게 묻고 1(병합마다)을 권한다 — 묶어도 아끼는 시간이 없고 어느 병합이 깨뜨렸는지만 흐려진다. 0이면 개수로는 돌리지 않고 스펙·실행이 끝날 때만 돈다(깨진 기본 브랜치 위에 스펙 전체가 쌓일 수 있다). 스펙·실행이 끝날 때는 늘 돌고, 그 사이 병합은 다음 검증이 덮는다. 묶음이 실패하면 루프가 `POST_MERGE_RETRY_CMD`로 처음 실패하는 병합을 찾으므로, 묶을 때는 재실행 명령도 두기를 권한다 |
@@ -67,6 +68,26 @@ pnpm exec vitest run --config vitest.integration.config.ts $files
 
 실패한 파일을 못 찾으면(설치·환경 점검 단계에서 실패) 다시 돌리지 않고 실패로 끝내야 한다 — 진짜 깨진 기본 브랜치가 재실행에 묻히지 않게. 로그에 ANSI 색 코드가 섞여 있고 macOS 기본 `sed`는 `\x1b`를 못 알아들어 `perl`로 지운다.
 
+**스펙 끝 분기.** 루프는 병합 뒤 검증 명령(첫 실행·재실행·이분 탐색·수습 뒤 재검증)에 env 둘을 넘긴다. `TICKET_LOOP_POST_MERGE_SPEC_COMPLETE`는 이 검증이 스펙을 끝낸 병합을 덮으면 그 스펙 번호, 아니면 빈 값이다. `TICKET_LOOP_POST_MERGE_WHY`는 `every`·`spec_end`·`run_end`다. 무거운 쪽은 `TICKET_LOOP_POST_MERGE_SPEC_COMPLETE`로 고른다 — 루프가 창이 찼는지를 먼저 보므로 `POST_MERGE_EVERY=1`이면 스펙 끝의 검증도 `WHY`가 `every`다. 고르는 부분은 한 파일에 두고 첫 실행 스크립트와 재실행 스크립트(`POST_MERGE_RETRY_CMD`를 쓰면)가 둘 다 맨 앞에서 source 한다. 재실행도 같은 값을 받으므로, 실패한 검증과 같은 쪽에서 다시 돈다. 스크립트를 커밋하고(검증 워크트리는 병합된 기본 브랜치다) `POST_MERGE_CMD="${POST_MERGE_CMD:-bash scripts/post-merge.sh}"`로 건다. `POST_MERGE_EVERY`는 가벼운 쪽의 길이로 정한다(몇 분이면 1 — 평소 검증은 병합마다, 무거운 쪽은 스펙마다 한 번). 무거운 쪽이 쓰는 비밀 값(공유 DB 주소 등)은 스크립트에 쓰지 않고 `POST_MERGE_COPY`로 복사되는 env 파일에서 읽게 한다:
+
+```bash
+# scripts/post-merge-env.sh — 첫 실행·재실행 스크립트가 맨 앞에서 source 한다
+if [ -n "${TICKET_LOOP_POST_MERGE_SPEC_COMPLETE:-}" ]; then
+  export TEST_DB=shared   # 무거운 쪽 — 이 저장소가 공유 DB·넓은 스위트를 고르는 방법으로 바꾼다
+else
+  export TEST_DB=local
+fi
+echo "post-merge: TEST_DB=${TEST_DB} (spec complete: ${TICKET_LOOP_POST_MERGE_SPEC_COMPLETE:-none})"
+```
+
+```bash
+# scripts/post-merge.sh — POST_MERGE_CMD
+. scripts/post-merge-env.sh
+pnpm run test:integration   # 이 저장소의 무거운 스위트 명령
+```
+
+재실행 스크립트(위 `scripts/post-merge-retry.sh`)는 첫 줄에 `. scripts/post-merge-env.sh`를 더한다.
+
 ## 4. 쓰기
 
 새 브랜치(`chore/ticket-loop-setup`)를 `origin/<기본 브랜치>`에서 만들고 다음을 쓴다.
@@ -76,7 +97,7 @@ pnpm exec vitest run --config vitest.integration.config.ts $files
 3. **`orca.yaml`**(`BACKEND=orca`일 때만): `scripts.setup`에 설치 명령, env 파일 복사(`$ORCA_ROOT_PATH` → `$ORCA_WORKTREE_PATH`, 운영 값이 섞이면 복사하지 않는 조건 포함), `setupAgentStartupPolicy: wait-for-setup`. 파일 맨 위 주석에 Orca 앱의 Command Source를 "orca.yaml only"로 바꿔야 쓰인다고 적는다.
 4. **`.ticket-loop/loop.env`**: 루프의 저장소별 기본값을 `VAR="${VAR:-값}"` 꼴로 쓴다(`BACKEND`, `AGENT`, `CI_SKIP_REGEX`, `POST_MERGE_CMD`, `POST_MERGE_RETRY_CMD`, `POST_MERGE_COPY`, `POST_MERGE_PORT`, 기본 4와 다를 때만 `POST_MERGE_EVERY`, cmux·tmux면 `WORKTREE_SETUP_CMD`, 필요하면 `MERGE_METHOD`, 끌 때만 `LOOP_TRIAGE`). 이미 있는 줄(npx 설치기가 쓴 `BACKEND`·`AGENT`)은 그대로 둔다.
 5. **CI**: PR에서 도는 워크플로가 없으면 `__VERIFY__`를 도는 최소 워크플로를 만든다(비밀 값 없이, 경로 필터 없이 — 필터는 저장소가 원할 때 두는 것이다). 이미 경로 필터가 있으면 `CI_SKIP_REGEX` 또는 `CI_SKIP_CMD`를 같은 판정이 나오게 맞추고, 문서만 바꾸는 PR과 코드 PR을 하나씩 떠올려 둘 다 맞는지 확인한다.
-6. **`docs/agents/ticket-loop.md`**: 이 저장소의 운영 문서. 흐름(`/grill-with-docs` → `/to-spec` → `/to-tickets` → `bash scripts/ticket-loop.sh --parent <스펙>` → 스펙 리포트 `docs/loop-reports/spec-<N>.html` 검수 → `/retro`; Codex에서는 `/`를 `$`로), 실행 명령, 위 결정 표, 사람이 할 일(Orca 앱 설정, 병합, 리포트 PR 커밋, Codex면 저장소 `.codex/` 신뢰), 복구는 가이드북 10장과 `bash scripts/ticket-state.sh N`을 가리킨다. `POST_MERGE_PORT`가 있으면 "실행 전 `lsof -nP -iTCP:<포트> -sTCP:LISTEN`으로 비어 있는지 본다"와 "로그가 '포트 … 사용 중'에서 조용하면 멈춤이 아니라 대기다(가이드북 R10)"를 적는다. `POST_MERGE_CMD`가 있으면 "병합 뒤 검증 로그는 `LOG_FILE`과 같은 디렉터리의 `post-merge-N.log`(기본 저장소 루트의 `.ticket-loop/post-merge-N.log`)이고 루프의 '병합 뒤 검증 시작'·ERROR 줄에 절대 경로가 찍힌다. 검증 워크트리 안이 아니다"도 적는다(R10). `POST_MERGE_RETRY_CMD`가 있으면 "실패하면 한 번 재실행하고 출력은 같은 디렉터리의 `post-merge-N-retry.log`다. 재실행에서 통과하면 이슈에 '병합 뒤 검증 재시도 통과 — 플레이크 의심' 코멘트가 달리고 루프는 계속 간다 — 같은 테스트가 되풀이되면 고칠 대상이다. 재실행까지 실패하면 ERROR 줄에 두 로그가 찍힌다"도 적는다. `POST_MERGE_CMD`가 있고 `POST_MERGE_EVERY`가 1이 아니면(기본 4) "병합 뒤 검증은 병합 N개마다(0이면 개수로는 돌지 않는다)와 스펙·실행이 끝날 때 돈다. 그 사이 티켓의 요약·리포트에는 'deferred'가 찍히고, 다음 검증이 그 병합을 덮는다. 묶음이 실패하면 루프가 처음 실패하는 병합을 찾아 멈춤 사유에 적는다(검증 로그 옆 `post-merge-N-bisect-<커밋>.log`)"도 적는다. 무인 수습이 켜져 있으면(기본) "멈출 일이 생기면 루프가 먼저 수습 세션을 띄우고 판정을 기다린다. Slack에 '수습 시작'이 오면 기다리면 된다 — 고쳐지면 '이어 감'이, 아니면 진단이 붙은 멈춤 알림이 온다. 수습 세션의 수정 PR에는 `loop-triage` 라벨이 붙으니 나중에 몰아서 본다. 멈출 때마다 `.ticket-loop/stops/<id>.json`이 남고, 직접 이어받으려면 `/loop-triage <id>`(가이드북 10.6)"도 적는다. 키트 버전은 `.ticket-loop/kit.json`을 가리킨다.
+6. **`docs/agents/ticket-loop.md`**: 이 저장소의 운영 문서. 흐름(`/grill-with-docs` → `/to-spec` → `/to-tickets` → `bash scripts/ticket-loop.sh --parent <스펙>` → 스펙 리포트 `docs/loop-reports/spec-<N>.html` 검수 → `/retro`; Codex에서는 `/`를 `$`로), 실행 명령, 위 결정 표, 사람이 할 일(Orca 앱 설정, 병합, 리포트 PR 커밋, Codex면 저장소 `.codex/` 신뢰), 복구는 가이드북 10장과 `bash scripts/ticket-state.sh N`을 가리킨다. `POST_MERGE_PORT`가 있으면 "실행 전 `lsof -nP -iTCP:<포트> -sTCP:LISTEN`으로 비어 있는지 본다"와 "로그가 '포트 … 사용 중'에서 조용하면 멈춤이 아니라 대기다(가이드북 R10)"를 적는다. `POST_MERGE_CMD`가 있으면 "병합 뒤 검증 로그는 `LOG_FILE`과 같은 디렉터리의 `post-merge-N.log`(기본 저장소 루트의 `.ticket-loop/post-merge-N.log`)이고 루프의 '병합 뒤 검증 시작'·ERROR 줄에 절대 경로가 찍힌다. 검증 워크트리 안이 아니다"도 적는다(R10). `POST_MERGE_RETRY_CMD`가 있으면 "실패하면 한 번 재실행하고 출력은 같은 디렉터리의 `post-merge-N-retry.log`다. 재실행에서 통과하면 이슈에 '병합 뒤 검증 재시도 통과 — 플레이크 의심' 코멘트가 달리고 루프는 계속 간다 — 같은 테스트가 되풀이되면 고칠 대상이다. 재실행까지 실패하면 ERROR 줄에 두 로그가 찍힌다"도 적는다. `POST_MERGE_CMD`가 있고 `POST_MERGE_EVERY`가 1이 아니면(기본 4) "병합 뒤 검증은 병합 N개마다(0이면 개수로는 돌지 않는다)와 스펙·실행이 끝날 때 돈다. 그 사이 티켓의 요약·리포트에는 'deferred'가 찍히고, 다음 검증이 그 병합을 덮는다. 묶음이 실패하면 루프가 처음 실패하는 병합을 찾아 멈춤 사유에 적는다(검증 로그 옆 `post-merge-N-bisect-<커밋>.log`)"도 적는다. 스펙 끝 분기를 걸었으면 "스펙을 끝낸 병합을 덮는 검증만 <무거운 쪽>으로 돈다(`scripts/post-merge-env.sh`가 `TICKET_LOOP_POST_MERGE_SPEC_COMPLETE`로 고른다). 어느 쪽이었는지는 검증 로그 첫 두 줄(루프가 넘긴 값, 스크립트가 고른 쪽)과 스펙 리포트의 '(…, spec #N complete)'로 본다"도 적는다. 무인 수습이 켜져 있으면(기본) "멈출 일이 생기면 루프가 먼저 수습 세션을 띄우고 판정을 기다린다. Slack에 '수습 시작'이 오면 기다리면 된다 — 고쳐지면 '이어 감'이, 아니면 진단이 붙은 멈춤 알림이 온다. 수습 세션의 수정 PR에는 `loop-triage` 라벨이 붙으니 나중에 몰아서 본다. 멈출 때마다 `.ticket-loop/stops/<id>.json`이 남고, 직접 이어받으려면 `/loop-triage <id>`(가이드북 10.6)"도 적는다. 키트 버전은 `.ticket-loop/kit.json`을 가리킨다.
    `docs/loop-reports/README.md`(키트 템플릿)는 `REPORT_DIR`를 바꿨을 때만 그 경로로 옮긴다.
 7. **`AGENTS.md`**의 `## Agent skills` 블록이 정본이다(Codex는 `AGENTS.md`만 읽고, Claude Code는 `CLAUDE.md`를 읽는다). 없으면 만든다. 블록 안에 `### Issue tracker` 소제목과 "Issues live in GitHub Issues. See `docs/agents/issue-tracker.md`." 한 줄이 있어야 한다 — 벤더링된 스킬은 트래커 설정을 이 블록으로 받는다(없으면 `/setup-ticket-loop`를 실행하라고 사용자에게 되묻는다). 이어서 두 줄을 더한다: 작업 흐름은 `docs/agents/ticket-loop.md`, 티켓 구현 절차는 `.agents/skills/implement/SKILL.md`가 단일 진실. 리뷰는 `ticket-review`. 블록이 이미 있으면 그 안을 고치고 중복 블록을 만들지 않는다. 블록이 `CLAUDE.md`에 있으면(0.6 이하 설치본) `AGENTS.md`로 옮긴다. 그다음 `CLAUDE.md`에 `@AGENTS.md` 한 줄이 있게 한다(없으면 맨 위에 더한다. `CLAUDE.md`가 없으면 그 한 줄로 만든다) — Claude Code가 가져오기 문법으로 `AGENTS.md`를 읽는다.
 
@@ -89,6 +110,7 @@ pnpm exec vitest run --config vitest.integration.config.ts $files
 - `__VERIFY__`를 한 번 돌려 통과한다(실패하면 원인을 보고하고, 기존 실패인지 이번 변경 탓인지 가른다).
 - `bash scripts/ticket-loop.sh --dry-run`이 저장소·기준 브랜치·병합 뒤 검증 설정을 찍고 정상 종료한다(`POST_MERGE_PORT`를 정했으면 그 포트가 차 있을 때 "주의: 포트 … 사용 중" 줄이 나오는지도 한 번 본다).
 - `orca.yaml`의 setup 명령(cmux·tmux면 `WORKTREE_SETUP_CMD`)을 메인 체크아웃에서 그대로 실행해 성공한다(설치 명령만, 복사는 건너뛴다).
+- 스펙 끝 분기를 걸었으면 고르는 부분을 두 값으로 한 번씩 source 해 각각 가벼운 쪽·무거운 쪽을 고른다: `TICKET_LOOP_POST_MERGE_SPEC_COMPLETE= bash -c '. scripts/post-merge-env.sh'`와 `TICKET_LOOP_POST_MERGE_SPEC_COMPLETE=1 bash -c '. scripts/post-merge-env.sh'`. 스위트 자체는 돌리지 않는다.
 
 ## 6. PR
 
@@ -96,5 +118,6 @@ pnpm exec vitest run --config vitest.integration.config.ts $files
 
 - Orca면: Settings → Projects → <저장소> → Worktree Hooks → Advanced: Command Source "orca.yaml only", "Wait for setup to complete before starting agent" 켜기. cmux면: 루프를 cmux 터미널 안에서 돌린다(소켓 모드 기본값 cmuxOnly). tmux면: `tmux`가 설치돼 있으면 된다 — 워커 창은 `tmux attach -t ticket-loop`으로 본다
 - PR 병합(워커 규칙·스킬은 `origin/<기본 브랜치>`에 있어야 워커가 본다)
+- 스펙 끝 분기의 무거운 쪽이 비밀 값을 쓰면: 루프를 돌리는 기계마다 메인 체크아웃의 그 env 파일(`POST_MERGE_COPY`)에 값을 둔다
 - `AGENT=codex`면: 이 저장소의 `.codex/`를 Codex에서 신뢰해야 `.codex/rules`가 적용된다. `--dangerously-bypass-approvals-and-sandbox` 아래에서도 유지되는지는 실측 전이니 GitHub 브랜치 보호를 켠다
 - 병합 뒤 작은 티켓 하나로 `bash scripts/ticket-loop.sh --max 1`을 지켜보기
