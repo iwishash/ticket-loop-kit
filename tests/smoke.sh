@@ -729,7 +729,7 @@ out="$(postmerge_case 'sleep 1; exit 1' '.ticket-loop/loop-0101.log' pass 'sleep
 # 병합 전에 멈춘 티켓의 기록에 post_merge=skipped 가 남지 않게: 티켓 시작 때는 비우고, 병합 뒤 검증을 하지 않기로 할 때만 skipped(0.9.6까지의 버그)
 rt="$(sed -n '/^run_ticket() {/,/^}/p' "$KIT/files/scripts/ticket-loop.sh")"
 merge_at="$(grep -n 'if ! merge_pr "${pr}"; then' <<<"$rt" | cut -d: -f1)"
-grep -qxF '  POST_MERGE_RESULT=""; POST_MERGE_LOG=""; POST_MERGE_RETRY_LOG=""' "$KIT/files/scripts/ticket-loop.sh" && ! grep -q 'POST_MERGE_RESULT="skipped"; ' "$KIT/files/scripts/ticket-loop.sh" \
+grep -qxF '  POST_MERGE_RESULT=""; POST_MERGE_LOG=""; POST_MERGE_RETRY_LOG=""; POST_MERGE_WHY=""; POST_MERGE_SPEC_COMPLETE=""' <<<"$rt" && ! grep -q 'POST_MERGE_RESULT="skipped"; ' "$KIT/files/scripts/ticket-loop.sh" \
   && [[ -n "$merge_at" && "$(grep -c 'POST_MERGE_RESULT="skipped"' <<<"$rt")" -ge 1 ]] \
   && [[ -z "$(grep -n 'POST_MERGE_RESULT="skipped"' <<<"$rt" | cut -d: -f1 | awk -v m="$merge_at" '$1 < m')" ]] \
   || fail "POST_MERGE_RESULT 를 티켓 시작 때 skipped 로 채운다(병합 전 멈춘 기록이 '검증 건너뜀'으로 남음)"
@@ -874,7 +874,7 @@ C0="$(pmw_commit init)"; C1="$(pmw_commit 'merge #11' a)"; C2="$(pmw_commit 'mer
 git -C "$W/repo" push -q origin HEAD:main 2>/dev/null; git -C "$W/repo" fetch -q origin
 sed -n '/^# ---------- 병합 뒤 검증 ----------/,/^# ---------- 티켓 기록 · 스펙 리포트 ----------/p' "$KIT/files/scripts/ticket-loop.sh" > "$W/fn.sh"
 sed -n '/^abs_path() /p; /^bg_wait() {/,/^}/p; /^PH_NAME=/p; /^phase() {/,/^}/p; /^pick_next_targets() {/,/^}/p' "$KIT/files/scripts/ticket-loop.sh" >> "$W/fn.sh"
-for f in pm_count pm_list pm_cover pm_of pm_save pm_load pm_add pm_passed pm_due pm_probe pm_describe pm_bisect pm_window_json post_merge_recover pm_flush_end; do
+for f in pm_count pm_list pm_cover pm_of pm_save pm_load pm_add pm_spec_closed pm_passed pm_due pm_exec pm_probe pm_describe pm_bisect pm_window_json post_merge_recover pm_flush_end; do
   grep -q "^${f}() {" "$W/fn.sh" || fail "병합 뒤 검증 절에 ${f} 가 없음"
 done
 WIN4="$(printf '11\t21\t%s\n12\t22\t%s\n13\t23\t%s\n14\t24\t%s' "$C1" "$C2" "$C3" "$C4")"
@@ -903,8 +903,8 @@ out="$(pmw "pm_add 11 21 $C1; pm_add 12 22 $C2; pm_add 13 '' ''
   pm_passed $C4; echo \"PASSED=\$PM_BASE|\$(pm_count)\"; jq -c . \"\$PM_STATE_FILE\"
   PM_BASE=; pm_save; [[ ! -e \"\$PM_STATE_FILE\" ]] && echo REMOVED")" || fail "창 저장·읽기 실패: $out"
 grep -qxF "BASE=$C0 COUNT=3 LIST=#11 #12 #13 COVER11=[, covering #11 #12 #13] COVER13=[, covering #11 #12 #13]" <<<"$out" \
-  && grep -qxF "{\"base\":\"$C0\",\"pending\":[{\"issue\":11,\"pr\":21,\"commit\":\"$C1\"},{\"issue\":12,\"pr\":22,\"commit\":\"$C2\"},{\"issue\":13,\"pr\":null,\"commit\":null}]}" <<<"$out" \
-  && grep -qxF "LOADED=$C0|3|#11 #12 #13" <<<"$out" && grep -qxF "PASSED=$C4|0" <<<"$out" && grep -qxF "{\"base\":\"$C4\",\"pending\":[]}" <<<"$out" && grep -qx REMOVED <<<"$out" \
+  && grep -qxF "{\"base\":\"$C0\",\"pending\":[{\"issue\":11,\"pr\":21,\"commit\":\"$C1\"},{\"issue\":12,\"pr\":22,\"commit\":\"$C2\"},{\"issue\":13,\"pr\":null,\"commit\":null}],\"spec_complete\":[]}" <<<"$out" \
+  && grep -qxF "LOADED=$C0|3|#11 #12 #13" <<<"$out" && grep -qxF "PASSED=$C4|0" <<<"$out" && grep -qxF "{\"base\":\"$C4\",\"pending\":[],\"spec_complete\":[]}" <<<"$out" && grep -qx REMOVED <<<"$out" \
   || fail "창 저장·읽기: $out"
 out="$(pmw "pm_add 14 24 $C4; echo \"COVER=[\$(pm_cover 14)]\"")"; grep -qxF 'COVER=[]' <<<"$out" || fail "창에 그 티켓 하나뿐인데 결과 꼬리가 붙음: $out"
 # 시작 커밋이 기본 브랜치에 없으면(강제 push) 시작만 버리고 병합은 남긴다. 못 읽는 파일은 무시
@@ -1014,7 +1014,7 @@ out="$(pmw "PM_PENDING=\"$WIN4\"; POST_MERGE_CMD='exit 1'; post_merge_recover() 
 grep -qx 'DIE why 14' <<<"$out" || fail "루프 끝 검증이 실패하면 창의 마지막 티켓으로 멈춰야 함: $out"
 [[ "$(pmw "PM_PENDING=\"$WIN4\"; POST_MERGE=0; pm_flush_end; echo DONE")" == DONE && "$(pmw 'pm_flush_end; echo DONE')" == DONE ]] || fail "검증이 꺼졌거나 창이 비면 루프 끝 검증을 하지 않아야 함"
 out="$(pmw "PM_BASE=$C0; PM_PENDING=\"\$(head -n 2 <<<\"$WIN4\")\"; PM_BISECT=b; PM_FIRST_FAILING=$C2; pm_window_json; PM_PENDING=; pm_window_json")"
-[[ "$out" == "{\"base\":\"$C0\",\"first_failing_commit\":\"$C2\",\"bisect\":\"b\",\"pending\":[{\"issue\":11,\"pr\":21,\"commit\":\"$C1\"},{\"issue\":12,\"pr\":22,\"commit\":\"$C2\"}]}"$'\n'null ]] || fail "멈춤 기록의 창: $out"
+[[ "$out" == "{\"base\":\"$C0\",\"first_failing_commit\":\"$C2\",\"bisect\":\"b\",\"pending\":[{\"issue\":11,\"pr\":21,\"commit\":\"$C1\"},{\"issue\":12,\"pr\":22,\"commit\":\"$C2\"}],\"spec_complete\":[]}"$'\n'null ]] || fail "멈춤 기록의 창: $out"
 grep -qF 'post_merge_worktree: ($pm_wt | str), post_merge_window: $pm_window,' "$KIT/files/scripts/ticket-loop.sh" \
   && grep -qF -- '- 아직 병합 뒤 검증을 통과하지 않은 병합: $(pm_list)' "$KIT/files/scripts/ticket-loop.sh" || fail "멈춤 기록·GitHub 기록에 창이 없음"
 # 리포트: 미룬 티켓은 "deferred", 묶음을 돌린 티켓은 덮은 병합을 적고 그 시간은 그 티켓에만 든다
@@ -1024,27 +1024,76 @@ jq -rn --arg prefix issue- --arg now "2026-10-21 09:00" --argjson spec '{"number
   --argjson prs '[{"number":71,"title":"P1","body":"","state":"MERGED","url":"https://x/p71","createdAt":"2026-10-21T00:30:00Z","mergedAt":"2026-10-21T00:40:00Z","headRefName":"issue-61-a"},
                   {"number":72,"title":"P2","body":"","state":"MERGED","url":"https://x/p72","createdAt":"2026-10-21T01:30:00Z","mergedAt":"2026-10-21T01:40:00Z","headRefName":"issue-62-b"}]' \
   --argjson recs '[{"spec":60,"issue":61,"title":"T01: 하나","result":"merged","started":"2026-10-21T00:00:00Z","finished":"2026-10-21T00:41:00Z","wall_sec":2460,"impl_sec":1800,"repair_sec":0,"ci_wait_sec":600,"post_merge_sec":0,"repairs":0,"agent":"claude","pr":71,"ci_sec":500,"post_merge":"deferred (1/2 pending)","model":"Opus 5.5"},
-                   {"spec":60,"issue":62,"title":"T02: 둘","result":"merged","started":"2026-10-21T01:00:00Z","finished":"2026-10-21T02:31:00Z","wall_sec":5460,"impl_sec":1800,"repair_sec":0,"ci_wait_sec":600,"post_merge_sec":3000,"repairs":0,"agent":"claude","pr":72,"ci_sec":500,"post_merge":"passed in 3000s, covering #61 #62","model":"Opus 5.5"}]' \
+                   {"spec":60,"issue":62,"title":"T02: 둘","result":"merged","started":"2026-10-21T01:00:00Z","finished":"2026-10-21T02:31:00Z","wall_sec":5460,"impl_sec":1800,"repair_sec":0,"ci_wait_sec":600,"post_merge_sec":3000,"repairs":0,"agent":"claude","pr":72,"ci_sec":500,"post_merge":"passed in 3000s, covering #61 #62","post_merge_why":"every","post_merge_spec_complete":[60],"model":"Opus 5.5"}]' \
   "$RJQ" > "$W/report.html" || fail "묶음 리포트 jq 실패"
+# 검증이 받은 env(#32)는 결과 뒤 괄호에 — 어느 검증이 무거운 쪽이었는지 보인다. 없는 기록(미룬 티켓, 지난 기록)은 전과 같다
 grep -F 'https://x/61"' "$W/report.html" | grep -qF '0 repairs · post-merge check deferred (1/2 pending)</div></td><td class="nw">30m</td><td class="nw">10m</td><td class="nw">—</td>' \
-  && grep -F 'https://x/62"' "$W/report.html" | grep -qF '0 repairs · post-merge check passed, covering #61 #62</div></td><td class="nw">30m</td><td class="nw">10m</td><td class="nw">50m</td>' \
+  && grep -F 'https://x/62"' "$W/report.html" | grep -qF '0 repairs · post-merge check passed, covering #61 #62 (every, spec #60 complete)</div></td><td class="nw">30m</td><td class="nw">10m</td><td class="nw">50m</td>' \
   && grep -qF '<div class="v">50m</div><div class="l"><span class="dot s-post"></span>Post-merge check</div>' "$W/report.html" && grep -qF 'say "post-merge check deferred"' "$W/report.html" \
   || fail "묶음 리포트: $(grep -F 'https://x/6' "$W/report.html")"
 ! grep -q 'id="decisions"\|class="flag"\|class="kpi"><div class="v">0</div><div class="l"></div>' "$W/report.html" || fail "리포트: REPORT_DECISIONS_HEADING 이 없는데 사람 확인 필요 목록·표시·KPI 를 그림"
 echo "ok  묶어 돌리는 검증 — 멈춤 사유·수습 뒤 검증·루프 끝 검증·멈춤 기록"
 
+# 검증 명령이 받는 env(#32): 왜 도는지(TICKET_LOOP_POST_MERGE_WHY — every·spec_end·run_end)와 이 검증이 덮는 병합이 끝낸 스펙
+# (TICKET_LOOP_POST_MERGE_SPEC_COMPLETE, 없으면 빈 값). 재실행·이분 탐색도 첫 실행과 같은 값을 받는다 — 실패한 검증과 같은 조건(같은 DB 등)으로
+# 다시 돈다. 받은 값은 검증 로그마다 첫 줄에 남는다
+ENVC='echo "env why=[$TICKET_LOOP_POST_MERGE_WHY] spec=[$TICKET_LOOP_POST_MERGE_SPEC_COMPLETE]"'
+pm_env_logs() { pmw "PM_BASE=$C0; PM_PENDING=\"$WIN4\"; $1; run_post_merge 14 || true
+  for f in .ticket-loop/post-merge-14*.log; do echo \"LOG \$(basename \"\$f\"): \$(head -n 1 \"\$f\") | \$(grep '^env ' \"\$f\" || true)\"; done"; }
+out="$(pm_env_logs "PM_WHY_KEY=spec_end; PM_SPEC_COMPLETE=60; POST_MERGE_CMD='$ENVC; $FULL'; POST_MERGE_RETRY_CMD='$ENVC; $PROBE'")"
+[[ "$(grep -c '^LOG post-merge-14.*\.log: # ticket-loop: TICKET_LOOP_POST_MERGE_WHY="spec_end" TICKET_LOOP_POST_MERGE_SPEC_COMPLETE="60" | env why=\[spec_end\] spec=\[60\]$' <<<"$out")" == 5 ]] \
+  && grep -q '^LOG post-merge-14.log: ' <<<"$out" && grep -q '^LOG post-merge-14-retry.log: ' <<<"$out" && [[ "$(grep -c '^LOG post-merge-14-bisect-' <<<"$out")" == 3 ]] \
+  || fail "첫 실행·재실행·이분 탐색이 같은 env 를 받고 로그 첫 줄에 남겨야 함: $out"
+out="$(pm_env_logs "POST_MERGE_CMD='$ENVC'")"
+grep -qxF 'LOG post-merge-14.log: # ticket-loop: TICKET_LOOP_POST_MERGE_WHY="" TICKET_LOOP_POST_MERGE_SPEC_COMPLETE="" | env why=[] spec=[]' <<<"$out" || fail "값이 없으면 빈 값으로 넘겨야 함: $out"
+# 왜 도는지는 pm_due 가 정한다 — 창이 참 every, 스펙 끝 spec_end, 이번 실행의 마지막(--max·번호 지정·남은 대상 없음) run_end, 미루면 비움.
+# 창이 차는 조건을 먼저 보므로 POST_MERGE_EVERY=1 이면 스펙을 끝낸 병합도 every 다(그래서 스펙 완료는 따로 넘긴다)
+due_key() { pmw "PM_PENDING=\"\$(printf '%s\n' \"$WIN4\" | awk 'NR <= $1')\"; PM_WHY_KEY=stale; $2; pm_due ${3:-12} ${4:-0} || true; echo \"KEY=[\$PM_WHY_KEY]\""; }
+[[ "$(due_key 4 : 14)" == 'KEY=[every]' && "$(due_key 1 'POST_MERGE_EVERY=1; CLOSED_SPECS=" 40"' 12 40)" == 'KEY=[every]' && "$(due_key 2 'CLOSED_SPECS=" 40"' 12 40)" == 'KEY=[spec_end]' \
+   && "$(due_key 2 'MAX=3; done_count=2')" == 'KEY=[run_end]' && "$(due_key 2 'TICKETS=(11 12 13); done_count=2')" == 'KEY=[run_end]' && "$(due_key 2 'PICK="12\tT02\n"')" == $'PICK\nKEY=[run_end]' \
+   && "$(due_key 2 'PICK="15\tT05\n"')" == $'PICK\nKEY=[]' && "$(due_key 0 'CLOSED_SPECS=" 40"' 12 40)" == 'KEY=[]' ]] \
+  || fail "pm_due 의 이유 키: $(due_key 4 : 14) $(due_key 1 'POST_MERGE_EVERY=1; CLOSED_SPECS=" 40"' 12 40) $(due_key 2 'CLOSED_SPECS=" 40"' 12 40) $(due_key 2 'MAX=3; done_count=2') $(due_key 2 'PICK="12\tT02\n"') $(due_key 2 'PICK="15\tT05\n"')"
+# 스펙을 끝낸 병합(이번 실행이 스펙 이슈를 닫음 — CLOSED_SPECS)은 창에 적힌다. 같은 스펙은 한 번, 스펙이 없거나(0) 안 끝났으면 적지 않는다.
+# 창과 함께 저장돼, 스펙 끝의 검증이 실패해 멈춘 뒤 다시 실행한 루프의 검증도 같은 값을 받는다. 통과하면 비운다. 창이 비었으면(CI 없는 문서 PR만)
+# 덮을 검증이 없어 적지 않는다. 0.9.16 의 상태 파일(spec_complete 없음)은 빈 값으로 읽는다
+out="$(pmw "pm_add 11 21 $C1; CLOSED_SPECS=' 40 41'; pm_spec_closed 0; pm_spec_closed 39; pm_spec_closed 40; pm_spec_closed 40; pm_spec_closed 41
+  echo \"S=[\$PM_SPEC_COMPLETE]\"; jq -c .spec_complete \"\$PM_STATE_FILE\"
+  PM_SPEC_COMPLETE=; PM_PENDING=; pm_load; echo \"LOADED=[\$PM_SPEC_COMPLETE]|\$(pm_list)\"; pm_window_json | jq -c .spec_complete
+  pm_passed $C4; echo \"PASSED=[\$PM_SPEC_COMPLETE]\"; jq -c .spec_complete \"\$PM_STATE_FILE\"
+  pm_spec_closed 40; echo \"EMPTY=[\$PM_SPEC_COMPLETE]\"
+  printf '%s' '{\"base\":null,\"pending\":[{\"issue\":11,\"pr\":21,\"commit\":\"$C1\"}]}' > \"\$PM_STATE_FILE\"; PM_SPEC_COMPLETE=x; pm_load; echo \"OLD=[\$PM_SPEC_COMPLETE]|\$(pm_list)\"")"
+[[ "$out" == $'S=[40 41]\n[40,41]\nLOADED=[40 41]|#11\n[40,41]\nPASSED=[]\n[]\nEMPTY=[]\nOLD=[]|#11' ]] || fail "창에 적는 스펙 완료(저장·읽기·통과·빈 창·지난 상태 파일): $out"
+# 검증이 꺼진 실행(--skip-post-merge)은 창을 건드리지 않는다 — 루프 끝(메인)에서도 부르므로
+[[ "$(pmw "pm_add 11 21 $C1; POST_MERGE=0; CLOSED_SPECS=' 40'; pm_spec_closed 40; echo \"S=[\$PM_SPEC_COMPLETE]\"")" == 'S=[]' ]] || fail "검증이 꺼졌는데 창에 스펙 완료를 적음"
+# 루프 끝 검증은 run_end 와 창에 적힌 스펙을 받는다(지난 실행이 스펙 끝 검증에서 멈추며 남긴 창이면 그 스펙). 수습 뒤 재검증은 실패한 검증과 같은 값
+out="$(pmw "PM_BASE=$C0; PM_PENDING=\"\$(head -n 2 <<<\"$WIN4\")\"; PM_SPEC_COMPLETE=40; PM_WHY_KEY=every; POST_MERGE_CMD='$ENVC'; issue_title() { echo t; }
+  pm_flush_end 2>/dev/null; grep '^env ' .ticket-loop/post-merge-12-end.log")"
+[[ "$out" == 'env why=[run_end] spec=[40]' ]] || fail "루프 끝 검증의 env: $out"
+out="$(pmw "PM_BASE=$C0; PM_PENDING=\"$WIN4\"; PM_WHY_KEY=spec_end; PM_SPEC_COMPLETE=40; POST_MERGE_CMD='$ENVC'; POST_MERGE_LOG=/l/pm-14.log; POST_MERGE_RETRY_LOG=; POST_MERGE_RESULT=first
+  triage() { return 0; }; post_merge_recover 14 2>/dev/null; grep '^env ' .ticket-loop/post-merge-14-after-triage.log")"
+[[ "$out" == 'env why=[spec_end] spec=[40]' ]] || fail "수습 뒤 재검증의 env 가 실패한 검증과 다름: $out"
+# 넘긴 값은 티켓 기록에도 남는다(record_ticket) — 통과하면 창의 스펙 완료는 비지만 기록할 값은 남아야 한다
+out="$(pmw "PM_BASE=$C0; PM_PENDING=\"$WIN4\"; PM_WHY_KEY=spec_end; PM_SPEC_COMPLETE=40; run_post_merge 14 2>/dev/null; echo \"REC=\$POST_MERGE_WHY|\$POST_MERGE_SPEC_COMPLETE|[\$PM_SPEC_COMPLETE]\"")"
+[[ "$out" == 'REC=spec_end|40|[]' ]] || fail "기록할 env 값을 남기지 않음: $out"
+echo "ok  병합 뒤 검증 env — 첫 실행·재실행·이분 탐색에 같은 값, 검증 로그 첫 줄"
+
 # 연결: 병합 뒤 창에 넣고(CI 없는 PR 은 빼고) pm_due 로 정한다. 실패 뒤처리는 post_merge_recover. 시작 때 창을 읽고, 끝날 때(대상 없음 포함)
-# 남은 창을 검증한 뒤 스펙을 닫는다. 미룰 때 계산한 대상은 메인 고리가 쓴다. 값 검사
+# 스펙을 닫고(스펙을 끝냈으면 창에 적고) 남은 창을 검증한다 — 루프 끝에서 처음 닫히는 스펙(사람이 마지막 티켓을 닫음·하위 이슈 반영 지연)도
+# 남은 창의 검증이 TICKET_LOOP_POST_MERGE_SPEC_COMPLETE 로 받게(#32). CI 없는 문서 PR 은 창에서 빼되, 스펙을 끝냈으면 넣는다 — 창이 비어 있어도
+# (POST_MERGE_EVERY=1) 스펙 끝의 검증이 돌게. 미룰 때 계산한 대상은 메인 고리가 쓴다. 값 검사
 rt="$(sed -n '/^run_ticket() {/,/^}/p' "$KIT/files/scripts/ticket-loop.sh")"
 [[ "$(grep -n 'if ! merge_pr "${pr}"; then' <<<"$rt" | cut -d: -f1)" -lt "$(grep -n 'pm_add "${n}" "${pr}"' <<<"$rt" | cut -d: -f1)" ]] \
-  && grep -B2 'pm_add "${n}" "${pr}"' <<<"$rt" | grep -qF 'if [[ $ci_sec -ge 0 ]]; then' \
+  && grep -B2 'pm_add "${n}" "${pr}"' <<<"$rt" | grep -qF 'if [[ $ci_sec -ge 0 ]] || spec_closed_this_run "$spec"; then' \
   && grep -A1 'if pm_due "${n}" "$spec"; then' <<<"$rt" | grep -qxF '      run_post_merge "${n}" || post_rc=$?' \
+  && grep -B1 'if pm_due "${n}" "$spec"; then' <<<"$rt" | head -n 1 | grep -q '^    pm_spec_closed "$spec"' \
+  && [[ "$(grep -n '  close_spec_if_done "$spec"' <<<"$rt" | cut -d: -f1)" -lt "$(grep -n 'pm_spec_closed "$spec"' <<<"$rt" | cut -d: -f1)" ]] \
   && grep -qF 'POST_MERGE_RESULT="deferred ($(pm_of) pending)"' <<<"$rt" \
   && grep -qxF '    post_rc=0; post_merge_recover "${n}" || post_rc=$?' <<<"$rt" && grep -qxF '  close_spec_if_done "$spec"' <<<"$rt" \
   || fail "run_ticket 의 묶어 돌리는 검증 연결"
 grep -A3 '^backend_check$' "$KIT/files/scripts/ticket-loop.sh" | sed -n 2p | grep -qx 'pm_load' \
-  && grep -qF '{ pm_flush_end; close_spec_if_done "$PARENT"; write_spec_report; suggest_retro; }' "$KIT/files/scripts/ticket-loop.sh" \
-  && grep -B1 '^close_spec_if_done "$PARENT"$' "$KIT/files/scripts/ticket-loop.sh" | head -n1 | grep -qx 'pm_flush_end' \
+  && grep -qF '{ close_spec_if_done "$PARENT"; pm_spec_closed "$PARENT"; pm_flush_end; write_spec_report; suggest_retro; }' "$KIT/files/scripts/ticket-loop.sh" \
+  && grep -A1 '^close_spec_if_done "$PARENT"; pm_spec_closed "$PARENT"' "$KIT/files/scripts/ticket-loop.sh" | sed -n 2p | grep -qx 'pm_flush_end' \
+  && [[ "$(grep -c '^pm_flush_end$' "$KIT/files/scripts/ticket-loop.sh")" == 1 ]] \
   && grep -qF 'if [[ $NEXT_TARGETS_SET -eq 1 ]]; then targets="$NEXT_TARGETS"; NEXT_TARGETS_SET=0' "$KIT/files/scripts/ticket-loop.sh" \
   || fail "메인의 창 읽기·끝 검증·미리 계산한 대상"
 everyc() { sed -n '/^\[\[ "$POST_MERGE_EVERY" =~/p' "$KIT/files/scripts/ticket-loop.sh" | POST_MERGE_EVERY="$1" bash 2>&1; }
@@ -1323,7 +1372,7 @@ t0="$(date +%s)"; kill -TERM "$bp"; rc=0; wait "$bp" || rc=$?; t1="$(date +%s)"
 sleep 0.5; ! pgrep -f 'sleep 31.7' >/dev/null || { pkill -f 'sleep 31.7'; fail "bg_wait 로 기다리던 자식이 남음"; }
 rm -f "$M/bgcodes"; rc="$(stop_case bgcodes)"; [[ "$rc" == 0 && "$(cat "$M/bgcodes" 2>/dev/null)" == "after-false|3" ]] || fail "bg_wait 종료 코드·set +e: $(cat "$M/bgcodes" 2>/dev/null) (rc $rc)"
 grep -q 'bg_wait wait_for_pr "${n}"' "$KIT/files/scripts/ticket-loop.sh" && grep -q 'bg_wait gh pr checks "$1" --watch' "$KIT/files/scripts/ticket-loop.sh" \
-  && grep -q 'bg_wait terminal_idle "${handle}"' "$KIT/files/scripts/ticket-loop.sh" && grep -q 'bg_wait bash -c .* "$POST_MERGE_CMD"' "$KIT/files/scripts/ticket-loop.sh" \
+  && grep -q 'bg_wait terminal_idle "${handle}"' "$KIT/files/scripts/ticket-loop.sh" && grep -q 'bg_wait pm_exec "$wt" "$POST_MERGE_CMD"' "$KIT/files/scripts/ticket-loop.sh" \
   && grep -q 'bg_wait env LOOP_ROOT_PATH=.* "$WORKTREE_SETUP_CMD"' "$KIT/files/scripts/ticket-loop.sh" || fail "오래 기다리는 다섯 곳(PR·CI·수리 idle·병합 뒤 검증·워크트리 준비)이 bg_wait 를 쓰지 않음"
 ! grep -q 'pr="$(wait_for_pr' "$KIT/files/scripts/ticket-loop.sh" || fail "wait_for_pr 를 다시 커맨드 치환(포그라운드)으로 부른다"
 # 본 스크립트의 연결: 사용자 설정 파일을 저장소 loop.env 보다 먼저 읽고, trap 은 잠금 전에, LOCK_HELD 는 잠금을 잡은 뒤, 티켓마다 STOP_ISSUE,
@@ -1358,7 +1407,7 @@ TICKETS=(${TICKETS_IN:-})
 log() { case "$1" in title|step|ok|warn|err) shift ;; esac; printf '[2026-10-22 10:00:00] %s\n' "$*" >> "$LOG_FILE"; }
 record_ticket() { echo "record $1" >> ev; }
 run_ticket() { echo "run $1 $2" >> ev; }
-pm_flush_end() { :; }; close_spec_if_done() { :; }; write_spec_report() { :; }; suggest_retro() { :; }
+pm_flush_end() { :; }; pm_spec_closed() { :; }; close_spec_if_done() { :; }; write_spec_report() { :; }; suggest_retro() { :; }
 source fn.sh
 REPO_URL=https://github.com/o/r
 trap on_exit EXIT; trap 'on_signal HUP' HUP; trap 'on_signal INT' INT; trap 'on_signal TERM' TERM; trap 'on_signal PIPE' PIPE
@@ -2118,6 +2167,11 @@ rec_case() {  # $1 CUR_PICKUP_SEC, [$2 source 뒤 덧붙일 설정] → 기록 �
 [[ "$(rec_case "" | jq 'has("pr_pickup_sec")')" == false ]] || fail "PR 을 못 찾은 기록에 pr_pickup_sec 가 있음"
 [[ "$(rec_case "" | jq -r .log)" == .ticket-loop/loop.log ]] || fail "기록에 이 실행의 로그(저장소 루트 기준)가 없음: $(rec_case "")"
 [[ "$(rec_case "" | jq 'has("post_merge")')" == false ]] || fail "병합 뒤 검증을 정하지 않은 기록에 post_merge 가 있음"
+# 병합 뒤 검증이 받은 env(#32) — 검증을 돌린 티켓에만. 스펙 완료는 번호 배열
+[[ "$(rec_case "" 'POST_MERGE_RESULT="passed in 5s"; POST_MERGE_WHY=every; POST_MERGE_SPEC_COMPLETE="40 41"' | jq -c '[.post_merge_why, .post_merge_spec_complete]')" == '["every",[40,41]]' \
+   && "$(rec_case "" 'POST_MERGE_RESULT="passed in 5s"; POST_MERGE_WHY=every; POST_MERGE_SPEC_COMPLETE=' | jq -c '[.post_merge_why, has("post_merge_spec_complete")]')" == '["every",false]' \
+   && "$(rec_case "" 'POST_MERGE_RESULT="deferred (1/4 pending)"; POST_MERGE_WHY=; POST_MERGE_SPEC_COMPLETE=' | jq -c '[has("post_merge_why"), has("post_merge_spec_complete")]')" == '[false,false]' ]] \
+  || fail "기록의 병합 뒤 검증 env: $(rec_case "" 'POST_MERGE_RESULT="passed in 5s"; POST_MERGE_WHY=every; POST_MERGE_SPEC_COMPLETE="40 41"')"
 grep -q 'summary: wall-clock .*PR #${pr}${CUR_PICKUP_SEC:+ (picked up after ${CUR_PICKUP_SEC}s)}' "$KIT/files/scripts/ticket-loop.sh" || fail "요약 줄에 PR 을 알아채기까지가 없음"
 echo "ok  PR 을 알아채기까지(요약·기록)"
 
