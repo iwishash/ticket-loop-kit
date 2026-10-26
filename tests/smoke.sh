@@ -2370,18 +2370,33 @@ cat > "$WS/bin/gh" <<'GH'
 case "$1 $2" in
   "issue view") echo '{"number":40,"title":"스펙","state":"OPEN","url":"https://x/40"}' ;;
   "api repos/o/r/issues/40/sub_issues?per_page=100") echo '{"number":41,"title":"T01","state":"closed","url":"https://x/41","assignees":0}' ;;
-  "pr list") echo '[{"number":50,"title":"P","body":"## 사람 확인 필요\n- 정했다","state":"MERGED","url":"https://x/p50","createdAt":"2026-10-12T00:20:00Z","mergedAt":"2026-10-12T00:30:00Z","headRefName":"issue-41-one"}]' ;;
+  "pr list") if [[ -n "${GH_PRS:-}" ]]; then cat "$GH_PRS"; else echo "$PR50"; fi ;;
   *) echo "unexpected gh $*" >&2; exit 9 ;;
 esac
 GH
 chmod +x "$WS/bin/gh"
-wsr_case() {  # $1 REPORT_DECISIONS_HEADING → "로그 줄|REPORT_DECISIONS|리포트의 data-count 유무"
-  (cd "$WS" && PATH="$WS/bin:$PATH" PARENT=40 REPORT_DIR="$WS/reports" RECORDS_FILE="$WS/none.jsonl" ROOT="$WS" OWNER_REPO=o/r BRANCH_PREFIX=issue- REPORT_OPEN=0 WORKTREE_DIR="" REPORT_DECISIONS_HEADING="$1" \
+PR50='[{"number":50,"title":"P","body":"## 사람 확인 필요\n- 정했다","state":"MERGED","url":"https://x/p50","createdAt":"2026-10-12T00:20:00Z","mergedAt":"2026-10-12T00:30:00Z","headRefName":"issue-41-one"}]'
+wsr_case() {  # $1 REPORT_DECISIONS_HEADING, $2 gh pr list 가 낼 파일(없으면 PR50) → "로그 줄|REPORT_DECISIONS|리포트의 data-count 유무"
+  (cd "$WS" && PATH="$WS/bin:$PATH" PR50="$PR50" GH_PRS="${2:-}" PARENT=40 REPORT_DIR="$WS/reports" RECORDS_FILE="$WS/none.jsonl" ROOT="$WS" OWNER_REPO=o/r BRANCH_PREFIX=issue- REPORT_OPEN=0 WORKTREE_DIR="" REPORT_DECISIONS_HEADING="$1" \
     bash -c 'set -euo pipefail; log() { shift; echo "$*"; }; source fn.sh; write_spec_report; echo "|$REPORT_DECISIONS|$(grep -c "id=\"decisions\" data-count=\"1\"" reports/spec-40.html || true)"' | tr -d '\n')
 }
 [[ "$(wsr_case "사람 확인 필요")" == "spec #40 report: reports/spec-40.html — '사람 확인 필요': 1 PR — review it, then commit it via a PR|1|1" ]] || fail "write_spec_report(제목 있음): $(wsr_case "사람 확인 필요")"
 [[ "$(wsr_case "")" == "spec #40 report: reports/spec-40.html — review it, then commit it via a PR|0|0" ]] || fail "write_spec_report(제목 없음): $(wsr_case "")"
 echo "ok  write_spec_report — REPORT_DECISIONS_HEADING 의 건수를 로그 줄과 REPORT_DECISIONS 에"
+# #37: PR 목록 JSON 이 명령 인자 한도(macOS 는 인자·환경 합 1MB, Linux 는 인자 하나 128KB)를 넘어도 리포트를 쓴다.
+# 본문이 긴 PR 300건(약 1.3MB, 한국어라 UTF-8 3바이트) 뒤에 #41 의 PR50 — 결과는 PR50 하나일 때와 같아야 한다
+jq -c --argjson pr50 "$PR50" -n '[range(300) | {number: (100 + .), title: "P\(.)", body: ("가" * 1500), state: "MERGED", url: "https://x/p\(100 + .)",
+  createdAt: "2026-10-12T00:20:00Z", mergedAt: "2026-10-12T00:30:00Z", headRefName: "issue-9\(.)-x"}] + $pr50' > "$WS/big-prs.json"
+[[ "$(wc -c < "$WS/big-prs.json")" -gt 1100000 ]] || fail "write_spec_report(큰 PR 목록): 고정 자료가 1MB 를 넘지 않음"
+[[ "$(wsr_case "사람 확인 필요" "$WS/big-prs.json")" == "spec #40 report: reports/spec-40.html — '사람 확인 필요': 1 PR — review it, then commit it via a PR|1|1" ]] \
+  || fail "write_spec_report(큰 PR 목록): $(wsr_case "사람 확인 필요" "$WS/big-prs.json" 2>&1)"
+# 생성이 jq 에서 실패하면(여기서는 잘린 PR 목록) 이전 리포트는 그대로 남고 임시 파일도 남지 않는다 — 전에는 jq 보다 먼저 연 > 가 비웠다
+printf '[{"number":50,"title":"P"' > "$WS/cut-prs.json"; printf 'previous report\n' > "$WS/reports/spec-40.html"
+[[ "$(wsr_case "" "$WS/cut-prs.json" 2>/dev/null)" == "spec #40: report generation failed — rerun ticket-loop.sh --parent 40 to regenerate it||0" ]] \
+  || fail "write_spec_report(실패): $(wsr_case "" "$WS/cut-prs.json" 2>&1)"
+[[ "$(cat "$WS/reports/spec-40.html")" == "previous report" && "$(ls "$WS/reports")" == "spec-40.html" ]] \
+  || fail "write_spec_report(실패): 이전 리포트를 지우거나 임시 파일을 남김: $(ls -l "$WS/reports"; head -c 200 "$WS/reports/spec-40.html")"
+echo "ok  write_spec_report — 1MB 가 넘는 PR 목록, 실패하면 이전 리포트를 남김(#37)"
 
 # npx 껍질: 새 저장소에 --yes 로 설치하면 install.sh 결과에 더해 loop.env(BACKEND 줄)와 kit.json(커밋·ref)이 생긴다.
 # 두 번째 실행은 loop.env 를 건드리지 않고, cmux 는 아직 거절한다
