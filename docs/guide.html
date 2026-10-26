@@ -907,7 +907,7 @@ pnpm run test:integration</code></pre>
   <tr><td>Model</td><td>기록의 모델. 없으면 "not recorded"</td></tr>
   <tr><td>Finished</td><td>기록의 종료 시각. 기록이 없거나 멈춘 뒤 병합된 티켓은 PR 병합 시각</td></tr>
 </table>
-<p>머리에는 스펙 완료 여부(하위 티켓 전부 닫힘), 병합 건수, 기록 있는 티켓의 벽시계 합계, 구현·CI·병합 뒤 검증 시간의 합계, 토큰 합계(출력 토큰), 쓰인 모델이 요약된다. <code>REPORT_DECISIONS_HEADING</code>을 지정하면(예: <code>사람 확인 필요</code>) 그 아래에 <b>사람이 봐야 할 절 모음</b>이 붙는다 — 각 티켓 PR 본문에서 제목이 글자 그대로 같은 마크다운 절을 뽑아 티켓·PR 링크와 함께 원문 그대로 보이고, KPI에 건수를, 절이 있는 행의 Result brief에 표시(⚑)를 단다. 절이 없거나 비어 있는 PR은 나오지 않고, 하나도 없으면 블록도 없다. 무인 루프의 워커는 스펙과 다르게 정했거나 스펙이 사람에게 남긴 결정을 내린 것을 PR 본문에 적는데, 0.9.15까지는 그것을 보려면 병합된 PR을 하나씩 열어야 했다(rental-portal 스펙 #313: 14개 PR의 "남은 판단 사항" 116줄 가운데 사람이 정할 것은 두 건). 리포트 로그 줄과 회고 안내 줄에도 건수가 붙는다. 같은 스펙은 같은 파일을 덮어쓰므로, 끝난 스펙의 리포트를 다시 뽑으려면 <code>--parent</code>로 한 번 더 돌리면 된다(티켓이 없으면 리포트만 만들고 끝난다). 생성에 실패해도 루프 결과는 바뀌지 않는다(로그 한 줄). 리포트는 jq 하나로 그리므로 의존 도구가 늘지 않는다. 표를 더 풍부하게 만들고 싶으면(PR 본문의 "검증" 절까지) 저장소 스크립트로 분리한다 — 예시 저장소는 TypeScript 생성기(<code>scripts/loop-report.ts</code>)와 단위 테스트로 뽑아 갔다.</p>
+<p>머리에는 스펙 완료 여부(하위 티켓 전부 닫힘), 병합 건수, 기록 있는 티켓의 벽시계 합계, 구현·CI·병합 뒤 검증 시간의 합계, 토큰 합계(출력 토큰), 쓰인 모델이 요약된다. <code>REPORT_DECISIONS_HEADING</code>을 지정하면(예: <code>사람 확인 필요</code>) 그 아래에 <b>사람이 봐야 할 절 모음</b>이 붙는다 — 각 티켓 PR 본문에서 제목이 글자 그대로 같은 마크다운 절을 뽑아 티켓·PR 링크와 함께 원문 그대로 보이고, KPI에 건수를, 절이 있는 행의 Result brief에 표시(⚑)를 단다. 절이 없거나 비어 있는 PR은 나오지 않고, 하나도 없으면 블록도 없다. 무인 루프의 워커는 스펙과 다르게 정했거나 스펙이 사람에게 남긴 결정을 내린 것을 PR 본문에 적는데, 0.9.15까지는 그것을 보려면 병합된 PR을 하나씩 열어야 했다(rental-portal 스펙 #313: 14개 PR의 "남은 판단 사항" 116줄 가운데 사람이 정할 것은 두 건). 리포트 로그 줄과 회고 안내 줄에도 건수가 붙는다. 같은 스펙은 같은 파일을 덮어쓰므로, 끝난 스펙의 리포트를 다시 뽑으려면 <code>--parent</code>로 한 번 더 돌리면 된다(티켓이 없으면 리포트만 만들고 끝난다). 생성에 실패해도 루프 결과는 바뀌지 않고(로그 한 줄), 이전 리포트는 그대로 남는다. 리포트는 jq 하나로 그리므로 의존 도구가 늘지 않는다. 표를 더 풍부하게 만들고 싶으면(PR 본문의 "검증" 절까지) 저장소 스크립트로 분리한다 — 예시 저장소는 TypeScript 생성기(<code>scripts/loop-report.ts</code>)와 단위 테스트로 뽑아 갔다.</p>
 <div class="note"><b>왜 로그가 아니라 리포트인가.</b> 로그의 <code>summary:</code> 줄은 한 실행 안에서만 이어지고, 루프가 죽었다 다시 돌면 흩어진다. 스펙 단위 리포트는 실행 횟수와 무관하게 GitHub의 하위 이슈 목록을 뼈대로 삼고 기록을 붙이므로, 사후 검수(9장 S1 7단계)와 <code>/retro</code>가 티켓 묶음 하나를 한 표에서 본다.</div></div></div>
 
 <div class="note"><b>구현 메모.</b> 루프 안에서 실행하는 <code>gh</code>·<code>orca</code>·<code>git</code>이 표준 입력을 읽으면 남은 티켓 목록을 삼켜 버린다. 그래서 대상 목록은 변수에 담고, 티켓마다 표준 입력을 닫고(<code>&lt;/dev/null</code>) 실행한다. 스크립트를 고칠 때 이 구조를 유지한다.</div>
@@ -4026,19 +4026,23 @@ REPORT_DECISIONS=""   # 마지막으로 쓴 리포트의 "사람 확인 필요" 
 write_spec_report() {
   [[ -n "$PARENT" ]] || return 0
   local out="$REPORT_DIR/spec-${PARENT}.html" records="$RECORDS_FILE" spec issues prs recs   # 둘 다 시작 때 절대 경로로 굳혔다
+  # 목록 셋은 인자가 아니라 표준 입력으로 넘긴다 — PR 본문이 쌓인 저장소에서는 PR 목록이 인자 한도를 넘는다(#37).
+  # 리포트 옆 임시 파일에 써서 성공해야 옮긴다(같은 폴더라 mv가 한 번에 바꾼다) — 생성이 실패해도 이전 리포트가 남는다
   if spec="$(gh issue view "$PARENT" --json number,title,state,url)" \
     &amp;&amp; issues="$(gh api "repos/${OWNER_REPO}/issues/${PARENT}/sub_issues?per_page=100" --paginate \
          --jq '.[] | {number, title, state, url: .html_url, assignees: (.assignees | length)}' | jq -s '.')" \
     &amp;&amp; prs="$(gh pr list --state all --limit 300 --json number,title,body,state,url,createdAt,mergedAt,headRefName)" \
     &amp;&amp; recs="$( { [[ -f "$records" ]] &amp;&amp; grep '^{' "$records" || true; } | jq -s --argjson spec "$PARENT" 'map(select(.spec == $spec))' | report_tokens)" \
     &amp;&amp; mkdir -p "$(dirname "$out")" \
-    &amp;&amp; jq -rn --argjson spec "$spec" --argjson issues "$issues" --argjson prs "$prs" --argjson recs "$recs" \
-         --arg prefix "$BRANCH_PREFIX" --arg now "$(date '+%Y-%m-%d %H:%M')" --arg heading "$REPORT_DECISIONS_HEADING" "$REPORT_JQ" &gt; "$out"; then
+    &amp;&amp; jq -rn --argjson spec "$spec" --arg prefix "$BRANCH_PREFIX" --arg now "$(date '+%Y-%m-%d %H:%M')" --arg heading "$REPORT_DECISIONS_HEADING" \
+         "input as \$issues | input as \$prs | input as \$recs | $REPORT_JQ" &lt;&lt;&lt;"$issues $prs $recs" &gt; "$out.tmp" \
+    &amp;&amp; mv -f "$out.tmp" "$out"; then
     # 사람이 봐야 할 절의 건수(REPORT_DECISIONS_HEADING) — 리포트 블록의 data-count에서 읽는다. 블록이 없으면 0
     REPORT_DECISIONS="$(sed -n 's/.*id="decisions" data-count="\([0-9]*\)".*/\1/p' "$out" | head -n1)"; [[ -n "$REPORT_DECISIONS" ]] || REPORT_DECISIONS=0
     log ok "spec #${PARENT} report: ${out#"$ROOT"/}$([[ -z "$REPORT_DECISIONS_HEADING" ]] || echo " — '${REPORT_DECISIONS_HEADING}': ${REPORT_DECISIONS} PR$([[ "$REPORT_DECISIONS" == 1 ]] || echo s)") — review it, then commit it via a PR"
     open_report "$out"
   else
+    rm -f "$out.tmp"
     log warn "spec #${PARENT}: report generation failed — rerun ticket-loop.sh --parent ${PARENT} to regenerate it"
   fi
 }

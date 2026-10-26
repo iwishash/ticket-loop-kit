@@ -2574,19 +2574,23 @@ REPORT_DECISIONS=""   # 마지막으로 쓴 리포트의 "사람 확인 필요" 
 write_spec_report() {
   [[ -n "$PARENT" ]] || return 0
   local out="$REPORT_DIR/spec-${PARENT}.html" records="$RECORDS_FILE" spec issues prs recs   # 둘 다 시작 때 절대 경로로 굳혔다
+  # 목록 셋은 인자가 아니라 표준 입력으로 넘긴다 — PR 본문이 쌓인 저장소에서는 PR 목록이 인자 한도를 넘는다(#37).
+  # 리포트 옆 임시 파일에 써서 성공해야 옮긴다(같은 폴더라 mv가 한 번에 바꾼다) — 생성이 실패해도 이전 리포트가 남는다
   if spec="$(gh issue view "$PARENT" --json number,title,state,url)" \
     && issues="$(gh api "repos/${OWNER_REPO}/issues/${PARENT}/sub_issues?per_page=100" --paginate \
          --jq '.[] | {number, title, state, url: .html_url, assignees: (.assignees | length)}' | jq -s '.')" \
     && prs="$(gh pr list --state all --limit 300 --json number,title,body,state,url,createdAt,mergedAt,headRefName)" \
     && recs="$( { [[ -f "$records" ]] && grep '^{' "$records" || true; } | jq -s --argjson spec "$PARENT" 'map(select(.spec == $spec))' | report_tokens)" \
     && mkdir -p "$(dirname "$out")" \
-    && jq -rn --argjson spec "$spec" --argjson issues "$issues" --argjson prs "$prs" --argjson recs "$recs" \
-         --arg prefix "$BRANCH_PREFIX" --arg now "$(date '+%Y-%m-%d %H:%M')" --arg heading "$REPORT_DECISIONS_HEADING" "$REPORT_JQ" > "$out"; then
+    && jq -rn --argjson spec "$spec" --arg prefix "$BRANCH_PREFIX" --arg now "$(date '+%Y-%m-%d %H:%M')" --arg heading "$REPORT_DECISIONS_HEADING" \
+         "input as \$issues | input as \$prs | input as \$recs | $REPORT_JQ" <<<"$issues $prs $recs" > "$out.tmp" \
+    && mv -f "$out.tmp" "$out"; then
     # 사람이 봐야 할 절의 건수(REPORT_DECISIONS_HEADING) — 리포트 블록의 data-count에서 읽는다. 블록이 없으면 0
     REPORT_DECISIONS="$(sed -n 's/.*id="decisions" data-count="\([0-9]*\)".*/\1/p' "$out" | head -n1)"; [[ -n "$REPORT_DECISIONS" ]] || REPORT_DECISIONS=0
     log ok "spec #${PARENT} report: ${out#"$ROOT"/}$([[ -z "$REPORT_DECISIONS_HEADING" ]] || echo " — '${REPORT_DECISIONS_HEADING}': ${REPORT_DECISIONS} PR$([[ "$REPORT_DECISIONS" == 1 ]] || echo s)") — review it, then commit it via a PR"
     open_report "$out"
   else
+    rm -f "$out.tmp"
     log warn "spec #${PARENT}: report generation failed — rerun ticket-loop.sh --parent ${PARENT} to regenerate it"
   fi
 }
