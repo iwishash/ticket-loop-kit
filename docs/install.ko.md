@@ -48,7 +48,7 @@
 
 같은 설치 명령을 다시 실행한다. 키트 소유 파일과 벤더링한 스킬만 바뀌고 프로젝트 소유 파일(`loop.env` 포함)은 그대로다. 0.3 이하 설치본은 마이그레이션된다(`.agent-loop/` 또는 `.orca-loop/` → `.ticket-loop/`, 옛 스킬과 `.gitignore` 줄 제거). 옛 경로를 아직 가리키는 파일은 설치기가 목록으로 보여 주니 같은 PR에서 손으로 고친다. `git diff`로 보고 PR로 올린다. npx는 받은 저장소를 캐시하므로 같은 ref를 다시 받으려면 `npx --yes --prefer-online`.
 
-옵션: `--yes`, `--backend <orca|cmux|tmux>`, `--no-skills`, `--workflow-skills`/`--no-workflow-skills`, `--force-skills`, `--prune-skills`, `--no-github`, `--no-git-credential`, `--no-orca` (`npx github:iwishash/ticket-loop-kit --help`). bash 경로는 `--ref <ref>`도 받는다. 버전 고정은 `npx github:iwishash/ticket-loop-kit#v0.9.18 init`, `NO_COLOR`로 색을 끈다.
+옵션: `--yes`, `--backend <orca|cmux|tmux>`, `--no-skills`, `--workflow-skills`/`--no-workflow-skills`, `--force-skills`, `--prune-skills`, `--no-github`, `--no-git-credential`, `--no-orca` (`npx github:iwishash/ticket-loop-kit --help`). bash 경로는 `--ref <ref>`도 받는다. 버전 고정은 `npx github:iwishash/ticket-loop-kit#v0.9.19 init`, `NO_COLOR`로 색을 끈다.
 
 ## mattpocock 스킬: 무엇을 들이고, 무엇을 검사하나
 
