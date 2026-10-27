@@ -115,6 +115,9 @@ set -euo pipefail
 #   REPORT_DECISIONS_HEADING  PR 본문에서 사람이 봐야 할 절의 마크다운 제목(글자 그대로, 예: "사람 확인 필요"). 지정하면 리포트가 각 티켓 PR 본문에서
 #                       그 절을 뽑아 머리의 목록(PR 링크 포함)으로 모으고, 절이 있는 행에 표시를 단다. 절이 없거나 빈 PR은 목록에 없다.
 #                       기본 비움 = 모으지 않는다(지금까지와 같다). 저장소마다 절 이름이 다르므로 키트는 이름만 받는다(이슈 #25)
+#   REPORT_DECISIONS_NONE  그 절에 "내용 없음"으로 적는 말들(글자 그대로 — 정규식이 아니다, "|" 구분, 대소문자 무시) (기본 "없음|none|N/A").
+#                       절 본문에서 목록 기호(-·*)와 끝 마침표를 걷은 것이 이 가운데 하나와 같으면("- 없음", "없음.") 빈 절처럼 목록·건수·표시에서
+#                       뺀다. 뒤에 내용이 더 붙으면 남는다(이슈 #39)
 #   MODEL_REGEX         워커 터미널에서 모델 이름을 뽑는 정규식(ERE) (claude: 상태줄·배너의 "Opus 5.5" 꼴, codex: "gpt-5.1-codex" 꼴).
 #                       못 찾으면 리포트에 not recorded
 #   USAGE_LIMIT_REGEX   워커 화면 끝 25줄에서 사용량 한도 문구를 찾는 정규식(ERE) (claude: "reached your .* limit|usage limit", codex·그 외: 없음).
@@ -215,6 +218,7 @@ RECORDS_FILE="${RECORDS_FILE:-.ticket-loop/tickets.jsonl}"
 REPORT_DIR="${REPORT_DIR:-docs/loop-reports}"
 REPORT_OPEN="${REPORT_OPEN:-1}"
 REPORT_DECISIONS_HEADING="${REPORT_DECISIONS_HEADING:-}"
+REPORT_DECISIONS_NONE="${REPORT_DECISIONS_NONE:-없음|none|N/A}"
 PROGRESS_SEC="${PROGRESS_SEC:-60}"
 HEARTBEAT_SEC="${HEARTBEAT_SEC:-300}"
 SLACK_WEBHOOK_URL="${SLACK_WEBHOOK_URL:-}"
@@ -2427,7 +2431,12 @@ def section($h): if $h == "" or . == null then null else
       | (($hs | to_entries | map(select(.key > $start.key and .value != null and (.value.l | length) <= $lvl)) | first | .key) // ($lines | length)) as $end
       | $lines[$start.key + 1:$end] | join("\n") | gsub("^\\s+|\\s+$"; "") | if . == "" then null else . end
     end end;
+# 절 본문이 "없음" 표시뿐인가 — 목록 기호(-·*)와 끝 마침표를 걷은 본문이 $none("|" 구분, 대소문자 무시)의 하나와 같으면 참.
+# pr 스킬이 "없으면 '없음'"이라 쓰게 하는 저장소에서 그런 절을 빈 절처럼 뺀다(REPORT_DECISIONS_NONE, 이슈 #39)
+def noneonly($none): (sub("^[-*][ \t]+"; "") | sub("\\.+$"; "") | gsub("^\\s+|\\s+$"; "") | ascii_downcase) as $b
+  | $none | split("|") | map(gsub("^\\s+|\\s+$"; "") | ascii_downcase) | any(. != "" and . == $b);
 ($ARGS.named.heading // "") as $heading   # REPORT_DECISIONS_HEADING — --arg heading 이 없으면(지난 호출 꼴) 비움
+| ($ARGS.named.none // "") as $none       # REPORT_DECISIONS_NONE — --arg none 이 없으면(지난 호출 꼴) 빈 절만 뺀다
 | ($issues | sort_by(order, .number) | map(. as $i
   | ($recs | map(select(.issue == $i.number)) | sort_by(.finished)) as $rs | ($rs | last) as $r
   | ($prefix + ($i.number | tostring)) as $b
@@ -2456,8 +2465,8 @@ def section($h): if $h == "" or . == null then null else
      # 토큰 — 기록의 tokens(0.9.8부터), 없으면 write_spec_report가 세션 기록에서 메운 값. total은 네 값의 합
      tk: ($r.tokens | if type == "object" then . + {total: ((.input // 0) + (.output // 0) + (.cache_write // 0) + (.cache_read // 0))} else null end),
      model: ($r.model // "not recorded"),
-     # 그 PR 본문의 REPORT_DECISIONS_HEADING 절(없으면 null) — 머리 목록과 행 표시가 쓴다
-     dec: ($pr.body // "" | section($heading))})) as $rows
+     # 그 PR 본문의 REPORT_DECISIONS_HEADING 절(없거나 비었거나 없음 표시뿐이면 null) — 머리 목록과 행 표시가 쓴다
+     dec: ($pr.body // "" | section($heading) | if . != null and noneonly($none) then null else . end)})) as $rows
 | ($rows | map(select(.dec != null))) as $decs
 | ($rows | map(select(.status == "merged" or .status == "merged-after-stop")) | length) as $merged
 | ($rows | map(select(.issue.state == "closed")) | length) as $closed
@@ -2583,7 +2592,7 @@ write_spec_report() {
     && recs="$( { [[ -f "$records" ]] && grep '^{' "$records" || true; } | jq -s --argjson spec "$PARENT" 'map(select(.spec == $spec))' | report_tokens)" \
     && mkdir -p "$(dirname "$out")" \
     && jq -rn --argjson spec "$spec" --arg prefix "$BRANCH_PREFIX" --arg now "$(date '+%Y-%m-%d %H:%M')" --arg heading "$REPORT_DECISIONS_HEADING" \
-         "input as \$issues | input as \$prs | input as \$recs | $REPORT_JQ" <<<"$issues $prs $recs" > "$out.tmp" \
+         --arg none "$REPORT_DECISIONS_NONE" "input as \$issues | input as \$prs | input as \$recs | $REPORT_JQ" <<<"$issues $prs $recs" > "$out.tmp" \
     && mv -f "$out.tmp" "$out"; then
     # 사람이 봐야 할 절의 건수(REPORT_DECISIONS_HEADING) — 리포트 블록의 data-count에서 읽는다. 블록이 없으면 0
     REPORT_DECISIONS="$(sed -n 's/.*id="decisions" data-count="\([0-9]*\)".*/\1/p' "$out" | head -n1)"; [[ -n "$REPORT_DECISIONS" ]] || REPORT_DECISIONS=0
