@@ -2359,12 +2359,32 @@ for want in '<div class="v">84.3M</div><div class="l">Tokens (output 222k)</div>
 done
 echo "ok  스펙 리포트 렌더(head 가 issue-N 그대로인 PR, 멈춘 뒤 병합된 티켓, 구현·CI·병합 뒤 검증 열 포함)"
 
+# 없음 표시(REPORT_DECISIONS_NONE, #39): 절 본문에서 목록 기호(-·*)와 마침표를 걷은 것이 없음 표시와 같으면(대소문자 무시) 빈 절처럼
+# 목록·건수·표시에서 빠진다. 뒤에 내용이 붙은 #45 는 남는다. 목록은 --arg none 에서 읽는다 — 다른 목록이면 걸러지는 PR 도 다르다
+none_report() {  # $1 --arg none → 리포트 HTML
+  jq -rn --arg prefix issue- --arg now "2026-10-12 09:00" --arg heading "사람 확인 필요" --arg none "$1" \
+    --argjson spec '{"number":40,"title":"스펙","state":"OPEN","url":"https://x/40"}' \
+    --argjson issues "$(jq -nc '[range(41; 46) | {number: ., title: "T\(.)", state: "closed", url: "https://x/\(.)", assignees: 0}]')" \
+    --argjson prs "$(jq -nc --argjson bodies '["없음", "- 없음", "없음.", "* n/a.", "- 없음 — 다만 산식은 기획 확인"]' '[range(5) | {number: (50 + .), title: "P",
+      body: "## 사람 확인 필요\n\n\($bodies[.])\n\n## 검증\n- ok", state: "MERGED", url: "https://x/p\(50 + .)", createdAt: "2026-10-12T00:20:00Z",
+      mergedAt: "2026-10-12T00:30:00Z", headRefName: "issue-\(41 + .)"}]')" --argjson recs '[]' "$REPORT_JQ"
+}
+none_report "없음|none|N/A" > "$T/report-none.html" || fail "스펙 리포트(없음 표시) jq 실패"
+grep -qF '<section class="dec" id="decisions" data-count="1">' "$T/report-none.html" \
+  && grep -qF '<div class="item"><div class="who"><a href="https://x/45">#45</a> T45 · <a href="https://x/p54">PR #54</a></div><div class="md">- 없음 — 다만 산식은 기획 확인</div></div></section>' "$T/report-none.html" \
+  && grep -qF '<div class="kpi"><div class="v">1</div><div class="l">사람 확인 필요</div></div>' "$T/report-none.html" \
+  && [[ "$(grep -o 'class="flag"' "$T/report-none.html" | wc -l | tr -d ' ')" == "1" ]] \
+  || fail "스펙 리포트: 없음 표시뿐인 절(없음·- 없음·없음.·* n/a.)이 목록에 남음: $(grep -o '<section class="dec"[^>]*>.*</section>' "$T/report-none.html")"
+none_report "해당 없음|N/A" | grep -qF 'id="decisions" data-count="4"' || fail "스펙 리포트: REPORT_DECISIONS_NONE 목록을 따르지 않음(없음 셋과 #45 가 남아야 함)"
+echo "ok  스펙 리포트 — 없음 표시뿐인 '사람 확인 필요' 절은 건수에서 빠진다(#39)"
+
 # write_spec_report(#25): 가짜 gh 로 리포트를 쓰고, REPORT_DECISIONS_HEADING 이 있으면 블록의 data-count 를 REPORT_DECISIONS 로 읽어 로그 줄에
 # "'<제목>': N PR(s)" 를 붙인다. 제목이 없으면 0 이고 로그 줄은 전과 같다
 WS="$T/wsr"; mkdir -p "$WS/bin"
 { sed -n "/^read -r -d '' REPORT_JQ <<'JQ'/,/^JQ\$/p" "$KIT/files/scripts/ticket-loop.sh"
-  sed -n '/^open_report() {/,/^}/p; /^report_tokens() {/,/^}/p; /^REPORT_DECISIONS=""/p; /^write_spec_report() {/,/^}/p' "$KIT/files/scripts/ticket-loop.sh"; } > "$WS/fn.sh"
-grep -q '^write_spec_report() {' "$WS/fn.sh" && grep -q '^REPORT_DECISIONS=""' "$WS/fn.sh" || fail "write_spec_report·REPORT_DECISIONS 를 찾지 못함"
+  sed -n '/^REPORT_DECISIONS_NONE=/p; /^open_report() {/,/^}/p; /^report_tokens() {/,/^}/p; /^REPORT_DECISIONS=""/p; /^write_spec_report() {/,/^}/p' "$KIT/files/scripts/ticket-loop.sh"; } > "$WS/fn.sh"
+grep -q '^write_spec_report() {' "$WS/fn.sh" && grep -q '^REPORT_DECISIONS=""' "$WS/fn.sh" && grep -q '^REPORT_DECISIONS_NONE=' "$WS/fn.sh" \
+  || fail "write_spec_report·REPORT_DECISIONS·REPORT_DECISIONS_NONE 를 찾지 못함"
 cat > "$WS/bin/gh" <<'GH'
 #!/usr/bin/env bash
 case "$1 $2" in
@@ -2397,6 +2417,11 @@ printf '[{"number":50,"title":"P"' > "$WS/cut-prs.json"; printf 'previous report
 [[ "$(cat "$WS/reports/spec-40.html")" == "previous report" && "$(ls "$WS/reports")" == "spec-40.html" ]] \
   || fail "write_spec_report(실패): 이전 리포트를 지우거나 임시 파일을 남김: $(ls -l "$WS/reports"; head -c 200 "$WS/reports/spec-40.html")"
 echo "ok  write_spec_report — 1MB 가 넘는 PR 목록, 실패하면 이전 리포트를 남김(#37)"
+# #39: 절 본문이 없음 표시뿐인 PR 은 로그 줄의 건수에도 없다 — REPORT_DECISIONS_NONE 의 기본값이 jq 까지 간다
+jq -c '.[0].body = "## 사람 확인 필요\n- 없음."' <<<"$PR50" > "$WS/none-prs.json"
+[[ "$(wsr_case "사람 확인 필요" "$WS/none-prs.json")" == "spec #40 report: reports/spec-40.html — '사람 확인 필요': 0 PRs — review it, then commit it via a PR|0|0" ]] \
+  || fail "write_spec_report(없음 표시): $(wsr_case "사람 확인 필요" "$WS/none-prs.json" 2>&1)"
+echo "ok  write_spec_report — 없음 표시뿐인 절은 건수에 없다(#39)"
 
 # npx 껍질: 새 저장소에 --yes 로 설치하면 install.sh 결과에 더해 loop.env(BACKEND 줄)와 kit.json(커밋·ref)이 생긴다.
 # 두 번째 실행은 loop.env 를 건드리지 않고, cmux 는 아직 거절한다
