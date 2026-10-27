@@ -48,7 +48,7 @@ Skills live once in `.agents/skills/<name>` with `.claude/skills/<name>` links (
 
 Run the install command again. Kit-owned files and vendored skills are refreshed; project-owned files, including `loop.env`, stay as they are. Installs from 0.3 or earlier are migrated (`.agent-loop/` or `.orca-loop/` → `.ticket-loop/`, old skills and `.gitignore` lines removed) and the installer lists files that still point at old paths for you to fix in the same PR. Review with `git diff` and open a PR. npx caches a fetched repository; use `npx --yes --prefer-online` to re-fetch the same ref.
 
-Options: `--yes`, `--backend <orca|cmux|tmux>`, `--no-skills`, `--workflow-skills`/`--no-workflow-skills`, `--force-skills`, `--prune-skills`, `--no-github`, `--no-git-credential`, `--no-orca` (`npx github:iwishash/ticket-loop-kit --help`). The bash path also takes `--ref <ref>`. Pin a version with `npx github:iwishash/ticket-loop-kit#v0.9.19 init`; `NO_COLOR` disables colors.
+Options: `--yes`, `--backend <orca|cmux|tmux>`, `--no-skills`, `--workflow-skills`/`--no-workflow-skills`, `--force-skills`, `--prune-skills`, `--no-github`, `--no-git-credential`, `--no-orca` (`npx github:iwishash/ticket-loop-kit --help`). The bash path also takes `--ref <ref>`. Pin a version with `npx github:iwishash/ticket-loop-kit#v0.9.20 init`; `NO_COLOR` disables colors.
 
 ## mattpocock skills: what is vendored, what is checked
 
