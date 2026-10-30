@@ -396,6 +396,56 @@ SH
 (cd "$F" && PATH="$F:$PATH" bash run.sh "$F/backend.sh" >/dev/null) || fail "Orca 백엔드 함수 호출 실패(set -u)"
 echo "ok  Orca 백엔드 함수 가짜 호출"
 
+# orca_worktree_create(#41): Orca 1.4.244 는 worktree create --agent 결과를 result.launch 에 싣는다(핸들 launch.outcome.handle, 워크트리
+# launch.worktreeId, result.worktree 는 빠질 수 있다). 옛 호스트는 result.agentTerminalHandle. 채팅(structured)이면 멈추고,
+# --surface terminal 은 CLI 도움말과 호스트 capability 가 둘 다 있을 때만 넘긴다. 받은 인자는 $FAKE_ARGS 에 남긴다
+WC="$T/wtcreate"; mkdir -p "$WC"
+cat > "$WC/orca" <<'SH'
+#!/bin/bash
+case "$1 $2 $3" in
+  "repo list --json") echo '{"ok":true,"result":{"repos":[{"id":"r1","gitRemoteIdentity":{"canonicalKey":"github.com/o/r"}}]}}' ;;
+  "worktree create --help") [[ -z "${FAKE_HELP_SURFACE:-}" ]] || echo '  --surface chat|terminal Start the agent as a chat or in a terminal' ;;
+  "status --json ") echo "{\"ok\":true,\"result\":{\"runtime\":{\"capabilities\":${FAKE_CAPS:-[]}}}}" ;;
+  "worktree create --repo") printf '%s\n' "$@" > "$FAKE_ARGS"; cat "$FAKE_CREATE" ;;
+  *) echo "fake orca: $*" >&2; exit 9 ;;
+esac
+SH
+chmod +x "$WC/orca"
+cat > "$WC/run.sh" <<'SH'
+set -euo pipefail
+BACKEND=orca; ORCA_CLI=orca; CMUX_CLI=cmux; TMUX_CLI=tmux; TMUX_SESSION=""; OWNER_REPO=o/r; ROOT=/tmp; MAIN_WT=/tmp; BASE_BRANCH=main; BRANCH_PREFIX=issue-; AGENT=claude; SKILL_PREFIX=/
+AGENT_RESTART_CMD=claude; TERMINAL_RETRY=1; TERMINAL_RETRY_SEC=0; IDLE_POLL_SEC=0; WORKTREE_DIR=""; WORKTREE_SETUP_CMD=""
+log() { echo "log: $*"; }; die() { echo "die: $*"; exit 1; }
+source "$1"
+orca_check
+orca_worktree_create 7 "/implement 7"
+echo "WT=$WT|WT_PATH=$WT_PATH|HANDLE=$HANDLE"
+SH
+wtc() {  # $1 결과 JSON, 나머지는 환경(FAKE_HELP_SURFACE=1, FAKE_CAPS='[…]') → 표준 출력 마지막 줄
+  printf '%s' "$1" > "$WC/created.json"; shift
+  (cd "$WC" && env PATH="$WC:$PATH" FAKE_CREATE="$WC/created.json" FAKE_ARGS="$WC/args" "$@" bash run.sh "$F/backend.sh" 2>&1 | tail -n1)
+}
+LAUNCH_T='{"ok":true,"result":{"worktree":{"id":"r1::/w/issue-7"},"launch":{"worktreeId":"r1::/w/issue-7","outcome":{"kind":"terminal","handle":"term_new"},"prompt":{"outcome":"handed-to-terminal"}}}}'
+SURF=(FAKE_HELP_SURFACE=1 'FAKE_CAPS=["agent.launch.v2","agent.launch.surface.v1"]')
+[[ "$(wtc "$LAUNCH_T" "${SURF[@]}")" == "WT=r1::/w/issue-7|WT_PATH=/w/issue-7|HANDLE=term_new" ]] || fail "orca_worktree_create(새 모양): $(wtc "$LAUNCH_T" "${SURF[@]}")"
+grep -qxF -- '--surface' "$WC/args" && [[ "$(grep -A1 -xF -- '--surface' "$WC/args" | tail -n1)" == terminal ]] || fail "CLI·호스트가 다 아는데 --surface terminal 을 넘기지 않음: $(tr '\n' ' ' < "$WC/args")"
+NO_WT='{"ok":true,"result":{"lineage":null,"launch":{"worktreeId":"r1::/w/issue-7","outcome":{"kind":"terminal","handle":"term_new"}}}}'
+[[ "$(wtc "$NO_WT" "${SURF[@]}")" == "WT=r1::/w/issue-7|WT_PATH=/w/issue-7|HANDLE=term_new" ]] || fail "orca_worktree_create(result.worktree 없음): $(wtc "$NO_WT" "${SURF[@]}")"
+OLD='{"ok":true,"result":{"worktree":{"id":"r1::/w/issue-7"},"agentTerminalHandle":"t_old"}}'
+[[ "$(wtc "$OLD")" == "WT=r1::/w/issue-7|WT_PATH=/w/issue-7|HANDLE=t_old" ]] || fail "orca_worktree_create(옛 모양): $(wtc "$OLD")"
+grep -qxF -- '--surface' "$WC/args" && fail "--surface 를 모르는 CLI 에 넘김"
+wtc "$OLD" FAKE_HELP_SURFACE=1 >/dev/null; grep -qxF -- '--surface' "$WC/args" && fail "호스트가 agent.launch.surface.v1 을 알리지 않는데 --surface 를 넘김(재시작 전 앱이 거절한다)"
+CHAT='{"ok":true,"result":{"worktree":{"id":"r1::/w/issue-7"},"launch":{"worktreeId":"r1::/w/issue-7","outcome":{"kind":"structured","handle":"agent_1","sessionId":"s1"}}}}'
+[[ "$(wtc "$CHAT")" == "die: The agent started as a chat, not a terminal"* ]] || fail "orca_worktree_create(채팅): $(wtc "$CHAT")"
+LOST='{"ok":true,"result":{"worktree":{"id":"r1::/w/issue-7"},"launch":{"worktreeId":"r1::/w/issue-7","outcome":{"kind":"terminal","handle":"term_new"},"prompt":{"outcome":"failed"}}}}'
+printf '%s' "$LOST" > "$WC/created.json"
+out="$(cd "$WC" && PATH="$WC:$PATH" FAKE_CREATE="$WC/created.json" FAKE_ARGS="$WC/args" bash run.sh "$F/backend.sh" 2>&1)" || fail "orca_worktree_create(프롬프트 미도착)이 멈춤: $out"
+grep -qF "log: warn #7: Orca reports the prompt as 'failed'" <<<"$out" && grep -qxF 'WT=r1::/w/issue-7|WT_PATH=/w/issue-7|HANDLE=term_new' <<<"$out" \
+  || fail "orca_worktree_create(프롬프트 미도착): 경고 없이 지나가거나 핸들을 놓침: $out"
+NONE='{"ok":true,"result":{"worktree":{"id":"r1::/w/issue-7"}}}'
+[[ "$(wtc "$NONE")" == "die: No agent terminal handle returned (r1::/w/issue-7)" ]] || fail "orca_worktree_create(핸들 없음): $(wtc "$NONE")"
+echo "ok  orca_worktree_create — Orca 1.4.244 의 result.launch 와 옛 모양, 채팅이면 멈춤, --surface 는 CLI·호스트가 다 알 때만(#41)"
+
 # tmux 백엔드: 가짜 tmux 로 함수를 부르고, 훅 스크립트가 Claude Code(stdin)·Codex(인자) 페이로드를 상태 파일로 옮기는지, 기동 명령에 훅이 붙는지 본다.
 # 실제 tmux 3.8 + Claude Code 로는 손으로 확인했다(초기 프롬프트 인자 → running, 응답 끝 → idle, send-keys 제출 → running→idle, /exit → exited)
 cat > "$F/tmux" <<'SH'
