@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.9.21 — 2026-10-30
+
+Orca 결함 하나(#41)를 PR #42로 고쳤다. Orca 백엔드의 워크트리·에이전트 시작만 바뀌고, cmux·tmux 백엔드에는 닿지 않는다.
+
+- **Orca 1.4.244에서 루프가 첫 티켓에서 멈추지 않는다(#41).** 1.4.244의 CLI는 호스트가 `agent.launch.v2`를 알리면 `worktree create --agent`를 `agent.launch`로 보내고, 에이전트 핸들을 `result.launch.outcome.handle`에 싣는다. `orca_worktree_create`는 `result.agentTerminalHandle`·`result.startupTerminal.handle`만 읽어서 `No agent terminal handle returned`로 멈췄다. 그런데 에이전트는 이미 떠서 감시 없이 일했고, 이슈에 담당자를 달았다. 실측(rsrehab/detection-tslite #5, 0.9.20): 시작 12초 만에 멈췄고, 담당자가 남아 재실행이 이 티켓을 `has an assignee`로 건너뛰었다.
+  - 핸들은 `result.launch.outcome.handle`을 먼저 읽고, 낡은 호스트를 위해 전의 두 필드를 뒤에 둔다.
+  - 워크트리 id는 `result.worktree.id`, 없으면 `result.launch.worktreeId`. `result.worktree`는 시작 뒤 `worktree.show`로 채우는데 그게 실패하면 결과에서 빠진다. 둘 다 없으면 결과의 키 목록을 사유로 남기고 멈춘다.
+  - `--surface terminal`을 넘긴다. 이 플래그가 없으면 에이전트가 Orca 앱의 Chat UI 설정을 따라 채팅으로 뜰 수 있고, 채팅 핸들은 `terminal send`·`terminal wait`로 몰 수 없다. CLI 도움말에 `--surface`가 있고 실행 중인 앱이 `agent.launch.surface.v1`을 알릴 때만 넘긴다(`orca_check`에서 한 번 본다). 자동 업데이트로 번들 CLI만 새것이고 앱은 재시작 전이면 앱이 이 플래그를 `incompatible_runtime`으로 거절하기 때문이다.
+  - 그래도 채팅(`outcome.kind` `structured`)으로 뜨면 `The agent started as a chat, not a terminal`로 멈춘다. Orca 설정에서 Chat UI를 끄거나 Orca 앱을 올리면 된다.
+  - `result.launch.prompt.outcome`이 있는데 `journaled`·`handed-to-terminal`이 아니면 경고 줄만 남기고 계속한다. 프롬프트를 못 받은 워커가 PR 없이 idle이 되면 기존 무인 수습 경로가 잡는다.
+  - 남긴 것: 핸들을 못 받아 멈출 때 이미 뜬 에이전트를 닫지 않는 것(이번 피해인 고아 워커·담당자는 여기서 나왔다). 핸들을 제대로 읽으면 이 경로를 타지 않으므로 따로 본다.
+  - 스모크로 확인한 것: 가짜 `orca`로 새 모양, `result.worktree`가 빠진 새 모양, 옛 모양, 채팅이면 멈춤, 프롬프트 미도착이면 경고 뒤 계속, 핸들 없음이면 멈춤. `--surface terminal`은 CLI와 앱이 둘 다 알 때만 넘기고, 어느 한쪽이라도 모르면 넘기지 않는다. CI(Linux)도 통과했다. 실제 Orca 1.4.244에서 루프를 끝까지 다시 돌려 보지는 않았다.
+  - 문서: 가이드북 부록 D.
+- 이미 설치된 저장소: 키트를 올리면 바로 적용된다. 0.9.20 이하로 이 멈춤을 겪은 저장소는 다시 돌리기 전에 그 티켓의 담당자를 지우고, 남은 워크트리와 터미널을 정리한다. 앱 재시작 전이라 `--surface`를 못 넘기는 동안에도 Chat UI 설정이 꺼져 있으면 터미널로 뜬다. PDF 재빌드.
+- 키트 저장소: `AGENTS.md`와 `docs/agents/`(mattpocock 엔지니어링 스킬의 이슈 트래커·분류 라벨·도메인 문서 설정)를 더했다(PR #43). 설치되는 파일은 아니다.
+
 ## 0.9.20 — 2026-10-28
 
 스펙 리포트 결함 하나(#39)를 PR #40으로 고쳤다. 리포트만 바뀌고 루프 판정에는 닿지 않는다.
