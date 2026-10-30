@@ -2287,20 +2287,37 @@ orca_check() {
     | jq -r --arg suffix "/${OWNER_REPO}" \
         '.result.repos[] | select((.gitRemoteIdentity.canonicalKey // "") | endswith($suffix)) | .id' | head -n1)"
   [[ -n "$REPO_ID" ]] || die "Repository ${OWNER_REPO} is not registered in Orca. Register it with '${ORCA_CLI} repo add --path ${ROOT} --json'."
+  # --surface가 없으면 에이전트가 Orca 앱의 Chat UI 설정을 따라 채팅으로 뜰 수 있다 — 루프는 터미널로만 몬다(#41).
+  # CLI가 그 플래그를 알고(도움말) 실행 중인 앱(호스트)도 받을 때만 넘긴다. 자동 업데이트로 번들 CLI만 새것이고 앱은 재시작 전이면
+  # 호스트가 --surface를 incompatible_runtime으로 거절한다. 못 넘긴 채 채팅으로 뜨면 orca_worktree_create의 outcome.kind 검사가 멈춘다
+  ORCA_SURFACE_ARGS=()
+  if "$ORCA_CLI" worktree create --help 2&gt;/dev/null | grep -q -- '--surface' \
+    &amp;&amp; orca_json status 2&gt;/dev/null | jq -e '.result.runtime.capabilities // [] | index("agent.launch.surface.v1")' &gt;/dev/null 2&gt;&amp;1; then
+    ORCA_SURFACE_ARGS=(--surface terminal)
+  fi
 }
 
 orca_worktree_create() {
-  local n="$1" prompt="$2" name="${3:-${BRANCH_PREFIX}${1}}" comment created
+  local n="$1" prompt="$2" name="${3:-${BRANCH_PREFIX}${1}}" comment created kind delivered
   comment="티켓 루프: ${SKILL_PREFIX}implement ${n} 진행 중"
   [[ "$name" == "${BRANCH_PREFIX}${n}" ]] || comment="티켓 루프: 무인 수습 (#${n})"
   created="$(orca_json worktree create --repo "id:$REPO_ID" --name "$name" --no-parent \
-    --base-branch "origin/${BASE_BRANCH}" --issue "${n}" --agent "$AGENT" \
+    --base-branch "origin/${BASE_BRANCH}" --issue "${n}" --agent "$AGENT" ${ORCA_SURFACE_ARGS[@]+"${ORCA_SURFACE_ARGS[@]}"} \
     --prompt "$prompt" --comment "$comment")"
   jq -e '.ok == true' &lt;&lt;&lt;"$created" &gt;/dev/null || die "Worktree creation failed: $(jq -c '.error' &lt;&lt;&lt;"$created")"
-  WT="$(jq -r '.result.worktree.id' &lt;&lt;&lt;"$created")"
+  # Orca 1.4.244부터 호스트가 agent.launch.v2를 알리면 CLI가 agent.launch로 띄우고 결과를 result.launch에 싣는다(#41) —
+  # 핸들은 launch.outcome.handle, 워크트리 id는 launch.worktreeId에도 있다. result.worktree는 시작 뒤 worktree.show로 채우는데
+  # 그게 실패하면 결과에서 빠진다. result.agentTerminalHandle은 그보다 낡은 호스트의 모양이다(2026-10-30 rsrehab/detection-tslite 실측)
+  WT="$(jq -r '.result.worktree.id // .result.launch.worktreeId // empty' &lt;&lt;&lt;"$created")"
+  [[ -n "$WT" ]] || die "Worktree creation returned no worktree id: $(jq -c '.result | keys' &lt;&lt;&lt;"$created")"
   WT_PATH="${WT#*::}"
-  HANDLE="$(jq -r '.result.agentTerminalHandle // .result.startupTerminal.handle // empty' &lt;&lt;&lt;"$created")"
+  kind="$(jq -r '.result.launch.outcome.kind // empty' &lt;&lt;&lt;"$created")"
+  [[ "$kind" != structured ]] || die "The agent started as a chat, not a terminal (${WT}) — turn off Chat UI in Orca settings, or update Orca so the loop can pass --surface terminal"
+  HANDLE="$(jq -r '.result.launch.outcome.handle // .result.agentTerminalHandle // .result.startupTerminal.handle // empty' &lt;&lt;&lt;"$created")"
   [[ -n "${HANDLE}" ]] || die "No agent terminal handle returned (${WT})"
+  # 프롬프트가 도착하지 않았어도 멈추지 않는다 — 워커가 PR 없이 idle이 되면 그 경로(무인 수습)가 잡는다. 사유는 여기 남긴다
+  delivered="$(jq -r '.result.launch.prompt.outcome // empty' &lt;&lt;&lt;"$created")"
+  case "$delivered" in ""|journaled|handed-to-terminal) ;; *) log warn "#${n}: Orca reports the prompt as '${delivered}' — the agent may not have received it" ;; esac
   # Orca가 워크트리용으로 만든 브랜치(설정에 따라 `issue-N` 또는 `&lt;git 사용자&gt;/issue-N`) — 워커가 브랜치를 바꾸기 전에 기록한다
   WT_BRANCH="$(git -C "$WT_PATH" rev-parse --abbrev-ref HEAD 2&gt;/dev/null || true)"
 }
