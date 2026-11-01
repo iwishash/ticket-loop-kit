@@ -2228,6 +2228,28 @@ grep -q 'repair "${handle}" "PR #${pr} 의 CI가 실패했다.*코드와 무관�
   || fail "CI 수리 프롬프트에 러너·네트워크 오류면 재실행만 하라는 안내가 없음"
 echo "ok  CI 수리 뒤 새 커밋이 없으면 CI 를 다시 봄(재실행만 한 수리는 통과면 계속, 실패면 멈춤)"
 
+# PR 생성 시각: GitHub 이 지금보다 늦은 시각을 주면 지금으로 자른다(#44 — 미국 서머타임이 끝나는 날 01:00–02:00 PDT 의 사건이 1시간
+# 뒤로 온다). 그대로 쓰면 구현이 1시간 늘고 단계 시각이 미래로 밀려 CI·병합 뒤 검증이 0초가 된다. 1분 넘게 늦으면 경고, 몇 초는 조용히
+sed -n '/^iso_epoch() /p; /^pr_created_epoch() {/,/^}/p' "$KIT/files/scripts/ticket-loop.sh" > "$W/pce.sh"
+grep -q '^pr_created_epoch() {' "$W/pce.sh" || fail "pr_created_epoch 를 찾지 못함"
+pce_case() {  # $1 GitHub createdAt 이 지금에서 떨어진 초(빈 값이면 gh 실패) → "now|past|none|<차>|경고 수"
+  (cd "$W" && OFF="$1" bash -c '
+    set -euo pipefail
+    warns=0; log() { [[ "$1" != warn ]] || { warns=$((warns + 1)); shift; echo "$*" > pce-warn.txt; }; }; fmt_epoch() { echo "$1"; }
+    gh() { [[ "$*" == "pr view 587 --json createdAt -q .createdAt" && -n "$OFF" ]] || return 1; jq -rn --argjson e "$(( $(date +%s) + OFF ))" "\$e | todate"; }
+    source pce.sh
+    pr_created_epoch 587 > pce-out.txt; c="$(cat pce-out.txt)"
+    if [[ -z "$c" ]]; then r=none; else d=$(( c - $(date +%s) ))
+      if [[ $d -ge -2 && $d -le 0 ]]; then r=now; elif [[ $d -ge -102 && $d -le -98 ]]; then r=past; else r=$d; fi; fi
+    echo "$r|$warns"')
+}
+[[ "$(pce_case 3600)" == "now|1" ]] || fail "PR 생성 시각이 1시간 미래면 지금으로 자르고 경고해야(#44): $(pce_case 3600)"
+grep -qE '^PR #587: GitHub reports it created at [0-9]+, 3[56][0-9]{2}s from now — using now$' "$W/pce-warn.txt" || fail "미래 생성 시각 경고 문구: $(cat "$W/pce-warn.txt")"
+[[ "$(pce_case 5)" == "now|0" ]] || fail "몇 초 미래(두 시계의 오차)는 경고 없이 지금으로 잘라야: $(pce_case 5)"
+[[ "$(pce_case -100)" == "past|0" ]] || fail "지난 생성 시각은 그대로여야: $(pce_case -100)"
+[[ "$(pce_case "")" == "none|0" ]] || fail "생성 시각을 못 읽으면 빈 값이어야: $(pce_case "")"
+echo "ok  PR 생성 시각이 지금보다 늦으면 지금으로 자름(1분 넘으면 경고 — #44)"
+
 # 기록: PR 을 알아채기까지(pr_pickup_sec) — 값이 있을 때만
 sed -n '/^idle_fp_count() /p; /^record_ticket() {/,/^}/p; /^PH_NAME=/p; /^phase() {/,/^}/p' "$KIT/files/scripts/ticket-loop.sh" > "$W/rec.sh"
 sed -n '/^claude_project_dir() /p; /^ticket_session_dirs() {/,/^}/p; /^session_tokens() {/,/^}/p; /^report_tokens() {/,/^}/p' "$KIT/files/scripts/ticket-loop.sh" >> "$W/rec.sh"

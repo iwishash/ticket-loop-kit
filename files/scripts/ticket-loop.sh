@@ -725,7 +725,20 @@ issue_title() { gh issue view "$1" --json title -q .title; }
 issue_has_label() { gh issue view "$1" --json labels -q '.labels[].name' 2>/dev/null | grep -Fxq -- "$2"; }
 # GitHub 시각(ISO 8601, UTC) → epoch. macOS·Linux의 date 차이를 피해 jq로. 못 읽으면 빈 값
 iso_epoch() { jq -rn --arg t "$1" '$t | sub("\\.[0-9]+Z$"; "Z") | fromdate' 2>/dev/null || true; }
-pr_created_epoch() { iso_epoch "$(gh pr view "$1" --json createdAt -q .createdAt 2>/dev/null || true)"; }
+# PR 생성 시각(GitHub) → epoch. 지금보다 늦으면 지금으로 자른다 — 미국 서머타임이 끝나는 날 태평양 01:00–02:00(PDT)에 생긴 사건을
+# GitHub API가 1시간 뒤(PST)로 돌려준다(#44, rental-portal PR #587). 그대로 쓰면 구현 몫이 1시간 늘고, 단계 시각이 미래로 밀려 그 뒤
+# CI·병합 뒤 검증이 0초가 되며, idle 판정은 PR이 idle 뒤에 열렸다고 본다. 몇 초는 두 시계의 오차라 조용히 자르고, 1분을 넘으면 알린다
+pr_created_epoch() {
+  local c now
+  c="$(iso_epoch "$(gh pr view "$1" --json createdAt -q .createdAt 2>/dev/null || true)")"
+  [[ -n "$c" ]] || return 0
+  now="$(date +%s)"
+  if [[ "$c" -gt "$now" ]]; then
+    [[ $(( c - now )) -le 60 ]] || log warn "PR #$1: GitHub reports it created at $(fmt_epoch "$c"), $(( c - now ))s from now — using now"
+    c="$now"
+  fi
+  printf '%s\n' "$c"
+}
 
 candidates() {
   # READY_LABEL(+SCOPE_LABEL)(+PARENT의 하위 이슈), IN_REVIEW_LABEL 없음, 제목 순번 → 이슈 번호 순
