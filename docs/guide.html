@@ -870,12 +870,12 @@ pnpm run test:integration</code></pre>
 <div class="step"><div class="n">7</div><div class="b">
 <p><b>정리와 요약.</b> 워크스페이스를 <code>completed</code>로 표시하고 <code>orca worktree rm --force</code>로 지운다(cmux: <code>workspace close --force</code>, tmux: <code>kill-window</code>, 둘 다 뒤에 <code>git worktree remove --force</code>). 이어서 <code>git worktree prune</code>을 하고, 로컬의 이슈 브랜치와 Orca가 워크트리용으로 만든 브랜치(설정에 따라 <code>issue-N</code> 또는 <code>&lt;git 사용자&gt;/issue-N</code>, 워크트리를 만든 직후 기록해 둔다), 원격의 이슈 브랜치를 지운다. 마지막으로 로그에 한 줄을 남긴다.</p>
 <pre class="out">[2026-10-08 22:36:14] #42 summary: wall-clock 54m, PR #46 (picked up after 19s), CI 258s, repairs 0, idle false positives 0, post-merge check passed in 212s</pre>
-<p class="small muted">"picked up after"는 PR 생성부터 루프가 다음 단계(충돌·CI 확인)로 넘어가기까지다. 몇십 초를 넘으면 2단계의 정리 대기가 상한까지 간 것이다.</p>
+<p class="small muted">"picked up after"는 PR 생성부터 루프가 다음 단계(충돌·CI 확인)로 넘어가기까지다. 몇십 초를 넘으면 2단계의 정리 대기가 상한까지 간 것이다. GitHub이 준 생성 시각이 지금보다 늦으면 지금으로 잘라 0초가 된다. 미국 서머타임이 끝나는 날 태평양 01:00–02:00(PDT)에 생긴 사건은 GitHub API가 1시간 뒤로 돌려준다. 1분 넘게 늦으면 <code>PR #N: GitHub reports it created at …, …s from now — using now</code> 경고가 남는다.</p>
 <p class="small muted">이 줄들이 <code>/retro</code>의 1차 자료다. 오래 걸린 티켓, 수리가 잦은 티켓, idle 오판이 많은 티켓을 찾아 원인을 본다.</p>
 <p>같은 내용에 모델(터미널 화면에서 읽은 <code>MODEL_REGEX</code> 결과)과 시작·종료 시각을 더한 한 줄을 <code>RECORDS_FILE</code>(JSONL)에도 덧붙인다. <code>--no-merge</code>로 끝난 티켓은 <code>no-merge</code>, 처리 중 루프가 멈춘 티켓은 <code>stopped</code>(멈춘 이유 포함)로 남는다. 병합 뒤 검증 결과(<code>post_merge</code>)는 루프가 병합한 티켓에만 있다 — 병합 전에 멈춘 티켓에는 없다. 검증을 돌린 티켓에는 그 검증 명령이 받은 env(<code>post_merge_why</code>, 스펙을 끝낸 병합을 덮었으면 <code>post_merge_spec_complete</code> — 6단계)도 남는다. <code>log</code>는 그 티켓을 처리한 실행의 로그 파일이다. 로그는 날짜별 파일이라, 멈췄다가 다른 날 이어 간 스펙은 로그가 여러 파일로 나뉜다. 로그는 사람이 읽고, 기록은 리포트와 회고 안내가 읽는다.</p>
 <p><code>impl_sec</code>·<code>repair_sec</code>·<code>ci_wait_sec</code>·<code>post_merge_sec</code>는 경과 시간(<code>wall_sec</code>)을 단계별로 나눈 값이다(0.9.8부터, 초).</p>
 <ul>
-  <li><b>구현</b>: 에이전트가 뜬 때부터 PR이 열린 때(GitHub 시각)까지.</li>
+  <li><b>구현</b>: 에이전트가 뜬 때부터 PR이 열린 때(GitHub 시각, 지금보다 늦으면 지금)까지.</li>
   <li><b>수리</b>: 충돌·CI 수리 프롬프트를 보낸 때부터 수리가 끝났다고 본 때까지, 모든 회차.</li>
   <li><b>CI</b>: 첫 회차는 PR이 열린 때부터 결과까지다. 루프가 PR을 알아채기 전에도 CI는 돌기 때문이다. 수리 뒤 회차는 루프가 CI를 다시 보기 시작한 때부터 센다.</li>
   <li><b>병합 뒤 검증</b>: 검증 명령이 돈 시간. 재실행과 무인 수습 뒤 재검증을 포함하고, 포트 대기는 뺀다.</li>
@@ -2178,7 +2178,20 @@ issue_title() { gh issue view "$1" --json title -q .title; }
 issue_has_label() { gh issue view "$1" --json labels -q '.labels[].name' 2&gt;/dev/null | grep -Fxq -- "$2"; }
 # GitHub 시각(ISO 8601, UTC) → epoch. macOS·Linux의 date 차이를 피해 jq로. 못 읽으면 빈 값
 iso_epoch() { jq -rn --arg t "$1" '$t | sub("\\.[0-9]+Z$"; "Z") | fromdate' 2&gt;/dev/null || true; }
-pr_created_epoch() { iso_epoch "$(gh pr view "$1" --json createdAt -q .createdAt 2&gt;/dev/null || true)"; }
+# PR 생성 시각(GitHub) → epoch. 지금보다 늦으면 지금으로 자른다 — 미국 서머타임이 끝나는 날 태평양 01:00–02:00(PDT)에 생긴 사건을
+# GitHub API가 1시간 뒤(PST)로 돌려준다(#44, rental-portal PR #587). 그대로 쓰면 구현 몫이 1시간 늘고, 단계 시각이 미래로 밀려 그 뒤
+# CI·병합 뒤 검증이 0초가 되며, idle 판정은 PR이 idle 뒤에 열렸다고 본다. 몇 초는 두 시계의 오차라 조용히 자르고, 1분을 넘으면 알린다
+pr_created_epoch() {
+  local c now
+  c="$(iso_epoch "$(gh pr view "$1" --json createdAt -q .createdAt 2&gt;/dev/null || true)")"
+  [[ -n "$c" ]] || return 0
+  now="$(date +%s)"
+  if [[ "$c" -gt "$now" ]]; then
+    [[ $(( c - now )) -le 60 ]] || log warn "PR #$1: GitHub reports it created at $(fmt_epoch "$c"), $(( c - now ))s from now — using now"
+    c="$now"
+  fi
+  printf '%s\n' "$c"
+}
 
 candidates() {
   # READY_LABEL(+SCOPE_LABEL)(+PARENT의 하위 이슈), IN_REVIEW_LABEL 없음, 제목 순번 → 이슈 번호 순
