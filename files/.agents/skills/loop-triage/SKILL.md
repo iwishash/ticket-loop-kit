@@ -30,7 +30,7 @@ disable-model-invocation: true
 | `main_checkout` | 루프를 돌린 메인 체크아웃. 고치지 않는다 |
 | `worker_worktree` | 남아 있는 워커 워크트리(있으면) |
 | `logs.loop`, `logs.loop_from_byte` | 루프 로그와 이 실행이 쓰기 시작한 바이트. 이 실행 부분은 `tail -c +$((loop_from_byte + 1)) <loop>` |
-| `logs.post_merge`, `logs.post_merge_retry`, `post_merge_worktree` | 병합 뒤 검증 로그(첫 실행·재실행)와 검증 워크트리 |
+| `logs.post_merge`, `logs.post_merge_retry`, `post_merge_worktree` | 병합 뒤 검증 로그(첫 실행·재실행)와 검증 워크트리. 검증 워크트리는 멈춤 때 상태 그대로다(실패한 검증의 산출물이 남아 있다) — 루프의 다음 검증이 시작할 때 정리된다(기본 브랜치 끝으로 되돌리고 추적 안 된·무시된 파일을 지운다, `POST_MERGE_KEEP`만 남긴다). 브랜치로 옮기지 않는다 — 브랜치에 올라 있으면 루프가 사람의 작업 트리로 보고 다음 검증을 시작하지 않는다 |
 | `post_merge_window` | 아직 병합 뒤 검증을 통과하지 않은 병합(`POST_MERGE_EVERY`로 묶었을 때). `base`(마지막으로 통과한 커밋), `pending`(병합 순서의 `issue`·`pr`·`commit`), `bisect`(처음 실패하는 병합을 찾은 결과 문장), `first_failing_commit`, `spec_complete`(창의 병합이 끝낸 스펙 번호들 — 검증 명령이 `TICKET_LOOP_POST_MERGE_SPEC_COMPLETE`로 받았다). `pending`이 비고 `spec_complete`만 있으면 병합은 모두 검증을 거쳤고, 그 스펙 번호를 받은 검증만 아직 통과하지 못했다(`post_merge_failed`면 루프 끝에 그 번호로만 돈 스펙 끝 검증이 실패한 것). 병합도 스펙 완료도 없으면 null |
 | `commands.*` | 이 저장소의 `POST_MERGE_CMD`, `POST_MERGE_RETRY_CMD`, `WORKTREE_SETUP_CMD` |
 | `rerun` | 루프를 같은 인자로 다시 실행하는 명령 |

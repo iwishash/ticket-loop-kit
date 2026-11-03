@@ -718,7 +718,7 @@ postmerge_case() {  # $1 POST_MERGE_CMD, $2 LOG_FILE(상대), $3 기대(pass|fai
   rm -f "$P/repo/.ticket-loop/post-merge-7-retry.log"
   (cd "$P/repo" && POST_MERGE_CMD="$1" LOG_FILE="$2" POST_MERGE_WORKTREE="$P/wt" EXPECT="$3" POST_MERGE_RETRY_CMD="${4:-}" EXTRA="${5:-}" FN="$P/fn.sh" bash -c '
     set -euo pipefail
-    ROOT="$(git rev-parse --show-toplevel)"; MAIN_WT="$ROOT"; OWNER_REPO=o/r; BASE_BRANCH=main; POST_MERGE_COPY=""; POST_MERGE_PORT=""; PORT_WAIT_SEC=0
+    ROOT="$(git rev-parse --show-toplevel)"; MAIN_WT="$ROOT"; OWNER_REPO=o/r; BASE_BRANCH=main; POST_MERGE_COPY=""; POST_MERGE_KEEP=""; POST_MERGE_PORT=""; PORT_WAIT_SEC=0
     log() { shift; echo "$*"; }; dim_lines() { local l; while IFS= read -r l; do echo "  $l"; done; }; fmt_epoch() { echo "$1"; }
     post_merge_flaky_record() { echo "FLAKY_RECORD $*"; }   # 알림 블록의 것 — 아래 알림 검사에서 따로 본다
     source "$FN"
@@ -928,12 +928,14 @@ for f in pm_count pm_list pm_cover pm_of pm_save pm_load pm_add pm_spec_closed p
   grep -q "^${f}() {" "$W/fn.sh" || fail "병합 뒤 검증 절에 ${f} 가 없음"
 done
 WIN4="$(printf '11\t21\t%s\n12\t22\t%s\n13\t23\t%s\n14\t24\t%s' "$C1" "$C2" "$C3" "$C4")"
-# $1 실행할 bash 문장들(창·설정·호출) → 출력(stderr 포함). 함수 로그는 단계 이름 없이도 찍힌다
+# $1 실행할 bash 문장들(창·설정·호출) → 출력(stderr 포함). 함수 로그는 단계 이름 없이도 찍힌다.
+# PMW_DIR 을 주면 그 디렉터리의 픽스처(repo·wt·state.json)에서 돈다 — 안에서는 그 디렉터리가 $W 다
 pmw() {
-  rm -rf "$W/repo/.ticket-loop" "$W/state.json"
-  (cd "$W/repo" && FN="$W/fn.sh" W="$W" BODY="$1" bash -c '
+  local d="${PMW_DIR:-$W}"
+  rm -rf "$d/repo/.ticket-loop" "$d/state.json"
+  (cd "$d/repo" && FN="$W/fn.sh" W="$d" BODY="$1" bash -c '
     set -euo pipefail
-    ROOT="$(git rev-parse --show-toplevel)"; MAIN_WT="$ROOT"; OWNER_REPO=o/r; BASE_BRANCH=main; POST_MERGE_COPY=""; POST_MERGE_PORT=""; PORT_WAIT_SEC=0
+    ROOT="$(git rev-parse --show-toplevel)"; MAIN_WT="$ROOT"; OWNER_REPO=o/r; BASE_BRANCH=main; POST_MERGE_COPY=""; POST_MERGE_KEEP=""; POST_MERGE_PORT=""; PORT_WAIT_SEC=0
     POST_MERGE_CMD="exit 0"; POST_MERGE_RETRY_CMD=""; POST_MERGE_WORKTREE="$W/wt"; POST_MERGE=1; POST_MERGE_EVERY=4
     TICKETS=(); MAX=0; done_count=0; PROCESSED=""; CLOSED_SPECS=""; PARENT=""; PICK_RECHECK_SEC=0
     log() { case "${1:-}" in title|step|ok|warn|err) [[ $# -lt 2 ]] || shift ;; esac; echo "$*" >&2; }   # 실제 log 처럼 stderr — 명령 치환(pm_due 의 대상 조회)에 섞이지 않게
@@ -1157,6 +1159,103 @@ out="$(pmw "POST_MERGE=0; printf '%s' '$st' > \"\$PM_STATE_FILE\"; pm_load; pm_f
 [[ "$out" == '[40]' ]] || fail "검증이 꺼진 실행이 스펙 끝 검증을 돌리거나 비움: $out"
 echo "ok  창이 빈 채 닫힌 스펙의 루프 끝 검증(#34)"
 
+# 검증 워크트리 정리(#48): 검증 하나가 시작할 때마다 검증 워크트리를 기본 브랜치 끝 그대로 되돌린다 — 추적 파일의 수정은 버리고, 추적 안 된
+# 파일·무시된 파일(중첩 git 저장소·빈 디렉터리 포함)은 지운다. POST_MERGE_KEEP(.gitignore 꼴)에 맞는 것만 남기고, POST_MERGE_COPY 는 그 뒤에 놓는다.
+# 2026-11 rsrehab/rental-portal 실측(#47) — 재사용하는 검증 워크트리에 .next/dev/cache 가 검증마다 쌓여 57GB 가 됐다.
+# 픽스처는 .gitignore(.next/ node_modules/ .env.local)와 app.txt 를 커밋한 저장소다. 검증 워크트리는 호출 사이에 남는다(아래 순서대로 이어 쓴다)
+K="$(cd "$T" && pwd -P)/pmclean"; mkdir -p "$K"
+git -C "$K" init -q --bare origin.git
+git clone -q "$K/origin.git" "$K/repo" 2>/dev/null
+printf '.next/\nnode_modules/\n.env.local\n' > "$K/repo/.gitignore"; echo v1 > "$K/repo/app.txt"
+git -C "$K/repo" add -A; git -C "$K/repo" -c user.name=t -c user.email=t@t commit -q -m init; git -C "$K/repo" push -q origin HEAD:main 2>/dev/null
+pmk() { PMW_DIR="$K" pmw "$1"; }
+# 지난 검증이 남기는 것: 무시된 캐시(.next/cache 흉내)·의존성 디렉터리·추적 안 된 파일·빈 디렉터리·중첩 git 저장소·추적 파일 수정
+DIRTY='mkdir -p .next/cache/turbopack node_modules/dep empty/dir && echo c > .next/cache/turbopack/blob && echo d > node_modules/dep/index.js && echo u > stray.txt && git init -q nested && echo edited > app.txt'
+# 검증 명령이 시작할 때 보는 것: 최상위 항목, app.txt, git 이 보는 수정·추적 안 된·무시된 경로
+SEE='echo "LS $(LC_ALL=C ls -A | tr "\n" " ")"; echo "APP $(cat app.txt)"; git status --porcelain --ignored | sed "s/^/ST /"'
+# 처음 만드는 검증은 지울 것이 없어 정리 줄 없이 지금처럼 돈다. 그다음 검증은 지난 검증이 남긴 것을 모두 지우고 기본 브랜치 끝에서 돈다
+out="$(pmk "POST_MERGE_CMD='$DIRTY'; run_post_merge 1 || true; POST_MERGE_CMD='$SEE'; run_post_merge 2 || true; echo \"RESULT=\$POST_MERGE_RESULT\"; cat .ticket-loop/post-merge-2.log")" || true
+grep -qE '^#1: post-merge check passed in [0-9]+s$' <<<"$out" && ! grep -q '^#1: cleaned' <<<"$out" || fail "검증 워크트리를 처음 만드는 검증에 정리 줄이 있거나 통과하지 않음: $out"
+grep -qxF '#2: cleaned the check worktree — removed 5 untracked or ignored paths' <<<"$out" \
+  && [[ "$(grep -n '^#2: cleaned the check worktree' <<<"$out" | cut -d: -f1)" -lt "$(grep -n '^#2: post-merge check started' <<<"$out" | cut -d: -f1)" ]] \
+  || fail "정리로 지운 것이 있는데 검증 시작 줄 앞에 정리 줄이 없음: $out"
+grep -qxF 'LS .git .gitignore app.txt ' <<<"$out" && grep -qxF 'APP v1' <<<"$out" && ! grep -q '^ST ' <<<"$out" && grep -qE '^RESULT=passed in [0-9]+s$' <<<"$out" \
+  || fail "두 번째 검증이 기본 브랜치 끝 그대로의 워크트리에서 돌지 않음(남은 것·수정이 보임): $out"
+# POST_MERGE_KEEP 에 맞는 것만 남는다 — 공백 구분 .gitignore 꼴(슬래시 없으면 어느 깊이든, / 로 시작하면 루트만). 정리 줄에 남긴 패턴을 적는다
+out="$(pmk "POST_MERGE_CMD='$DIRTY'; run_post_merge 3 2>/dev/null || true; POST_MERGE_KEEP='node_modules /stray.txt'; POST_MERGE_CMD='$SEE; cat node_modules/dep/index.js'; run_post_merge 4 || true; cat .ticket-loop/post-merge-4.log")" || true
+grep -qxF '#4: cleaned the check worktree — removed 3 untracked or ignored paths (kept POST_MERGE_KEEP: node_modules /stray.txt)' <<<"$out" \
+  && grep -qxF 'LS .git .gitignore app.txt node_modules stray.txt ' <<<"$out" && grep -qxF 'APP v1' <<<"$out" && grep -qx d <<<"$out" \
+  && [[ "$(grep '^ST ' <<<"$out" | sort | tr '\n' '|')" == 'ST !! node_modules/|ST ?? stray.txt|' ]] \
+  || fail "POST_MERGE_KEEP 에 맞는 것만 남기지 않음: $out"
+# 기본 브랜치가 앞으로 가며 지난 검증이 고쳐 둔 추적 파일을 바꿔도 체크아웃이 실패하지 않는다(강제 — 전에는 post_merge_failed 로 멈췄다).
+# 명령은 새 끝의 내용을 본다
+out="$(pmk "POST_MERGE_CMD='$DIRTY'; run_post_merge 5 2>/dev/null || true
+  echo v2 > app.txt; git -c user.name=t -c user.email=t@t commit -q -am v2; git push -q origin HEAD:main 2>/dev/null
+  POST_MERGE_CMD='$SEE'; run_post_merge 6 || true; echo \"RESULT=\$POST_MERGE_RESULT\"; cat .ticket-loop/post-merge-6.log")" || true
+grep -qxF 'APP v2' <<<"$out" && ! grep -q '^ST ' <<<"$out" && grep -qE '^RESULT=passed in [0-9]+s$' <<<"$out" || fail "지난 검증이 고친 추적 파일을 기본 브랜치가 바꾸면 체크아웃이 실패하거나 옛 내용으로 돈다: $out"
+echo "ok  검증 워크트리 정리 — 지난 검증이 남긴 것·추적 파일 수정을 지우고 기본 브랜치 끝에서, POST_MERGE_KEEP 만 남긴다(#48)"
+# POST_MERGE_COPY 는 정리 뒤에 놓인다 — 명령이 시작할 때 메인 체크아웃의 그 파일이 있다. 메인 체크아웃에서 지우면 검증 워크트리에도 옛 사본이 남지 않는다
+echo secret > "$K/repo/.env.local"
+out="$(pmk "POST_MERGE_COPY=.env.local; POST_MERGE_CMD='$DIRTY && echo stale > .env.local'; run_post_merge 7 2>/dev/null || true; POST_MERGE_CMD='cat .env.local; $SEE'; run_post_merge 8 || true; cat .ticket-loop/post-merge-8.log
+  rm .env.local; POST_MERGE_CMD='test ! -e .env.local && echo no-copy-left'; run_post_merge 9 || true; cat .ticket-loop/post-merge-9.log")" || true
+grep -qx secret <<<"$out" && grep -qxF 'LS .env.local .git .gitignore app.txt ' <<<"$out" && [[ "$(grep '^ST ' <<<"$out" | tr '\n' '|')" == 'ST !! .env.local|' ]] \
+  || fail "POST_MERGE_COPY 파일이 정리 뒤 명령 시작 때 없거나 그 밖의 것이 남음: $out"
+grep -qx no-copy-left <<<"$out" || fail "메인 체크아웃에서 지운 POST_MERGE_COPY 파일의 옛 사본이 검증 워크트리에 남음: $out"
+# 한 검증 안에서는 정리하지 않는다 — 재실행 명령은 첫 실행이 남긴 산출물을 본다. 검증이 끝날 때도 정리하지 않는다 — 실패한 검증의 산출물은
+# 다음 검증이 시작할 때까지 검증 워크트리에 남는다(멈춤 사유·멈춤 기록의 post_merge_worktree 가 가리키는 그대로)
+out="$(pmk "POST_MERGE_CMD='echo first-run > artifact.log; exit 1'; POST_MERGE_RETRY_CMD='cat artifact.log; exit 1'; rc=0; run_post_merge 10 || rc=\$?; echo \"RC=\$rc\"; cat .ticket-loop/post-merge-10-retry.log")" || true
+grep -qx 'RC=1' <<<"$out" && grep -qx first-run <<<"$out" || fail "첫 실행과 재실행 사이에 검증 워크트리를 정리함: $out"
+[[ "$(cat "$K/wt/artifact.log" 2>&1)" == first-run ]] || fail "실패한 검증이 끝난 뒤 그 산출물이 검증 워크트리에 남지 않음: $(ls -A "$K/wt")"
+echo "ok  검증 워크트리 정리 — POST_MERGE_COPY 는 정리 뒤에, 한 검증 안·끝에는 정리하지 않는다(#48)"
+# 정리가 실패해도(권한 — 쓰기 권한을 뺀 디렉터리 안의 추적 안 된 파일) 경고 한 줄(검증 워크트리·git 의 첫 오류 줄)을 남기고 검증은 돈다.
+# root 는 권한이 막지 못하므로 건너뛴다
+if [[ "$(id -u)" -ne 0 ]]; then
+  out="$(pmk "POST_MERGE_CMD='mkdir locked && echo x > locked/f && chmod a-w locked'; run_post_merge 11 2>/dev/null || true; POST_MERGE_CMD='echo ran'; run_post_merge 12 || true; echo \"RESULT=\$POST_MERGE_RESULT\"")" || true
+  chmod u+w "$K/wt/locked" 2>/dev/null || true
+  grep -qxF "#12: could not clean the check worktree ($K/wt): warning: failed to remove locked/f: Permission denied — running the check anyway" <<<"$out" \
+    && grep -qE '^RESULT=passed in [0-9]+s$' <<<"$out" || fail "정리 실패에 경고 줄이 없거나 검증을 돌리지 않음: $out"
+  echo "ok  검증 워크트리 정리 — 실패하면 경고 뒤 검증은 돈다(#48)"
+else
+  echo "skip  검증 워크트리 정리 실패(root 는 권한이 막지 못한다)"
+fi
+# 이미 있는 검증 워크트리 자리가 이 저장소의 연결 워크트리가 아니면 정리하지 않는다 — 경고 뒤 did not start, 검증 명령은 돌지 않는다.
+# 같은 origin 을 받은 다른 클론의 워크트리와 그 클론의 메인 체크아웃(다른 git 공통 디렉터리), 이 저장소의 메인 체크아웃(공통 디렉터리는 같지만
+# 연결 워크트리가 아니다 — 시작 검사를 비껴 온 경우의 두 번째 둑)
+git clone -q "$K/origin.git" "$K/other" 2>/dev/null; git -C "$K/other" worktree add -q --detach "$K/other-wt" origin/main 2>/dev/null
+for d in "$K/other-wt" "$K/other" "$K/repo"; do
+  echo mine > "$d/untracked-note"
+  out="$(pmk "POST_MERGE_WORKTREE='$d'; POST_MERGE_CMD='echo should-not-run'; rc=0; run_post_merge 13 || rc=\$?; echo \"RC=\$rc\"; echo \"RESULT=\$POST_MERGE_RESULT\"")" || true
+  [[ "$(cat "$d/untracked-note" 2>&1)" == mine ]] && grep -qx 'RC=1' <<<"$out" && grep -qx 'RESULT=did not start' <<<"$out" \
+    && grep -qF "#13: $d is not a linked worktree of this repository — not cleaning it" <<<"$out" && ! grep -q 'post-merge check started' <<<"$out" \
+    || fail "이 저장소의 연결 워크트리가 아닌 곳($d)을 정리하거나 검증을 돌림: $out"
+  rm -f "$d/untracked-note"
+done
+# 이 저장소의 연결 워크트리라도 브랜치에 올라 있으면 정리하지 않는다 — 루프는 검증 워크트리를 늘 브랜치 없이(detached) 만들고 옮기므로, 브랜치에
+# 올라 있으면 사람의 작업 워크트리(또는 워커 워크트리)다. 경고 뒤 did not start — 추적 파일 수정·추적 안 된 파일·브랜치가 그대로다
+git -C "$K/repo" worktree add -q -b human-work "$K/human-wt" origin/main 2>/dev/null
+echo mine > "$K/human-wt/untracked-note"; echo edited > "$K/human-wt/app.txt"
+out="$(pmk "POST_MERGE_WORKTREE='$K/human-wt'; POST_MERGE_CMD='echo should-not-run'; rc=0; run_post_merge 14 || rc=\$?; echo \"RC=\$rc\"; echo \"RESULT=\$POST_MERGE_RESULT\"")" || true
+[[ "$(cat "$K/human-wt/untracked-note" 2>&1)" == mine && "$(cat "$K/human-wt/app.txt")" == edited && "$(git -C "$K/human-wt" symbolic-ref -q --short HEAD)" == human-work ]] \
+  && grep -qx 'RC=1' <<<"$out" && grep -qx 'RESULT=did not start' <<<"$out" \
+  && grep -qF "#14: $K/human-wt has branch human-work checked out — the loop keeps its check worktree detached" <<<"$out" && ! grep -q 'post-merge check started' <<<"$out" \
+  || fail "브랜치에 올라 있는 연결 워크트리를 정리하거나 검증을 돌림: $out"
+echo "ok  검증 워크트리 정리 — 이 저장소의 연결 워크트리가 아니거나 브랜치에 올라 있으면 정리하지 않고 did not start(#48)"
+# 시작 검사: 병합 뒤 검증이 켜져 있고 POST_MERGE_WORKTREE 가 메인 체크아웃이면(실제 경로 비교 — 상대 경로·심볼릭 링크로 줘도) 설정 오류로 바로
+# 끝낸다(POST_MERGE_EVERY 검사처럼 종료 코드 2). 메인 체크아웃의 추적 안 된 파일은 그대로다. 상대 경로는 다른 파일 경로처럼 저장소 루트 기준이다 —
+# 하위 디렉터리(scripts/)에서 띄워도 "." 은 메인 체크아웃이다(그 디렉터리 기준으로 풀면 시작 검사와 정리가 다른 곳을 본다)
+echo mine > "$T/untracked-note"; ln -s "$T" "$K/main-link"
+for c in "$T|$T" "$T|." "$T/scripts|." "$T|$K/main-link"; do
+  rc=0; err="$(cd "${c%%|*}" && POST_MERGE_CMD=true POST_MERGE_WORKTREE="${c#*|}" bash "$T/scripts/ticket-loop.sh" --dry-run 2>&1 >/dev/null)" || rc=$?
+  [[ $rc -eq 2 && "$(cat "$T/untracked-note")" == mine ]] && grep -q "POST_MERGE_WORKTREE must not be the main checkout or the checkout the loop runs from (got '" <<<"$err" \
+    || fail "POST_MERGE_WORKTREE=${c#*|} (${c%%|*} 에서, 메인 체크아웃) 인데 시작 검사가 종료 코드 2 로 끝내지 않음(rc=$rc): $err"
+done
+rm -f "$T/untracked-note"
+# 자기 자리를 주거나 이번 실행에서 검증을 끄면(--skip-post-merge) 시작 검사에 걸리지 않는다(그 뒤 GitHub 조회에서 멈추는 것은 이 픽스처의 사정)
+err="$(cd "$T" && POST_MERGE_CMD=true POST_MERGE_WORKTREE="$K/wt" bash scripts/ticket-loop.sh --dry-run 2>&1 >/dev/null)" || true
+err+="$(cd "$T" && POST_MERGE_CMD=true POST_MERGE_WORKTREE="$T" bash scripts/ticket-loop.sh --dry-run --skip-post-merge 2>&1 >/dev/null)" || true
+! grep -q 'must not be the main checkout' <<<"$err" || fail "시작 검사가 자기 자리·검증을 끈 실행을 막음: $err"
+echo "ok  검증 워크트리 정리 — POST_MERGE_WORKTREE 가 메인 체크아웃이면 시작 검사가 종료 코드 2(#48)"
+
 # 연결: 병합 뒤 창에 넣고(CI 없는 PR 은 빼고) pm_due 로 정한다. 실패 뒤처리는 post_merge_recover. 시작 때 창을 읽고, 끝날 때(대상 없음 포함)
 # 스펙을 닫고(스펙을 끝냈으면 창에 적고) 남은 창을 검증한다 — 루프 끝에서 처음 닫히는 스펙(사람이 마지막 티켓을 닫음·하위 이슈 반영 지연)도
 # 남은 창의 검증이 TICKET_LOOP_POST_MERGE_SPEC_COMPLETE 로 받게(#32). CI 없는 문서 PR 은 창에서 빼되, 스펙을 끝냈으면 넣는다 — 창이 비어 있어도
@@ -1188,7 +1287,8 @@ startc() { sed -n '/^log "post-merge check: /p' "$KIT/files/scripts/ticket-loop.
 echo "ok  묶어 돌리는 검증 — 연결·값 검사"
 grep -q 'LOG_START_BYTES=$(( $(wc -c < "$LOG_FILE") ))' "$KIT/files/scripts/ticket-loop.sh" || fail "시작 때 로그 파일 크기(LOG_START_BYTES)를 기억하지 않음"
 grep -q '^LOG_FILE="$(abs_path "$LOG_FILE")"$' "$KIT/files/scripts/ticket-loop.sh" && grep -q '^RECORDS_FILE="$(abs_path "$RECORDS_FILE")"$' "$KIT/files/scripts/ticket-loop.sh" && grep -q '^REPORT_DIR="$(abs_path "$REPORT_DIR")"$' "$KIT/files/scripts/ticket-loop.sh" \
-  || fail "LOG_FILE·RECORDS_FILE·REPORT_DIR 를 시작 때 절대 경로로 굳히지 않는다"
+  && grep -qxF '[[ -z "$POST_MERGE_WORKTREE" ]] || POST_MERGE_WORKTREE="$(abs_path "$POST_MERGE_WORKTREE")"' "$KIT/files/scripts/ticket-loop.sh" \
+  || fail "LOG_FILE·RECORDS_FILE·REPORT_DIR·POST_MERGE_WORKTREE 를 시작 때 절대 경로로 굳히지 않는다"
 [[ "$(cd "$P/repo" && ROOT="$P/repo" FN="$P/fn.sh" bash -c 'source "$FN"; abs_path /dev/null; echo; abs_path /abs/x; echo; abs_path rel/y')" == $'/dev/null\n/abs/x\n'"$P/repo/rel/y" ]] || fail "abs_path 가 /dev/null·절대 경로를 그대로 두고 상대 경로만 ROOT 에 붙이지 않는다"
 
 # 진행 로그: 실제 git 저장소에서 progress_reset/check 를 그대로 부른다 — 브랜치·첫 수정·커밋은 바로 한 줄, 심장박동은 변경 파일 목록이
@@ -1783,7 +1883,7 @@ grep -qF 'triage worker_no_pr "$reason" || true' "$SCRIPT" && [[ "$(grep -cF 'ST
 PMD="$(cd "$T" && pwd -P)/postmerge"   # 위 병합 뒤 검증 검사의 저장소($P 는 그 뒤 다른 검사가 다시 쓴다)
 out="$(cd "$PMD/repo" && POST_MERGE_CMD='exit 0' LOG_FILE=.ticket-loop/loop-0101.log POST_MERGE_WORKTREE="$PMD/wt" FN="$PMD/fn.sh" bash -c '
   set -euo pipefail
-  ROOT="$(git rev-parse --show-toplevel)"; MAIN_WT="$ROOT"; OWNER_REPO=o/r; BASE_BRANCH=main; POST_MERGE_COPY=""; POST_MERGE_PORT=""; PORT_WAIT_SEC=0; POST_MERGE_RETRY_CMD=""
+  ROOT="$(git rev-parse --show-toplevel)"; MAIN_WT="$ROOT"; OWNER_REPO=o/r; BASE_BRANCH=main; POST_MERGE_COPY=""; POST_MERGE_KEEP=""; POST_MERGE_PORT=""; PORT_WAIT_SEC=0; POST_MERGE_RETRY_CMD=""
   log() { shift; echo "$*"; }; dim_lines() { cat; }; fmt_epoch() { echo "$1"; }
   source "$FN"; LOG_FILE="$(abs_path "$LOG_FILE")"
   run_post_merge 7 -after-triage; echo "POST_MERGE_LOG=$POST_MERGE_LOG POST_MERGE_WT=$POST_MERGE_WT"' 2>&1)" || fail "수습 뒤 병합 뒤 검증 실패: $out"
