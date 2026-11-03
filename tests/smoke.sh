@@ -1232,12 +1232,13 @@ for d in "$K/other-wt" "$K/other" "$K/repo"; do
 done
 echo "ok  검증 워크트리 정리 — 이 저장소의 연결 워크트리가 아니면 정리하지 않고 did not start(#48)"
 # 시작 검사: 병합 뒤 검증이 켜져 있고 POST_MERGE_WORKTREE 가 메인 체크아웃이면(실제 경로 비교 — 상대 경로·심볼릭 링크로 줘도) 설정 오류로 바로
-# 끝낸다(POST_MERGE_EVERY 검사처럼 종료 코드 2). 메인 체크아웃의 추적 안 된 파일은 그대로다
+# 끝낸다(POST_MERGE_EVERY 검사처럼 종료 코드 2). 메인 체크아웃의 추적 안 된 파일은 그대로다. 상대 경로는 다른 파일 경로처럼 저장소 루트 기준이다 —
+# 하위 디렉터리(scripts/)에서 띄워도 "." 은 메인 체크아웃이다(그 디렉터리 기준으로 풀면 시작 검사와 정리가 다른 곳을 본다)
 echo mine > "$T/untracked-note"; ln -s "$T" "$K/main-link"
-for v in "$T" . "$K/main-link"; do
-  rc=0; err="$(cd "$T" && POST_MERGE_CMD=true POST_MERGE_WORKTREE="$v" bash scripts/ticket-loop.sh --dry-run 2>&1 >/dev/null)" || rc=$?
-  [[ $rc -eq 2 && "$(cat "$T/untracked-note")" == mine ]] && grep -q "POST_MERGE_WORKTREE must not be the main checkout (got '$v')" <<<"$err" \
-    || fail "POST_MERGE_WORKTREE=$v (메인 체크아웃) 인데 시작 검사가 종료 코드 2 로 끝내지 않음(rc=$rc): $err"
+for c in "$T|$T" "$T|." "$T/scripts|." "$T|$K/main-link"; do
+  rc=0; err="$(cd "${c%%|*}" && POST_MERGE_CMD=true POST_MERGE_WORKTREE="${c#*|}" bash "$T/scripts/ticket-loop.sh" --dry-run 2>&1 >/dev/null)" || rc=$?
+  [[ $rc -eq 2 && "$(cat "$T/untracked-note")" == mine ]] && grep -q "POST_MERGE_WORKTREE must not be the main checkout or the checkout the loop runs from (got '" <<<"$err" \
+    || fail "POST_MERGE_WORKTREE=${c#*|} (${c%%|*} 에서, 메인 체크아웃) 인데 시작 검사가 종료 코드 2 로 끝내지 않음(rc=$rc): $err"
 done
 rm -f "$T/untracked-note"
 # 자기 자리를 주거나 이번 실행에서 검증을 끄면(--skip-post-merge) 시작 검사에 걸리지 않는다(그 뒤 GitHub 조회에서 멈추는 것은 이 픽스처의 사정)
@@ -1277,7 +1278,8 @@ startc() { sed -n '/^log "post-merge check: /p' "$KIT/files/scripts/ticket-loop.
 echo "ok  묶어 돌리는 검증 — 연결·값 검사"
 grep -q 'LOG_START_BYTES=$(( $(wc -c < "$LOG_FILE") ))' "$KIT/files/scripts/ticket-loop.sh" || fail "시작 때 로그 파일 크기(LOG_START_BYTES)를 기억하지 않음"
 grep -q '^LOG_FILE="$(abs_path "$LOG_FILE")"$' "$KIT/files/scripts/ticket-loop.sh" && grep -q '^RECORDS_FILE="$(abs_path "$RECORDS_FILE")"$' "$KIT/files/scripts/ticket-loop.sh" && grep -q '^REPORT_DIR="$(abs_path "$REPORT_DIR")"$' "$KIT/files/scripts/ticket-loop.sh" \
-  || fail "LOG_FILE·RECORDS_FILE·REPORT_DIR 를 시작 때 절대 경로로 굳히지 않는다"
+  && grep -qxF '[[ -z "$POST_MERGE_WORKTREE" ]] || POST_MERGE_WORKTREE="$(abs_path "$POST_MERGE_WORKTREE")"' "$KIT/files/scripts/ticket-loop.sh" \
+  || fail "LOG_FILE·RECORDS_FILE·REPORT_DIR·POST_MERGE_WORKTREE 를 시작 때 절대 경로로 굳히지 않는다"
 [[ "$(cd "$P/repo" && ROOT="$P/repo" FN="$P/fn.sh" bash -c 'source "$FN"; abs_path /dev/null; echo; abs_path /abs/x; echo; abs_path rel/y')" == $'/dev/null\n/abs/x\n'"$P/repo/rel/y" ]] || fail "abs_path 가 /dev/null·절대 경로를 그대로 두고 상대 경로만 ROOT 에 붙이지 않는다"
 
 # 진행 로그: 실제 git 저장소에서 progress_reset/check 를 그대로 부른다 — 브랜치·첫 수정·커밋은 바로 한 줄, 심장박동은 변경 파일 목록이

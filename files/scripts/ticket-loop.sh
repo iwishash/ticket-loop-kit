@@ -240,11 +240,13 @@ TRIAGE_LABEL="${TRIAGE_LABEL:-loop-triage}"
 # 파일 경로는 시작 때 한 번 저장소 루트 기준 절대 경로로 굳힌다(loop.env나 환경변수로 상대 경로를 줘도 같다). 루프는 저장소
 # 루트에서 돌지만, 병합 뒤 검증처럼 다른 디렉터리로 cd 한 서브셸에서 여는 파일은 그 디렉터리 기준이 된다 — 실측(0.8.3,
 # rental-portal #101)에서 post-merge-N.log가 검증 워크트리 안에 생기고 루프는 저장소 루트에서 꼬리를 찾지 못했다.
-# /dev/null(로그 끔)은 절대 경로라 그대로다
+# /dev/null(로그 끔)은 절대 경로라 그대로다. 검증 워크트리(POST_MERGE_WORKTREE)도 굳힌다 — 루프를 하위 디렉터리에서 띄우면 시작 검사와
+# 워크트리 만들기(git -C 저장소 루트)는 루트 기준, 정리(git -C 검증 워크트리)는 지금 디렉터리 기준으로 풀려 서로 다른 곳을 볼 수 있다
 abs_path() { case "$1" in /*) printf '%s' "$1" ;; *) printf '%s/%s' "$ROOT" "$1" ;; esac; }
 LOG_FILE="$(abs_path "$LOG_FILE")"
 RECORDS_FILE="$(abs_path "$RECORDS_FILE")"
 REPORT_DIR="$(abs_path "$REPORT_DIR")"
+[[ -z "$POST_MERGE_WORKTREE" ]] || POST_MERGE_WORKTREE="$(abs_path "$POST_MERGE_WORKTREE")"
 # ----- 에이전트 프리셋 -----
 # AGENT가 기동 명령·배너·모델 정규식·스킬 접두사·화면 분류 정규식(사용량 한도·권한 확인 창)의 기본값을 정한다. loop.env나 환경변수로 준 값이 이긴다.
 #   claude  Claude Code. 스킬은 /이름. 모델명은 상태줄·배너의 "Opus 5.5" 꼴. 사용량 한도는 "You've reached your … limit"·"usage limit", 권한 확인 창은
@@ -330,10 +332,10 @@ done
 # 병합 뒤 검증은 시작할 때마다 검증 워크트리를 기본 브랜치 끝으로 되돌리고 추적 안 된·무시된 파일을 지운다(pm_clean). 그 자리가 메인 체크아웃
 # (또는 루프를 띄운 체크아웃)이면 사람의 작업 파일이 지워지므로 시작하지 않는다 — 실제 경로로 비교한다(상대 경로·심볼릭 링크로 줘도)
 if [[ $POST_MERGE -eq 1 && -n "$POST_MERGE_WORKTREE" ]]; then
-  pm_wt_real="$(cd "$(abs_path "$POST_MERGE_WORKTREE")" 2>/dev/null && pwd -P || true)"
+  pm_wt_real="$(cd "$POST_MERGE_WORKTREE" 2>/dev/null && pwd -P || true)"
   for pm_wt_main in "$ROOT" "$(git -C "$ROOT" worktree list --porcelain 2>/dev/null | sed -n '1s/^worktree //p')"; do
     [[ -z "$pm_wt_real" || -z "$pm_wt_main" || "$pm_wt_real" != "$(cd "$pm_wt_main" 2>/dev/null && pwd -P)" ]] \
-      || { echo "POST_MERGE_WORKTREE must not be the main checkout (got '${POST_MERGE_WORKTREE}') — the post-merge check resets its worktree and deletes the untracked and ignored files there" >&2; exit 2; }
+      || { echo "POST_MERGE_WORKTREE must not be the main checkout or the checkout the loop runs from (got '${POST_MERGE_WORKTREE}') — the post-merge check resets its worktree and deletes the untracked and ignored files there" >&2; exit 2; }
   done
 fi
 
@@ -1918,12 +1920,12 @@ wait_post_merge_port() {
 # $1이 이 저장소의 연결 워크트리인가 — git 공통 디렉터리가 이 저장소의 것과 같고(다른 저장소·클론이 아니다), 자기 git 디렉터리는 공통
 # 디렉터리와 다르다(메인 체크아웃이 아니다). 정리(pm_clean)는 지우는 일이라, 이미 있는 검증 워크트리 자리가 이것이 아니면 손대지 않는다
 pm_linked_worktree() {
-  local common own dir
+  local common wt_common wt_gitdir
   common="$(git -C "$ROOT" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" || return 1
-  own="$(git -C "$1" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" || return 1
-  dir="$(git -C "$1" rev-parse --path-format=absolute --git-dir 2>/dev/null)" || return 1
-  common="$(cd "$common" && pwd -P)"; own="$(cd "$own" && pwd -P)"; dir="$(cd "$dir" && pwd -P)"
-  [[ -n "$own" && "$own" == "$common" && "$dir" != "$own" ]]
+  wt_common="$(git -C "$1" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" || return 1
+  wt_gitdir="$(git -C "$1" rev-parse --path-format=absolute --git-dir 2>/dev/null)" || return 1
+  common="$(cd "$common" && pwd -P)"; wt_common="$(cd "$wt_common" && pwd -P)"; wt_gitdir="$(cd "$wt_gitdir" && pwd -P)"
+  [[ -n "$wt_common" && "$wt_common" == "$common" && "$wt_gitdir" != "$wt_common" ]]
 }
 
 # 검증 워크트리 $2의 추적 안 된 파일과 무시된 파일을 지운다 — 중첩 git 저장소(-ff)와 빈 디렉터리(-d)도. 검증 하나가 시작할 때 강제 체크아웃
