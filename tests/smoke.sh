@@ -1174,7 +1174,7 @@ DIRTY='mkdir -p .next/cache/turbopack node_modules/dep empty/dir && echo c > .ne
 # 검증 명령이 시작할 때 보는 것: 최상위 항목, app.txt, git 이 보는 수정·추적 안 된·무시된 경로
 SEE='echo "LS $(LC_ALL=C ls -A | tr "\n" " ")"; echo "APP $(cat app.txt)"; git status --porcelain --ignored | sed "s/^/ST /"'
 # 처음 만드는 검증은 지울 것이 없어 정리 줄 없이 지금처럼 돈다. 그다음 검증은 지난 검증이 남긴 것을 모두 지우고 기본 브랜치 끝에서 돈다
-out="$(pmk "POST_MERGE_CMD='$DIRTY'; run_post_merge 1; POST_MERGE_CMD='$SEE'; run_post_merge 2 || true; echo \"RESULT=\$POST_MERGE_RESULT\"; cat .ticket-loop/post-merge-2.log")"
+out="$(pmk "POST_MERGE_CMD='$DIRTY'; run_post_merge 1 || true; POST_MERGE_CMD='$SEE'; run_post_merge 2 || true; echo \"RESULT=\$POST_MERGE_RESULT\"; cat .ticket-loop/post-merge-2.log")" || true
 grep -qE '^#1: post-merge check passed in [0-9]+s$' <<<"$out" && ! grep -q '^#1: cleaned' <<<"$out" || fail "검증 워크트리를 처음 만드는 검증에 정리 줄이 있거나 통과하지 않음: $out"
 grep -qxF '#2: cleaned the check worktree — removed 5 untracked or ignored paths' <<<"$out" \
   && [[ "$(grep -n '^#2: cleaned the check worktree' <<<"$out" | cut -d: -f1)" -lt "$(grep -n '^#2: post-merge check started' <<<"$out" | cut -d: -f1)" ]] \
@@ -1182,36 +1182,36 @@ grep -qxF '#2: cleaned the check worktree — removed 5 untracked or ignored pat
 grep -qxF 'LS .git .gitignore app.txt ' <<<"$out" && grep -qxF 'APP v1' <<<"$out" && ! grep -q '^ST ' <<<"$out" && grep -qE '^RESULT=passed in [0-9]+s$' <<<"$out" \
   || fail "두 번째 검증이 기본 브랜치 끝 그대로의 워크트리에서 돌지 않음(남은 것·수정이 보임): $out"
 # POST_MERGE_KEEP 에 맞는 것만 남는다 — 공백 구분 .gitignore 꼴(슬래시 없으면 어느 깊이든, / 로 시작하면 루트만). 정리 줄에 남긴 패턴을 적는다
-out="$(pmk "POST_MERGE_CMD='$DIRTY'; run_post_merge 3 2>/dev/null; POST_MERGE_KEEP='node_modules /stray.txt'; POST_MERGE_CMD='$SEE; cat node_modules/dep/index.js'; run_post_merge 4 || true; cat .ticket-loop/post-merge-4.log")"
+out="$(pmk "POST_MERGE_CMD='$DIRTY'; run_post_merge 3 2>/dev/null || true; POST_MERGE_KEEP='node_modules /stray.txt'; POST_MERGE_CMD='$SEE; cat node_modules/dep/index.js'; run_post_merge 4 || true; cat .ticket-loop/post-merge-4.log")" || true
 grep -qxF '#4: cleaned the check worktree — removed 3 untracked or ignored paths (kept POST_MERGE_KEEP: node_modules /stray.txt)' <<<"$out" \
   && grep -qxF 'LS .git .gitignore app.txt node_modules stray.txt ' <<<"$out" && grep -qxF 'APP v1' <<<"$out" && grep -qx d <<<"$out" \
   && [[ "$(grep '^ST ' <<<"$out" | sort | tr '\n' '|')" == 'ST !! node_modules/|ST ?? stray.txt|' ]] \
   || fail "POST_MERGE_KEEP 에 맞는 것만 남기지 않음: $out"
 # 기본 브랜치가 앞으로 가며 지난 검증이 고쳐 둔 추적 파일을 바꿔도 체크아웃이 실패하지 않는다(강제 — 전에는 post_merge_failed 로 멈췄다).
 # 명령은 새 끝의 내용을 본다
-out="$(pmk "POST_MERGE_CMD='$DIRTY'; run_post_merge 5 2>/dev/null
+out="$(pmk "POST_MERGE_CMD='$DIRTY'; run_post_merge 5 2>/dev/null || true
   echo v2 > app.txt; git -c user.name=t -c user.email=t@t commit -q -am v2; git push -q origin HEAD:main 2>/dev/null
-  POST_MERGE_CMD='$SEE'; run_post_merge 6 || true; echo \"RESULT=\$POST_MERGE_RESULT\"; cat .ticket-loop/post-merge-6.log")"
+  POST_MERGE_CMD='$SEE'; run_post_merge 6 || true; echo \"RESULT=\$POST_MERGE_RESULT\"; cat .ticket-loop/post-merge-6.log")" || true
 grep -qxF 'APP v2' <<<"$out" && ! grep -q '^ST ' <<<"$out" && grep -qE '^RESULT=passed in [0-9]+s$' <<<"$out" || fail "지난 검증이 고친 추적 파일을 기본 브랜치가 바꾸면 체크아웃이 실패하거나 옛 내용으로 돈다: $out"
 echo "ok  검증 워크트리 정리 — 지난 검증이 남긴 것·추적 파일 수정을 지우고 기본 브랜치 끝에서, POST_MERGE_KEEP 만 남긴다(#48)"
 # POST_MERGE_COPY 는 정리 뒤에 놓인다 — 명령이 시작할 때 메인 체크아웃의 그 파일이 있다. 메인 체크아웃에서 지우면 검증 워크트리에도 옛 사본이 남지 않는다
 echo secret > "$K/repo/.env.local"
-out="$(pmk "POST_MERGE_COPY=.env.local; POST_MERGE_CMD='$DIRTY && echo stale > .env.local'; run_post_merge 7 2>/dev/null; POST_MERGE_CMD='cat .env.local; $SEE'; run_post_merge 8 || true; cat .ticket-loop/post-merge-8.log
-  rm .env.local; POST_MERGE_CMD='test ! -e .env.local && echo no-copy-left'; run_post_merge 9 || true; cat .ticket-loop/post-merge-9.log")"
+out="$(pmk "POST_MERGE_COPY=.env.local; POST_MERGE_CMD='$DIRTY && echo stale > .env.local'; run_post_merge 7 2>/dev/null || true; POST_MERGE_CMD='cat .env.local; $SEE'; run_post_merge 8 || true; cat .ticket-loop/post-merge-8.log
+  rm .env.local; POST_MERGE_CMD='test ! -e .env.local && echo no-copy-left'; run_post_merge 9 || true; cat .ticket-loop/post-merge-9.log")" || true
 grep -qx secret <<<"$out" && grep -qxF 'LS .env.local .git .gitignore app.txt ' <<<"$out" && [[ "$(grep '^ST ' <<<"$out" | tr '\n' '|')" == 'ST !! .env.local|' ]] \
   || fail "POST_MERGE_COPY 파일이 정리 뒤 명령 시작 때 없거나 그 밖의 것이 남음: $out"
 grep -qx no-copy-left <<<"$out" || fail "메인 체크아웃에서 지운 POST_MERGE_COPY 파일의 옛 사본이 검증 워크트리에 남음: $out"
 # 한 검증 안에서는 정리하지 않는다 — 재실행 명령은 첫 실행이 남긴 산출물을 본다. 검증이 끝날 때도 정리하지 않는다 — 실패한 검증의 산출물은
 # 다음 검증이 시작할 때까지 검증 워크트리에 남는다(멈춤 사유·멈춤 기록의 post_merge_worktree 가 가리키는 그대로)
-out="$(pmk "POST_MERGE_CMD='echo first-run > artifact.log; exit 1'; POST_MERGE_RETRY_CMD='cat artifact.log; exit 1'; rc=0; run_post_merge 10 || rc=\$?; echo \"RC=\$rc\"; cat .ticket-loop/post-merge-10-retry.log")"
+out="$(pmk "POST_MERGE_CMD='echo first-run > artifact.log; exit 1'; POST_MERGE_RETRY_CMD='cat artifact.log; exit 1'; rc=0; run_post_merge 10 || rc=\$?; echo \"RC=\$rc\"; cat .ticket-loop/post-merge-10-retry.log")" || true
 grep -qx 'RC=1' <<<"$out" && grep -qx first-run <<<"$out" || fail "첫 실행과 재실행 사이에 검증 워크트리를 정리함: $out"
 [[ "$(cat "$K/wt/artifact.log" 2>&1)" == first-run ]] || fail "실패한 검증이 끝난 뒤 그 산출물이 검증 워크트리에 남지 않음: $(ls -A "$K/wt")"
 echo "ok  검증 워크트리 정리 — POST_MERGE_COPY 는 정리 뒤에, 한 검증 안·끝에는 정리하지 않는다(#48)"
 # 정리가 실패해도(권한 — 쓰기 권한을 뺀 디렉터리 안의 추적 안 된 파일) 경고 한 줄(검증 워크트리·git 의 첫 오류 줄)을 남기고 검증은 돈다.
 # root 는 권한이 막지 못하므로 건너뛴다
 if [[ "$(id -u)" -ne 0 ]]; then
-  out="$(pmk "POST_MERGE_CMD='mkdir locked && echo x > locked/f && chmod a-w locked'; run_post_merge 11 2>/dev/null; POST_MERGE_CMD='echo ran'; run_post_merge 12 || true; echo \"RESULT=\$POST_MERGE_RESULT\"")"
-  chmod u+w "$K/wt/locked"
+  out="$(pmk "POST_MERGE_CMD='mkdir locked && echo x > locked/f && chmod a-w locked'; run_post_merge 11 2>/dev/null || true; POST_MERGE_CMD='echo ran'; run_post_merge 12 || true; echo \"RESULT=\$POST_MERGE_RESULT\"")" || true
+  chmod u+w "$K/wt/locked" 2>/dev/null || true
   grep -qxF "#12: could not clean the check worktree ($K/wt): warning: failed to remove locked/f: Permission denied — running the check anyway" <<<"$out" \
     && grep -qE '^RESULT=passed in [0-9]+s$' <<<"$out" || fail "정리 실패에 경고 줄이 없거나 검증을 돌리지 않음: $out"
   echo "ok  검증 워크트리 정리 — 실패하면 경고 뒤 검증은 돈다(#48)"
@@ -1224,7 +1224,7 @@ fi
 git clone -q "$K/origin.git" "$K/other" 2>/dev/null; git -C "$K/other" worktree add -q --detach "$K/other-wt" origin/main 2>/dev/null
 for d in "$K/other-wt" "$K/other" "$K/repo"; do
   echo mine > "$d/untracked-note"
-  out="$(pmk "POST_MERGE_WORKTREE='$d'; POST_MERGE_CMD='echo should-not-run'; rc=0; run_post_merge 13 || rc=\$?; echo \"RC=\$rc\"; echo \"RESULT=\$POST_MERGE_RESULT\"")"
+  out="$(pmk "POST_MERGE_WORKTREE='$d'; POST_MERGE_CMD='echo should-not-run'; rc=0; run_post_merge 13 || rc=\$?; echo \"RC=\$rc\"; echo \"RESULT=\$POST_MERGE_RESULT\"")" || true
   [[ "$(cat "$d/untracked-note" 2>&1)" == mine ]] && grep -qx 'RC=1' <<<"$out" && grep -qx 'RESULT=did not start' <<<"$out" \
     && grep -qF "#13: $d is not a linked worktree of this repository — not cleaning it" <<<"$out" && ! grep -q 'post-merge check started' <<<"$out" \
     || fail "이 저장소의 연결 워크트리가 아닌 곳($d)을 정리하거나 검증을 돌림: $out"
@@ -1234,7 +1234,7 @@ done
 # 올라 있으면 사람의 작업 워크트리(또는 워커 워크트리)다. 경고 뒤 did not start — 추적 파일 수정·추적 안 된 파일·브랜치가 그대로다
 git -C "$K/repo" worktree add -q -b human-work "$K/human-wt" origin/main 2>/dev/null
 echo mine > "$K/human-wt/untracked-note"; echo edited > "$K/human-wt/app.txt"
-out="$(pmk "POST_MERGE_WORKTREE='$K/human-wt'; POST_MERGE_CMD='echo should-not-run'; rc=0; run_post_merge 14 || rc=\$?; echo \"RC=\$rc\"; echo \"RESULT=\$POST_MERGE_RESULT\"")"
+out="$(pmk "POST_MERGE_WORKTREE='$K/human-wt'; POST_MERGE_CMD='echo should-not-run'; rc=0; run_post_merge 14 || rc=\$?; echo \"RC=\$rc\"; echo \"RESULT=\$POST_MERGE_RESULT\"")" || true
 [[ "$(cat "$K/human-wt/untracked-note" 2>&1)" == mine && "$(cat "$K/human-wt/app.txt")" == edited && "$(git -C "$K/human-wt" symbolic-ref -q --short HEAD)" == human-work ]] \
   && grep -qx 'RC=1' <<<"$out" && grep -qx 'RESULT=did not start' <<<"$out" \
   && grep -qF "#14: $K/human-wt has branch human-work checked out — the loop keeps its check worktree detached" <<<"$out" && ! grep -q 'post-merge check started' <<<"$out" \
