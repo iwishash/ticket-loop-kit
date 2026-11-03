@@ -24,6 +24,7 @@
   - 키트를 올린 뒤 첫 병합 뒤 검증이 이미 쌓인 캐시를 알아서 지운다. 수십 GB면 그 검증의 시작이 지우는 시간만큼 늦다.
   - 이제 의존성 디렉터리(`node_modules` 등)도 검증마다 지운다. 검증 명령이 설치로 시작하면(예 `pnpm install --frozen-lockfile --prefer-offline`) 검증은 그대로 돌고 설치 시간만 는다(rental-portal은 전역 저장소에서 링크해 몇십 초).
   - 남기려면 `loop.env`에 `POST_MERGE_KEEP="${POST_MERGE_KEEP:-node_modules}"`를 쓴다. `.next` 같은 빌드 캐시는 넣지 않는다 — 이번에 쌓인 것이 그 안이다.
+  - 검증 워크트리에 손으로 넣어 둔 파일(env 파일, 손으로 설치한 의존성)도 지워진다. 메인 체크아웃에서 복사할 것은 `POST_MERGE_COPY`에, 그 자리에 남길 것은 `POST_MERGE_KEEP`에 적는다.
   - `POST_MERGE_WORKTREE`를 메인 체크아웃으로 잡아 둔 저장소에서는 루프가 시작하지 않는다. 전용 경로로 바꾸거나, 지워서 기본값을 쓴다.
   - 검증 워크트리를 조사하다 브랜치로 옮겨 둔 채면 다음 검증이 `did not start`로 멈춘다. `git -C <검증 워크트리> switch --detach`로 되돌린다.
   - PDF 재빌드.
