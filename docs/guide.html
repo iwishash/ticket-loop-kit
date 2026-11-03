@@ -750,7 +750,7 @@ bash scripts/ticket-loop.sh --parent 40             # 끝난 스펙이면 "No ti
   <tr><td><code>POST_MERGE_COPY</code></td><td>(없음)</td><td>그 전에 메인 체크아웃에서 복사할 파일(공백 구분), 예 <code>.env.local</code>. 검증 워크트리를 정리한 뒤에 놓으므로, 메인 체크아웃에서 지운 파일은 옛 사본도 남지 않는다</td></tr>
   <tr><td><code>POST_MERGE_KEEP</code></td><td>(없음 = 깨끗한 체크아웃)</td><td>검증 워크트리를 정리할 때 남길 경로 패턴(공백 구분, <code>.gitignore</code> 꼴 — 검증 워크트리 루트 기준, 슬래시 없으면 어느 깊이든, <code>/</code>로 시작하면 루트만), 예 <code>node_modules</code>. 의존성 디렉터리를 남겨 다시 설치하는 시간을 아낄 때만 쓴다. 검증마다 커지는 빌드 캐시(<code>.next</code> 등)는 넣지 않는다 — 다시 쌓인다(7장 6단계)</td></tr>
   <tr><td><code>POST_MERGE_PORT</code></td><td>(없음)</td><td>그 명령이 쓰는 포트. 지정하면 비기를 최대 10분 기다린다</td></tr>
-  <tr><td><code>POST_MERGE_WORKTREE</code></td><td><code>~/.cache/ticket-loop/&lt;owner-repo&gt;/post-merge</code></td><td>병합 뒤 검증을 돌릴 전용 워크트리. 저장소 밖에 두고 재사용하되, 검증마다 시작할 때 기본 브랜치 끝 그대로 되돌린다(추적 파일의 수정은 버리고, 추적 안 된·무시된 파일은 <code>POST_MERGE_KEEP</code>에 맞는 것 말고 지운다). 메인 체크아웃을 가리키면 루프가 시작하지 않는다(종료 코드 2)</td></tr>
+  <tr><td><code>POST_MERGE_WORKTREE</code></td><td><code>~/.cache/ticket-loop/&lt;owner-repo&gt;/post-merge</code></td><td>병합 뒤 검증을 돌릴 전용 워크트리. 저장소 밖에 두고 재사용하되, 검증마다 시작할 때 기본 브랜치 끝 그대로 되돌린다(추적 파일의 수정은 버리고, 추적 안 된·무시된 파일은 <code>POST_MERGE_KEEP</code>에 맞는 것 말고 지운다). 메인 체크아웃을 가리키면 루프가 시작하지 않고(종료 코드 2), 이미 있는 그 자리가 이 저장소의 연결 워크트리가 아니거나 브랜치에 올라 있으면 정리하지 않는다</td></tr>
   <tr><td><code>LOG_FILE</code></td><td><code>.ticket-loop/loop-MMDD.log</code></td><td>진행 로그. 복구와 회고의 1차 자료다. <code>/dev/null</code>이면 끈다. 상대 경로는 저장소 루트 기준이고 시작 때 절대 경로로 굳힌다(<code>RECORDS_FILE</code>·<code>REPORT_DIR</code>도 같다) — 병합 뒤 검증 로그 <code>post-merge-N.log</code>는 이 파일과 같은 디렉터리에 생긴다. 터미널에는 같은 줄을 단계별 색으로 보여 준다(티켓 제목 굵은 자주, 단계 전환 청록, 성공 초록, 되풀이·수리·건너뜀 노랑, 중단 굵은 빨강, 시각과 워커 화면 꼬리는 흐리게) — stderr가 터미널이 아니거나 <code>NO_COLOR</code>가 있으면 맨글자고, 파일에는 언제나 색 코드 없이 쓴다. 실행 맨 앞에는 키트 머리줄 <code>━━ ticket-loop-kit 0.9.6 (커밋) ━━…</code>(굵은 주황)을 한 줄 찍는다 — 같은 날 로그에 이어 붙는 실행의 경계이고, 그 실행을 어느 키트 버전이 돌렸는지 남긴다(<code>.ticket-loop/kit.json</code>, 없으면 <code>unknown</code>)</td></tr>
   <tr><td><code>PROGRESS_SEC</code></td><td><code>60</code></td><td>PR·수리를 기다리는 동안 워크트리를 git으로 들여다보는 간격. 브랜치 생성(<code>issue-N</code> → <code>issue-N-slug</code>), 첫 파일 수정, 새 커밋(제목 그대로, 오래된 것부터)을 그때 바로 한 줄씩 찍는다 — 워크트리를 만든 뒤 PR까지 수십 분 동안 루프 터미널이 조용해 멈춘 것처럼 보이던 구간이다. 백엔드·에이전트와 무관하고 네트워크를 쓰지 않는다. <code>0</code>이면 끄고 idle 대기 상한(10분)마다만 돌아온다</td></tr>
   <tr><td><code>HEARTBEAT_SEC</code></td><td><code>300</code></td><td>커밋은 없지만 커밋 안 된 변경 파일 목록이 지난 줄과 달라졌을 때 "working — Nm elapsed, M uncommitted files: …(이름 셋까지)" 한 줄을 찍는 최소 간격. 목록이 같으면(또는 비어 있으면) 시간이 아무리 지나도 찍지 않는다 — 같은 내용을 되풀이하지 않는다. 이슈를 읽고 TDD로 도는 첫 수십 분은 커밋이 없어도 무엇을 만지는지 보인다</td></tr>
@@ -842,7 +842,7 @@ systemd-inhibit bash scripts/ticket-loop.sh        # Linux (WSL은 Windows 전�
 
 <div class="step"><div class="n">6</div><div class="b">
 <p><b>병합 뒤 검증 (선택).</b> <code>POST_MERGE_CMD</code>가 있으면 병합된 기본 브랜치를 저장소 밖 전용 워크트리에 받아(기본 브랜치 끝 그대로 되돌리고, <code>POST_MERGE_COPY</code> 파일을 복사하고, <code>POST_MERGE_PORT</code>가 비기를 기다린 뒤) 그 명령을 한 번 돌린다. 로그는 <code>LOG_FILE</code>과 같은 디렉터리의 <code>post-merge-N.log</code>(기본 저장소 루트의 <code>.ticket-loop/post-merge-N.log</code>)이고, "post-merge check started" 줄과 실패 ERROR 줄에 그 절대 경로를 적는다. 실패하면 로그 꼬리 40줄을 흐리게 보여 주고, 이 티켓의 정리와 요약까지 마친 뒤 루프를 멈춘다. 기본 브랜치가 깨진 채로 다음 티켓을 쌓지 않기 위해서다(R10).</p>
-<p><b>검증 워크트리 정리.</b> 검증 워크트리는 저장소마다 하나이고, 처음 한 번 만든 뒤 다시 쓴다. 검증이 시작할 때마다 루프는 그 워크트리를 기본 브랜치 끝과 똑같이 되돌린다 — 강제 체크아웃으로 추적 파일의 수정을 버리고, 추적 안 된 파일과 무시된 파일(중첩 git 저장소·빈 디렉터리 포함)을 지운다. 그래서 검증은 CI처럼 깨끗한 체크아웃에서, 병합된 그 파일 그대로 돈다. 지난 검증이 남긴 빌드 캐시·생성물이 이번 결과를 바꾸지 않고, 지난 검증이 고쳐 둔 추적 파일 때문에 체크아웃이 실패하지도 않는다. 남길 것은 <code>POST_MERGE_KEEP</code>에 <code>.gitignore</code> 꼴 패턴으로 적는다(기본 없음). 의존성 디렉터리를 남겨 다시 설치하는 시간을 아끼는 식이다: <code>POST_MERGE_KEEP="${POST_MERGE_KEEP:-node_modules}"</code>. 검증마다 커지는 빌드 캐시(<code>.next</code> 등)는 넣지 않는다 — 넣으면 다시 쌓인다. <code>POST_MERGE_COPY</code> 파일은 정리 뒤에 복사하므로 메인 체크아웃에서 지운 파일은 옛 사본도 남지 않는다. 정리는 검증이 시작할 때 한 번뿐이다. 첫 실행·재실행·이분 탐색 사이에는 하지 않고(재실행은 첫 실행이 설치·빌드한 것을 그대로 쓴다), 검증이 끝날 때도 하지 않는다 — 실패한 검증의 산출물(서버 로그, 빌드 결과)은 멈춤 사유와 멈춤 기록이 가리키는 그대로 다음 검증이 시작할 때까지 남는다. 그래서 검증 워크트리는 "남긴 것 + 검증 한 번이 만드는 것"보다 커지지 않는다. 지운 것이 있으면 시작 줄 앞에 "cleaned the check worktree — removed N untracked or ignored paths" 한 줄을 남긴다(크기는 재지 않는다). 지우지 못하면(권한 등) 경고 한 줄 뒤 검증을 그대로 돌린다. 안전장치가 둘 있다. <code>POST_MERGE_WORKTREE</code>가 메인 체크아웃을 가리키면 루프는 시작하지 않는다(종료 코드 2). 이미 있는 그 자리가 이 저장소의 연결 워크트리가 아니면 정리하지 않고 검증을 실패로 끝낸다(did not start). 0.9.22까지는 체크아웃만 옮겨 다시 써서, rental-portal의 검증 워크트리가 57GB까지 컸다(<code>.next/dev/cache/turbopack</code>만 51GB). 저장소 밖(<code>~/.cache/ticket-loop/…</code>)에 있어 디스크가 찰 때까지 아무도 몰랐다.</p>
+<p><b>검증 워크트리 정리.</b> 검증 워크트리는 저장소마다 하나이고, 처음 한 번 만든 뒤 다시 쓴다. 검증이 시작할 때마다 루프는 그 워크트리를 기본 브랜치 끝과 똑같이 되돌린다 — 강제 체크아웃으로 추적 파일의 수정을 버리고, 추적 안 된 파일과 무시된 파일(중첩 git 저장소·빈 디렉터리 포함)을 지운다. 그래서 검증은 CI처럼 깨끗한 체크아웃에서, 병합된 그 파일 그대로 돈다. 지난 검증이 남긴 빌드 캐시·생성물이 이번 결과를 바꾸지 않고, 지난 검증이 고쳐 둔 추적 파일 때문에 체크아웃이 실패하지도 않는다. 남길 것은 <code>POST_MERGE_KEEP</code>에 <code>.gitignore</code> 꼴 패턴으로 적는다(기본 없음). 의존성 디렉터리를 남겨 다시 설치하는 시간을 아끼는 식이다: <code>POST_MERGE_KEEP="${POST_MERGE_KEEP:-node_modules}"</code>. 검증마다 커지는 빌드 캐시(<code>.next</code> 등)는 넣지 않는다 — 넣으면 다시 쌓인다. <code>POST_MERGE_COPY</code> 파일은 정리 뒤에 복사하므로 메인 체크아웃에서 지운 파일은 옛 사본도 남지 않는다. 정리는 검증이 시작할 때 한 번뿐이다. 첫 실행·재실행·이분 탐색 사이에는 하지 않고(재실행은 첫 실행이 설치·빌드한 것을 그대로 쓴다), 검증이 끝날 때도 하지 않는다 — 실패한 검증의 산출물(서버 로그, 빌드 결과)은 멈춤 사유와 멈춤 기록이 가리키는 그대로 다음 검증이 시작할 때까지 남는다. 그래서 검증 워크트리는 "남긴 것 + 검증 한 번이 만드는 것"보다 커지지 않는다. 지운 것이 있으면 시작 줄 앞에 "cleaned the check worktree — removed N untracked or ignored paths" 한 줄을 남긴다(크기는 재지 않는다). 지우지 못하면(권한 등) 경고 한 줄 뒤 검증을 그대로 돌린다. 안전장치가 있다. <code>POST_MERGE_WORKTREE</code>가 메인 체크아웃을 가리키면 루프는 시작하지 않는다(종료 코드 2). 이미 있는 그 자리가 이 저장소의 연결 워크트리가 아니거나 브랜치에 올라 있으면 정리하지 않고 검증을 실패로 끝낸다(did not start) — 루프는 검증 워크트리를 늘 브랜치 없이(detached) 만들고 옮기므로, 브랜치에 올라 있으면 사람이나 워커의 작업 트리다. 멈춘 검증 워크트리를 조사하다 브랜치로 옮겼으면 <code>git switch --detach</code>로 되돌려 둔다. 0.9.22까지는 체크아웃만 옮겨 다시 써서, rental-portal의 검증 워크트리가 57GB까지 컸다(<code>.next/dev/cache/turbopack</code>만 51GB). 저장소 밖(<code>~/.cache/ticket-loop/…</code>)에 있어 디스크가 찰 때까지 아무도 몰랐다.</p>
 <p><b>재실행 (선택).</b> 무거운 스위트는 그 병합과 무관하게 아무 테스트나 가끔 시간 초과로 깨진다(rental-portal의 44분 통합 테스트는 7회 중 2회, 매번 다른 테스트 하나). <code>POST_MERGE_RETRY_CMD</code>가 있으면 멈추기 전에 포트 대기를 다시 지나 같은 검증 워크트리에서 그 명령을 딱 한 번 돌린다. 첫 실행 로그 경로가 <code>POST_MERGE_FAILED_LOG</code>로 가므로 실패한 테스트만 골라 다시 돌릴 수 있다. 통과하면 결과는 "passed on retry in Ns (first run failed in Ms)"로 요약·기록에 남고, 이슈에 "병합 뒤 검증 재시도 통과 — 플레이크 의심" 코멘트(머신, 두 로그 파일 이름, 소요 시간 — 로그 본문은 올리지 않는다)와 멘션 없는 Slack 알림이 간다. <code>loop-stopped</code> 라벨은 붙이지 않는다. 재실행도 실패하면 두 로그 경로를 적고 멈춘다. 키트는 테스트 도구를 모르므로 무엇을 다시 돌릴지는 저장소의 스크립트가 정한다. vitest라면 이렇게 커밋해 두고(검증 워크트리는 병합된 기본 브랜치다) <code>POST_MERGE_RETRY_CMD="${POST_MERGE_RETRY_CMD:-pnpm install --frozen-lockfile --prefer-offline &amp;&amp; bash scripts/post-merge-retry.sh}"</code>로 건다. 바뀐 게 없으면 설치는 몇 초다 — 묶음 실패의 원인 병합을 찾으려고 지난 커밋에서 스크립트를 다시 돌릴 때 의존성을 맞춘다(아래 묶어 돌리기).</p>
 <pre><code># scripts/post-merge-retry.sh — 첫 실행 로그에서 실패한 테스트 파일만 다시 돌린다
 files=$(perl -pe 's/\e\[[0-9;]*m//g' "$POST_MERGE_FAILED_LOG" \
@@ -1565,7 +1565,8 @@ set -euo pipefail
 #                       검증마다 시작할 때 기본 브랜치 끝으로 되돌린다 — 추적 파일의 수정은 버리고, 추적 안 된 파일과 무시된 파일은
 #                       POST_MERGE_KEEP에 맞는 것 말고 지운다. 재실행·이분 탐색 사이와 검증이 끝날 때는 정리하지 않는다(실패한 검증의
 #                       산출물은 다음 검증까지 남는다). 메인 체크아웃을 가리키면 시작하지 않고(종료 코드 2), 이미 있는 그 자리가 이 저장소의
-#                       연결 워크트리가 아니면 정리하지 않고 검증을 실패로 끝낸다(did not start)
+#                       연결 워크트리가 아니거나 브랜치에 올라 있으면(루프는 검증 워크트리를 늘 브랜치 없이 쓴다 — 브랜치에 올라 있으면 사람이나
+#                       워커의 작업 트리다) 정리하지 않고 검증을 실패로 끝낸다(did not start)
 #   LOG_FILE            진행 로그 파일 (기본 .ticket-loop/loop-MMDD.log, /dev/null이면 끔). 상대 경로는 저장소 루트 기준이고 시작 때
 #                       절대 경로로 굳힌다 — 병합 뒤 검증 로그(post-merge-N.log)도 같은 디렉터리에 둔다
 #   PROGRESS_SEC        PR·수리를 기다리는 동안 워크트리(git)를 들여다보는 간격 (기본 60초). 브랜치 생성·첫 파일 수정·새 커밋(제목 그대로)을
@@ -3406,7 +3407,7 @@ pm_clean() {
 # 반환 0: 통과(재실행에서 통과한 것 포함), 1: 실패(로그 꼬리를 남긴다). $2 로그 이름에 붙일 꼬리표 — 무인 수습 뒤 다시 돌릴 때
 # (post-merge-N-after-triage.log) 앞 실행의 로그를 덮지 않게
 run_post_merge() {
-  local n="$1" tag="${2:-}" wt logfile retry_log started first_sec retry_sec f head cover
+  local n="$1" tag="${2:-}" wt logfile retry_log started first_sec retry_sec f head cover branch
   wt="$(post_merge_worktree_path)"
   POST_MERGE_WT="$wt"
   POST_MERGE_RESULT="did not start"   # 검증 명령을 돌리기 전에 끝나면(워크트리·포트) 이 값이 남는다
@@ -3417,6 +3418,11 @@ run_post_merge() {
     git -C "$ROOT" worktree add -q --detach "$wt" "origin/${BASE_BRANCH}" || { log warn "#${n}: failed to create the post-merge check worktree (${wt})"; return 1; }
   elif ! pm_linked_worktree "$wt"; then
     log warn "#${n}: ${wt} is not a linked worktree of this repository — not cleaning it, the post-merge check did not start. Set POST_MERGE_WORKTREE to a directory of its own (or leave it empty for the default)"
+    return 1
+  elif branch="$(git -C "$wt" symbolic-ref -q --short HEAD)"; then
+    # 루프는 검증 워크트리를 늘 브랜치 없이 만들고 옮긴다(worktree add·checkout·이분 탐색 모두 --detach). 브랜치에 올라 있으면 사람의 작업
+    # 워크트리(또는 워커 워크트리)다 — 강제 체크아웃과 정리가 그 작업을 지우므로 손대지 않는다
+    log warn "#${n}: ${wt} has branch ${branch} checked out — the loop keeps its check worktree detached, so this is someone's working tree. Not cleaning it, the post-merge check did not start. If it is the check worktree, detach it (git -C ${wt} switch --detach); otherwise set POST_MERGE_WORKTREE to a directory of its own"
     return 1
   fi
   git -C "$ROOT" fetch -q origin "$BASE_BRANCH"

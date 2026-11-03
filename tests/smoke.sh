@@ -1230,7 +1230,16 @@ for d in "$K/other-wt" "$K/other" "$K/repo"; do
     || fail "이 저장소의 연결 워크트리가 아닌 곳($d)을 정리하거나 검증을 돌림: $out"
   rm -f "$d/untracked-note"
 done
-echo "ok  검증 워크트리 정리 — 이 저장소의 연결 워크트리가 아니면 정리하지 않고 did not start(#48)"
+# 이 저장소의 연결 워크트리라도 브랜치에 올라 있으면 정리하지 않는다 — 루프는 검증 워크트리를 늘 브랜치 없이(detached) 만들고 옮기므로, 브랜치에
+# 올라 있으면 사람의 작업 워크트리(또는 워커 워크트리)다. 경고 뒤 did not start — 추적 파일 수정·추적 안 된 파일·브랜치가 그대로다
+git -C "$K/repo" worktree add -q -b human-work "$K/human-wt" origin/main 2>/dev/null
+echo mine > "$K/human-wt/untracked-note"; echo edited > "$K/human-wt/app.txt"
+out="$(pmk "POST_MERGE_WORKTREE='$K/human-wt'; POST_MERGE_CMD='echo should-not-run'; rc=0; run_post_merge 14 || rc=\$?; echo \"RC=\$rc\"; echo \"RESULT=\$POST_MERGE_RESULT\"")"
+[[ "$(cat "$K/human-wt/untracked-note" 2>&1)" == mine && "$(cat "$K/human-wt/app.txt")" == edited && "$(git -C "$K/human-wt" symbolic-ref -q --short HEAD)" == human-work ]] \
+  && grep -qx 'RC=1' <<<"$out" && grep -qx 'RESULT=did not start' <<<"$out" \
+  && grep -qF "#14: $K/human-wt has branch human-work checked out — the loop keeps its check worktree detached" <<<"$out" && ! grep -q 'post-merge check started' <<<"$out" \
+  || fail "브랜치에 올라 있는 연결 워크트리를 정리하거나 검증을 돌림: $out"
+echo "ok  검증 워크트리 정리 — 이 저장소의 연결 워크트리가 아니거나 브랜치에 올라 있으면 정리하지 않고 did not start(#48)"
 # 시작 검사: 병합 뒤 검증이 켜져 있고 POST_MERGE_WORKTREE 가 메인 체크아웃이면(실제 경로 비교 — 상대 경로·심볼릭 링크로 줘도) 설정 오류로 바로
 # 끝낸다(POST_MERGE_EVERY 검사처럼 종료 코드 2). 메인 체크아웃의 추적 안 된 파일은 그대로다. 상대 경로는 다른 파일 경로처럼 저장소 루트 기준이다 —
 # 하위 디렉터리(scripts/)에서 띄워도 "." 은 메인 체크아웃이다(그 디렉터리 기준으로 풀면 시작 검사와 정리가 다른 곳을 본다)

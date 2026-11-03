@@ -110,7 +110,8 @@ set -euo pipefail
 #                       검증마다 시작할 때 기본 브랜치 끝으로 되돌린다 — 추적 파일의 수정은 버리고, 추적 안 된 파일과 무시된 파일은
 #                       POST_MERGE_KEEP에 맞는 것 말고 지운다. 재실행·이분 탐색 사이와 검증이 끝날 때는 정리하지 않는다(실패한 검증의
 #                       산출물은 다음 검증까지 남는다). 메인 체크아웃을 가리키면 시작하지 않고(종료 코드 2), 이미 있는 그 자리가 이 저장소의
-#                       연결 워크트리가 아니면 정리하지 않고 검증을 실패로 끝낸다(did not start)
+#                       연결 워크트리가 아니거나 브랜치에 올라 있으면(루프는 검증 워크트리를 늘 브랜치 없이 쓴다 — 브랜치에 올라 있으면 사람이나
+#                       워커의 작업 트리다) 정리하지 않고 검증을 실패로 끝낸다(did not start)
 #   LOG_FILE            진행 로그 파일 (기본 .ticket-loop/loop-MMDD.log, /dev/null이면 끔). 상대 경로는 저장소 루트 기준이고 시작 때
 #                       절대 경로로 굳힌다 — 병합 뒤 검증 로그(post-merge-N.log)도 같은 디렉터리에 둔다
 #   PROGRESS_SEC        PR·수리를 기다리는 동안 워크트리(git)를 들여다보는 간격 (기본 60초). 브랜치 생성·첫 파일 수정·새 커밋(제목 그대로)을
@@ -1951,7 +1952,7 @@ pm_clean() {
 # 반환 0: 통과(재실행에서 통과한 것 포함), 1: 실패(로그 꼬리를 남긴다). $2 로그 이름에 붙일 꼬리표 — 무인 수습 뒤 다시 돌릴 때
 # (post-merge-N-after-triage.log) 앞 실행의 로그를 덮지 않게
 run_post_merge() {
-  local n="$1" tag="${2:-}" wt logfile retry_log started first_sec retry_sec f head cover
+  local n="$1" tag="${2:-}" wt logfile retry_log started first_sec retry_sec f head cover branch
   wt="$(post_merge_worktree_path)"
   POST_MERGE_WT="$wt"
   POST_MERGE_RESULT="did not start"   # 검증 명령을 돌리기 전에 끝나면(워크트리·포트) 이 값이 남는다
@@ -1962,6 +1963,11 @@ run_post_merge() {
     git -C "$ROOT" worktree add -q --detach "$wt" "origin/${BASE_BRANCH}" || { log warn "#${n}: failed to create the post-merge check worktree (${wt})"; return 1; }
   elif ! pm_linked_worktree "$wt"; then
     log warn "#${n}: ${wt} is not a linked worktree of this repository — not cleaning it, the post-merge check did not start. Set POST_MERGE_WORKTREE to a directory of its own (or leave it empty for the default)"
+    return 1
+  elif branch="$(git -C "$wt" symbolic-ref -q --short HEAD)"; then
+    # 루프는 검증 워크트리를 늘 브랜치 없이 만들고 옮긴다(worktree add·checkout·이분 탐색 모두 --detach). 브랜치에 올라 있으면 사람의 작업
+    # 워크트리(또는 워커 워크트리)다 — 강제 체크아웃과 정리가 그 작업을 지우므로 손대지 않는다
+    log warn "#${n}: ${wt} has branch ${branch} checked out — the loop keeps its check worktree detached, so this is someone's working tree. Not cleaning it, the post-merge check did not start. If it is the check worktree, detach it (git -C ${wt} switch --detach); otherwise set POST_MERGE_WORKTREE to a directory of its own"
     return 1
   fi
   git -C "$ROOT" fetch -q origin "$BASE_BRANCH"
