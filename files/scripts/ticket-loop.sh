@@ -32,6 +32,7 @@ set -euo pipefail
 #   ticket-loop.sh --max 1             # 최대 1건
 #   ticket-loop.sh --no-merge 12       # CI 통과까지만, 병합은 사람이
 #   ticket-loop.sh --skip-post-merge   # POST_MERGE_CMD를 이번 실행에서 끈다
+#   ticket-loop.sh --model opus        # 워커 모델을 이번 실행에만 정한다(AGENT_MODEL과 같다, cmux·tmux만)
 #
 # 전제: 백엔드 준비(Orca: 앱 실행·CLI 등록 / cmux: cmux 터미널 안에서 실행하거나 소켓 모드를 열어 둠 / tmux: tmux 설치), `gh auth status` 로그인,
 # 저장소 안에서 실행.
@@ -69,6 +70,10 @@ set -euo pipefail
 #                       화면 분류 정규식 둘의 기본을 정하는 프리셋이다(아래 "에이전트 프리셋" 절). 다른 값이면 기동 명령·배너는 직접 적어야 한다
 #   AGENT_RESTART_CMD   에이전트를 셸에서 띄우는 명령. 프롬프트는 인자로 붙는다 (claude: claude --dangerously-skip-permissions,
 #                       codex: codex --dangerously-bypass-approvals-and-sandbox). Orca는 뜨지 않았을 때만, cmux·tmux는 처음부터 이 명령으로 띄운다(tmux는 훅 설정 인자를 뒤에 붙인다)
+#   AGENT_MODEL         워커 모델 (기본 비움 = 에이전트의 평소 기본 모델). --model이 이긴다. 주면 기동 명령 뒤에 "AGENT_MODEL_FLAG <모델>"을
+#                       붙인다 — 워커, 다시 띄우기, 무인 수습 세션이 모두 같은 명령을 쓴다. cmux·tmux만 된다: Orca는 에이전트를 직접 띄우고
+#                       인자는 Orca 설정(에이전트 기본 인자)에서만 받으므로 시작 때 멈춘다(이슈 #50)
+#   AGENT_MODEL_FLAG    모델을 고르는 기동 명령 인자 (claude·codex: --model). 다른 AGENT면 직접 적는다 — 비어 있는데 모델을 주면 시작 때 멈춘다
 #   AGENT_BANNER_REGEX  에이전트가 떴는지 확인할 화면 문구(ERE) (claude: Claude Code 배너·모델명, codex: "OpenAI Codex"·gpt- 모델명)
 #   SKILL_PREFIX        워커 프롬프트에서 스킬을 부르는 접두사 (claude: / → /implement N, codex: $ → $implement N)
 #   TICKET_TIMEOUT_SEC  티켓 한 건 제한 시간 (기본 14400 = 4시간)
@@ -211,6 +216,7 @@ BASE_BRANCH="${BASE_BRANCH:-}"
 ORDER_REGEX="${ORDER_REGEX:-^T(?<n>[0-9]+)}"
 WORKER_RULES_FILE="${WORKER_RULES_FILE:-.ticket-loop/worker-rules.md}"
 AGENT="${AGENT:-claude}"
+AGENT_MODEL="${AGENT_MODEL:-}"
 TICKET_TIMEOUT_SEC="${TICKET_TIMEOUT_SEC:-14400}"
 MERGE_METHOD="${MERGE_METHOD:-merge}"
 REPAIR_ROUNDS="${REPAIR_ROUNDS:-1}"
@@ -257,11 +263,12 @@ REPORT_DIR="$(abs_path "$REPORT_DIR")"
 #           Claude의 --dangerously-skip-permissions에 해당한다 — 더 좁은 --sandbox workspace-write는 네트워크를 막아 push·gh pr create가 안 된다.
 #           .claude/settings.json의 deny(gh pr merge)는 Codex에 안 걸린다 — 병합 금지는 프롬프트와 GitHub 브랜치 보호에 기댄다
 #           사용량 한도·확인 창 문구는 실측 전이라 비워 둔다(감지하지 않음) — 실측 뒤 loop.env의 USAGE_LIMIT_REGEX·PERMISSION_PROMPT_REGEX로 켠다
-#   그 외   프리셋 없음. AGENT_RESTART_CMD·AGENT_BANNER_REGEX(·MODEL_REGEX·SKILL_PREFIX·USAGE_LIMIT_REGEX·PERMISSION_PROMPT_REGEX)를 loop.env에 적는다.
+#   그 외   프리셋 없음. AGENT_RESTART_CMD·AGENT_BANNER_REGEX(·AGENT_MODEL_FLAG·MODEL_REGEX·SKILL_PREFIX·USAGE_LIMIT_REGEX·PERMISSION_PROMPT_REGEX)를 loop.env에 적는다.
 #           기동 명령·배너가 비어 있으면 시작 때 멈춘다
 case "$AGENT" in
   claude)
     AGENT_RESTART_CMD="${AGENT_RESTART_CMD:-claude --dangerously-skip-permissions}"
+    AGENT_MODEL_FLAG="${AGENT_MODEL_FLAG:---model}"
     AGENT_BANNER_REGEX="${AGENT_BANNER_REGEX:-Claude Code|Opus|Sonnet|Fable|Haiku}"
     MODEL_REGEX="${MODEL_REGEX:-(Opus|Sonnet|Haiku|Fable|Mythos)[[:space:]]+[0-9]+(\.[0-9]+)?}"
     SKILL_PREFIX="${SKILL_PREFIX:-/}"
@@ -269,6 +276,7 @@ case "$AGENT" in
     PERMISSION_PROMPT_REGEX="${PERMISSION_PROMPT_REGEX:-Do you want to proceed\?}" ;;
   codex)
     AGENT_RESTART_CMD="${AGENT_RESTART_CMD:-codex --dangerously-bypass-approvals-and-sandbox}"
+    AGENT_MODEL_FLAG="${AGENT_MODEL_FLAG:---model}"
     AGENT_BANNER_REGEX="${AGENT_BANNER_REGEX:-OpenAI Codex|gpt-[0-9]}"
     MODEL_REGEX="${MODEL_REGEX:-gpt-[0-9]+(\.[0-9]+)?(-[[:alnum:]]+)*}"
     SKILL_PREFIX="${SKILL_PREFIX:-\$}"
@@ -276,6 +284,7 @@ case "$AGENT" in
     PERMISSION_PROMPT_REGEX="${PERMISSION_PROMPT_REGEX:-}" ;;
   *)
     AGENT_RESTART_CMD="${AGENT_RESTART_CMD:-}"
+    AGENT_MODEL_FLAG="${AGENT_MODEL_FLAG:-}"
     AGENT_BANNER_REGEX="${AGENT_BANNER_REGEX:-}"
     MODEL_REGEX="${MODEL_REGEX:-}"
     SKILL_PREFIX="${SKILL_PREFIX:-/}"
@@ -322,12 +331,24 @@ while [[ $# -gt 0 ]]; do
     --max) MAX="$2"; shift ;;
     --parent) PARENT="${2#\#}"; shift ;;
     --label) SCOPE_LABEL="$2"; shift ;;
+    --model) [[ $# -ge 2 && -n "$2" && "$2" != -* ]] || { echo "--model needs a model name (e.g. --model opus)" >&2; exit 2; }
+             AGENT_MODEL="$2"; shift ;;
     --help|-h) awk 'NR > 2 && /^#/ { on = 1; sub(/^# ?/, ""); print; next } on { exit }' "$0"; exit 0 ;;
     -*) echo "unknown option: $1" >&2; exit 2 ;;
     *) TICKETS+=("${1#\#}") ;;
   esac
   shift
 done
+# ----- 워커 모델 -----
+# 모델은 기동 명령의 인자로만 고른다 — 워커·다시 띄우기·무인 수습이 모두 agent_launch_cmd를 거치므로 한 곳에서 붙이면 된다.
+# Orca는 에이전트를 `worktree create --agent`로 직접 띄우고 인자는 앱 설정(agentDefaultArgs)에서만 받는다. AGENT_RESTART_CMD는
+# 배너가 안 보일 때만 쓰므로, 받아 두면 첫 기동과 다시 띄운 워커의 모델이 달라진다 — 시작 때 멈춘다(이슈 #50)
+if [[ -n "$AGENT_MODEL" ]]; then
+  [[ "$BACKEND" != orca ]] || { echo "--model / AGENT_MODEL is not supported on the Orca backend: Orca launches the agent itself and takes its arguments only from Orca settings (agent default args). Add '${AGENT_MODEL_FLAG:---model} ${AGENT_MODEL}' there, or use BACKEND=cmux|tmux." >&2; exit 2; }
+  [[ -n "$AGENT_MODEL_FLAG" ]] || { echo "AGENT=${AGENT} has no model argument preset. Set AGENT_MODEL_FLAG in .ticket-loop/loop.env (e.g. --model)." >&2; exit 2; }
+  AGENT_RESTART_CMD="$AGENT_RESTART_CMD $AGENT_MODEL_FLAG $(printf %q "$AGENT_MODEL")"
+fi
+# ----- 워커 모델 끝 -----
 [[ -n "$POST_MERGE_CMD" ]] || POST_MERGE=0
 [[ "$POST_MERGE_EVERY" =~ ^(0|[1-9][0-9]*)$ ]] || { echo "POST_MERGE_EVERY must be 0 or a positive integer (got '${POST_MERGE_EVERY}')" >&2; exit 2; }
 # 병합 뒤 검증은 시작할 때마다 검증 워크트리를 기본 브랜치 끝으로 되돌리고 추적 안 된·무시된 파일을 지운다(pm_clean). 그 자리가 메인 체크아웃
@@ -2878,6 +2899,7 @@ pm_load
 pick_rc=0; targets="$(pick_targets)" || pick_rc=$?
 [[ $pick_rc -ne 1 ]] || die "could not list tickets (GitHub)"
 log "repository ${OWNER_REPO} / backend ${BACKEND_NAME} / base branch ${BASE_BRANCH} / label ${READY_LABEL}${SCOPE_LABEL:+ + ${SCOPE_LABEL}}${PARENT:+ / sub-issues of spec #${PARENT}}"
+[[ -z "$AGENT_MODEL" ]] || log "worker model: ${AGENT_MODEL} (${AGENT_MODEL_FLAG} on the agent command)"
 log "post-merge check: $([[ $POST_MERGE -eq 1 ]] && echo "on$(case "$POST_MERGE_EVERY" in 1) ;; 0) echo ", when a spec or the run ends" ;; *) echo ", every ${POST_MERGE_EVERY} merged tickets and when a spec or the run ends" ;; esac) — ${POST_MERGE_CMD}${POST_MERGE_RETRY_CMD:+ (retry once on failure: ${POST_MERGE_RETRY_CMD})}" || echo "off")"
 if [[ -n "$PM_PENDING" ]]; then
   log warn "post-merge check: $(pm_count) merged ticket$([[ "$(pm_count)" -eq 1 ]] || echo s) from an earlier run not checked yet ($(pm_list)) — $([[ $POST_MERGE -eq 1 ]] && echo "the next check covers them" || echo "left for a run with the check on")"

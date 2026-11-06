@@ -85,7 +85,7 @@ bash scripts/ticket-loop.sh --parent 40    # 스펙 #40의 하위 이슈, 끝나
 bash scripts/ticket-loop.sh 12 15          # 지정한 티켓만, 적은 순서대로
 ```
 
-그 밖에 `--label <라벨>`, `--no-merge`(CI 통과까지만), `--skip-post-merge`, `--help`.
+그 밖에 `--label <라벨>`, `--no-merge`(CI 통과까지만), `--skip-post-merge`, `--model <모델>`(이번 실행의 워커 모델, cmux·tmux만), `--help`.
 
 준비된 티켓은 열려 있고, `ready-for-agent` 라벨이 있고, 담당자가 없고, 열린 이슈에 막혀 있지 않고, 열린 PR이 없는 이슈다. 설정은 `.ticket-loop/loop.env`(커밋한다. 환경변수가 이긴다)에, Slack Webhook 같은 기계별 비밀 값은 `~/.config/ticket-loop/loop.env`에 둔다. 선택인 기획 스킬(`/grill-with-docs`, `/to-spec`, `/to-tickets`, `/retro`)은 아이디어를 스펙 이슈와 하위 티켓으로 만들고, 다 돈 뒤 돌아본다.
 

@@ -83,7 +83,7 @@ bash scripts/ticket-loop.sh --parent 40    # the sub-issues of spec #40, then th
 bash scripts/ticket-loop.sh 12 15          # these tickets, in this order
 ```
 
-Also `--label <label>`, `--no-merge` (stop at green CI), `--skip-post-merge`, `--help`.
+Also `--label <label>`, `--no-merge` (stop at green CI), `--skip-post-merge`, `--model <model>` (the worker model for this run, cmux and tmux only), `--help`.
 
 A ticket is ready when it is open, labelled `ready-for-agent`, unassigned, not blocked by an open issue, and has no open PR. Settings live in `.ticket-loop/loop.env` (committed; environment variables override it); per-machine secrets such as the Slack webhook go in `~/.config/ticket-loop/loop.env`. The optional planning skills (`/grill-with-docs`, `/to-spec`, `/to-tickets`, `/retro`) turn an idea into a spec issue with ticket sub-issues, and look back once it has run.
 

@@ -569,6 +569,25 @@ printf 'model: gpt-5.1-codex-max.\n' | grep -oE "$(sed -n 3p <<<"$out")" | grep 
 out="$(AGENT_RESTART_CMD='codex --yolo' SKILL_PREFIX=/ preset codex)"; [[ "$(sed -n 1p <<<"$out")" == "codex --yolo" && "$(sed -n 4p <<<"$out")" == "/" ]] || fail "loop.env 값이 프리셋을 이기지 않음: $out"
 out="$(preset bogus)"; [[ -z "$(sed -n 1p <<<"$out")" && -z "$(sed -n 2p <<<"$out")" && "$(sed -n 4p <<<"$out")" == "/" ]] || fail "모르는 AGENT 에 프리셋이 생김: $out"
 grep -q 'AGENT=\${AGENT} has no preset' "$KIT/files/scripts/ticket-loop.sh" || fail "모르는 AGENT 를 시작 때 멈추는 검사가 없음"
+# 워커 모델(#50): --model·AGENT_MODEL 이 기동 명령 뒤에 프리셋의 모델 인자로 붙는다. Orca·인자 프리셋이 없는 AGENT 는 시작 때 종료 코드 2
+{ cat "$A/preset.sh"; sed -n '/^while \[\[ \$# -gt 0 \]\]; do$/,/^done$/p; /^# ----- 워커 모델 -----/,/^# ----- 워커 모델 끝 -----/p' "$KIT/files/scripts/ticket-loop.sh"; } > "$A/model.sh"
+grep -q -- '--model) ' "$A/model.sh" && grep -q 'AGENT_MODEL_FLAG \$(printf %q' "$A/model.sh" || fail "옵션 파싱·워커 모델 블록을 찾지 못함"
+model() { local agent="$1" backend="$2"; shift 2
+  AGENT="$agent" BACKEND="$backend" bash -c 'set -euo pipefail; AGENT_MODEL="${AGENT_MODEL:-}"; TICKETS=(); f="$1"; shift; source "$f"; printf "%s\n" "$AGENT_RESTART_CMD"' _ "$A/model.sh" "$@" 2>&1; }
+out="$(model claude tmux --model opus)"; [[ "$out" == "claude --dangerously-skip-permissions --model opus" ]] || fail "claude --model 이 기동 명령에 안 붙음: $out"
+out="$(model codex cmux --model gpt-5.1-codex-max)"; [[ "$out" == "codex --dangerously-bypass-approvals-and-sandbox --model gpt-5.1-codex-max" ]] || fail "codex --model 이 기동 명령에 안 붙음: $out"
+out="$(AGENT_MODEL=sonnet model claude tmux)"; [[ "$out" == *" --model sonnet" ]] || fail "AGENT_MODEL 이 기동 명령에 안 붙음: $out"
+out="$(AGENT_MODEL=sonnet model claude tmux --model opus)"; [[ "$out" == *" --model opus" && "$out" != *sonnet* ]] || fail "--model 이 AGENT_MODEL 을 이기지 않음: $out"
+out="$(model claude tmux)"; [[ "$out" == "claude --dangerously-skip-permissions" ]] || fail "모델을 안 줬는데 기동 명령이 바뀜: $out"
+out="$(model claude tmux --model 'claude-opus-5-5[1m]')"; eval "set -- $out"; [[ "${!#}" == 'claude-opus-5-5[1m]' ]] || fail "모델 이름이 셸에서 한 낱말로 남지 않음: $out"
+out="$(model claude orca --model opus)" && fail "Orca 에서 --model 을 받음: $out"; [[ "$out" == *"not supported on the Orca backend"* ]] || fail "Orca --model 거절 문구가 다름: $out"
+out="$(model claude orca)"; [[ "$out" == "claude --dangerously-skip-permissions" ]] || fail "모델 없이 Orca 가 멈춤: $out"
+out="$(AGENT_RESTART_CMD=my-agent model bogus tmux --model x)" && fail "모델 인자 프리셋이 없는 AGENT 에서 --model 을 받음: $out"; [[ "$out" == *"Set AGENT_MODEL_FLAG"* ]] || fail "AGENT_MODEL_FLAG 안내가 없음: $out"
+out="$(AGENT_RESTART_CMD=my-agent AGENT_MODEL_FLAG=-m model bogus tmux --model x)"; [[ "$out" == "my-agent -m x" ]] || fail "AGENT_MODEL_FLAG 가 안 쓰임: $out"
+for bad in "--model" "--model --dry-run" "--model ''"; do
+  out="$(eval "model claude tmux $bad")" && fail "값 없는 $bad 를 받음: $out"; [[ "$out" == *"--model needs a model name"* ]] || fail "$bad 안내가 다름: $out"
+done
+echo "ok  워커 모델 — --model·AGENT_MODEL, Orca·인자 프리셋 없는 AGENT 거절, 값 없는 --model"
 sed -n '/^worker_prompt() {/,/^}/p' "$KIT/files/scripts/ticket-loop.sh" > "$A/prompt.sh"
 wp() { ROOT="$A" WORKER_RULES_FILE="rules.md" SKILL_PREFIX="$1" bash -c 'set -euo pipefail; source "$0"; worker_prompt 12' "$A/prompt.sh"; }
 out="$(wp '$')"; [[ "$out" == '$implement 12 — '* ]] || fail "codex 워커 프롬프트가 \$implement 로 시작하지 않음: $out"
