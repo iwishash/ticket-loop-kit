@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.9.24 — 2026-11-07
+
+기능 하나(#50)를 더했다. 워커를 띄우는 명령에 모델 인자를 붙일 수 있다. 모델을 주지 않으면 지금과 같다.
+
+- **`--model <모델>`·`AGENT_MODEL`로 워커 모델을 고른다(#50).** 지금까지 루프는 워커를 모델 인자 없이 띄웠고, 모델은 에이전트의 평소 기본값(Claude Code는 `ANTHROPIC_MODEL`·`settings.json`의 `model`·요금제 기본)으로 정해졌다. 실행마다 바꾸려면 `AGENT_RESTART_CMD`를 통째로 덮어써야 했다.
+  - `--model opus`(이번 실행만) 또는 `loop.env`·환경변수의 `AGENT_MODEL`을 주면 기동 명령 뒤에 `AGENT_MODEL_FLAG <모델>`을 붙인다. `--model`이 `AGENT_MODEL`을 이긴다. 모델 이름은 셸 따옴표를 씌워 한 낱말로 넘긴다(`claude-opus-5-5[1m]` 같은 이름).
+  - 새 설정 `AGENT_MODEL_FLAG`: 프리셋은 claude·codex 둘 다 `--model`이다. 다른 `AGENT`는 직접 적는다. 비어 있는데 모델을 주면 시작 때 종료 코드 2로 끝난다.
+  - 워커, 배너가 안 보일 때 다시 띄우기, 무인 수습 세션이 모두 같은 기동 명령을 쓰므로 같은 모델로 뜬다. 시작 로그에 `worker model: <모델> (--model on the agent command)` 한 줄이 남는다. 멈춤 기록의 다시 실행할 명령에도 `--model`이 그대로 남는다.
+  - Orca 백엔드에서는 시작 때 종료 코드 2로 끝난다. `orca worktree create --agent`에는 모델·인자를 넘길 옵션이 없고, 인자는 Orca 앱 설정(에이전트 기본 인자, `settings.agentDefaultArgs`)에서만 받는다. 루프의 기동 명령은 배너가 안 보일 때만 쓰이므로, 받아 두면 다시 띄운 워커만 모델이 달라진다. Orca에서는 그 설정에 `--model <모델>`을 넣는다.
+  - `--model` 뒤에 값이 없거나 `-`로 시작하면(`--model --dry-run`) 종료 코드 2로 끝난다.
+  - 리포트·`tickets.jsonl`의 `model`은 지금처럼 워커 화면에서 읽은 이름이다.
+  - 남긴 것: Orca에서 실행마다 모델을 바꾸는 방법(`--agent` 없이 터미널에 기동 명령 치기, 또는 TUI에 `/model` 보내기)은 실측이 필요해 넣지 않았다.
+  - 스모크로 확인한 것: claude·codex에 `--model`이 붙음, `AGENT_MODEL`, `--model`이 `AGENT_MODEL`을 이김, 모델을 안 주면 명령 그대로, 대괄호가 든 모델 이름, Orca 거절(모델이 없으면 Orca도 그대로), 인자 프리셋이 없는 `AGENT` 거절과 `AGENT_MODEL_FLAG`, 값 없는 `--model` 세 경우. 실제 cmux·tmux 워커를 이 옵션으로 띄워 보지는 않았다.
+  - 문서: 루프 스크립트 머리 주석·사용법, README 옵션 줄, 가이드북 6장 옵션 표·설정 표·12장 FAQ, 부록 D, PDF.
+- 이미 설치된 저장소: 키트를 올리면 바로 쓸 수 있다. 그동안 `AGENT_RESTART_CMD`에 `--model`을 넣어 두었다면 그대로 돈다. `AGENT_MODEL`과 함께 쓰면 `--model`이 두 번 붙으니 하나만 쓴다.
+
 ## 0.9.23 — 2026-11-04
 
 병합 뒤 검증 결함 하나(#47, 수정 스펙 #48)를 PR #49로 고쳤다. 병합 뒤 검증 워크트리만 바뀐다 — 검증이 기본 브랜치 끝과 같은 파일에서 돌고, 의존성 디렉터리도 검증마다 지운다. 검증 창, 원인 병합 찾기, 멈춤 기록, 티켓 기록의 모양은 그대로다.
