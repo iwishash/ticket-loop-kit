@@ -82,7 +82,7 @@ bash scripts/ticket-loop.sh --dry-run      # 가져갈 티켓 목록만
 bash scripts/ticket-loop.sh --max 1        # 한 건만 — 처음엔 이것부터
 bash scripts/ticket-loop.sh                # 준비된 티켓 전부
 bash scripts/ticket-loop.sh --parent 40    # 스펙 #40의 하위 이슈, 끝나면 스펙 리포트
-bash scripts/ticket-loop.sh 12 15          # 지정한 티켓만, 적은 순서대로
+bash scripts/ticket-loop.sh 12 15          # 지정한 티켓만, 적은 순서대로(닫힌 이슈는 건너뛰고, 스펙 이슈면 멈춘다)
 ```
 
 그 밖에 `--label <라벨>`, `--no-merge`(CI 통과까지만), `--skip-post-merge`, `--model <모델>`(이번 실행의 워커 모델, cmux·tmux만), `--help`.

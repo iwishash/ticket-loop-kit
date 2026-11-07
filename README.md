@@ -80,7 +80,7 @@ bash scripts/ticket-loop.sh --dry-run      # list the tickets it would take
 bash scripts/ticket-loop.sh --max 1        # one ticket — do this first
 bash scripts/ticket-loop.sh                # every ready ticket
 bash scripts/ticket-loop.sh --parent 40    # the sub-issues of spec #40, then the spec report
-bash scripts/ticket-loop.sh 12 15          # these tickets, in this order
+bash scripts/ticket-loop.sh 12 15          # these tickets, in this order (closed ones skipped, a spec issue stops it)
 ```
 
 Also `--label <label>`, `--no-merge` (stop at green CI), `--skip-post-merge`, `--model <model>` (the worker model for this run, cmux and tmux only), `--help`.
