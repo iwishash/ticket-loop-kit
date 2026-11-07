@@ -23,12 +23,14 @@
 
 그 밖에 확인한 것: 멈춤 보고(0.8.8) — iwishash/ticket-loop-dummy #3을 cmux로 두 번 멈추고(SIGHUP·SIGTERM → 이슈 코멘트·`loop-stopped` 라벨·Slack) 세 번째에 PR #4로 병합(3분, 라벨 떼기), `tests/smoke.sh`, 저장소(당시 비공개)를 실제로 받는 npx 껍질, 0.2 설치본 마이그레이션(스모크 테스트만).
 
+병합 뒤 검증마다의 검증 워크트리 정리(0.9.23, #48)는 실제 루프에서 돌았다. rsrehab/rental-portal(cmux, `POST_MERGE_KEEP=node_modules`)의 키트를 올린 뒤 첫 실행(2026-11-06, 티켓 일곱 건 병합)이다. 지울 것이 있던 검증은 모두 `cleaned the check worktree — removed 15–16 untracked or ignored paths (kept POST_MERGE_KEEP: node_modules)`를 남겼다. 마지막 검증 뒤 워크트리는 4.9GB(`.next` 4.0GB, `node_modules` 766MB)로, 57GB까지 컸던 것이 검증 한 번 분량에 머문다. `post_merge_sec`은 342–356초(0.9.22)에서 409–449초로 늘었다 — 검증마다 `.next`를 새로 만든다.
+
 아직 확인하지 않은 것:
 
 - 실제 루프에서의 묶음 검증(`POST_MERGE_EVERY`가 1이 아닐 때)과 묶음 실패의 이분 탐색(`tests/smoke.sh`가 실제 git 저장소와 가짜 명령으로 다룬다).
 - 실제 루프에서 검증 명령이 받는 env(`TICKET_LOOP_POST_MERGE_WHY`·`TICKET_LOOP_POST_MERGE_SPEC_COMPLETE`, 0.9.17) — 특히 스펙 끝 검증이 실패해 멈춘 뒤 다시 실행했을 때와 스펙을 끝낸 문서 PR(`tests/smoke.sh`가 가짜 명령과 구조 검사로 다룬다).
 - 실제 루프에서 병합이 모두 검증을 거친 뒤에 닫힌 스펙의 루프 끝 검증(창이 빈 `spec_end`, 0.9.18) — 사람이 마지막 티켓을 닫았을 때, 하위 이슈 반영이 늦었을 때, 그 검증이 실패해 스펙 이슈로 멈춘 뒤 다시 실행했을 때(`tests/smoke.sh`가 실제 git 저장소와 가짜 명령으로 다룬다).
-- 실제 루프에서 병합 뒤 검증마다의 검증 워크트리 정리(`POST_MERGE_KEEP`, #48) — 몇 티켓을 돈 뒤 검증 워크트리 크기가 "남긴 것 + 검증 한 번"에 머무는지(rsrehab/rental-portal은 57GB까지 컸다), 키트를 올린 뒤 첫 검증이 이미 쌓인 캐시를 지우는지(`tests/smoke.sh`가 실제 git 저장소와 가짜 명령으로 정리·`POST_MERGE_KEEP`·`POST_MERGE_COPY`·정리 실패 경고·안전장치를 다룬다).
+- 0.9.23으로 올린 뒤 첫 검증이 이미 쌓인 캐시를 지우는지(#48). rental-portal은 키트를 올리기 전에 사람이 검증 워크트리를 비워 두어, 첫 검증에는 지울 것이 없었다(`tests/smoke.sh`가 실제 git 저장소와 가짜 명령으로 정리·`POST_MERGE_KEEP`·`POST_MERGE_COPY`·정리 실패 경고·안전장치를 다룬다).
 - 실제 티켓에서의 `POST_MERGE_PORT`·`POST_MERGE_RETRY_CMD`·`CI_SKIP_CMD`·`CI_SKIP_REGEX`와 수리 프롬프트(`POST_MERGE_CMD`는 위 수습 실측에서 돌았다. 모든 실측이 수리 0회). rental-portal(PR #82)에 설정돼 있다.
 - `install.sh`의 라벨 생성·Orca 등록 단계(시험에서 껐다).
 - boiler-webapp 1회 이후의 `/setup-ticket-loop`.
