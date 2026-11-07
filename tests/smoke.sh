@@ -2260,6 +2260,7 @@ out="$(screen_case all "$LIMIT_C")"
 out="$(screen_case all "$LIMIT_D")"
 [[ "$out" == "1|usage_limit|worker hit the usage limit: ⎿  You've hit your weekly limit · resets 10am (Asia/Seoul)|0|0" ]] || fail "#52 'hit your weekly limit' 줄만 있는 화면: $out"
 out="$(screen_case all "$CONTEXT_S")"; [[ "$out" == "1|||3|0" ]] || fail "맥락 한도 문구를 사용량 한도로 읽음: $out (기대 1|||3|0)"
+out="$(screen_case all $'  We reached your goal so the rate limit in the API client is fine now.\n│ ❯')"; [[ "$out" == "1|||3|0" ]] || fail "your … limit 이 멀리 떨어진 문장을 사용량 한도로 읽음: $out (기대 1|||3|0)"
 out="$(screen_case all "$LIMIT_A" "" "" codex)"; [[ "$out" == "1|||3|0" ]] || fail "USAGE_LIMIT_REGEX 가 비면(codex) 전처럼 idle strike 여야: $out (기대 1|||3|0)"
 out="$(screen_case "" "$LIMIT_A")"; [[ "$out" == "2|||0|0" ]] || fail "한도 문구는 idle 로 확인된 화면에서만(타임아웃 바퀴에서는 분류하지 않음): $out (기대 2|||0|0)"
 out="$(screen_case "" "$PROMPT_S")"
@@ -2323,7 +2324,7 @@ out="$(stopchk_case "")"; [[ "$out" == "through|0|" ]] || fail "screen_stop_chec
   && "$(grep -c '! screen_check "$handle" "triage session" [01] || return 1' "$KIT/files/scripts/ticket-loop.sh")" == 2 ]] || fail "세 대기가 screen_check 를 idle·타임아웃 양쪽에서 부르지 않음"
 grep -q '^    screen_stop_check "${n}"   # 사용량 한도' <(sed -n '/^run_ticket() {/,/^}/p' "$KIT/files/scripts/ticket-loop.sh") \
   && [[ "$(grep -c 'screen_stop_check "${n}" " while repairing PR #${pr}"' "$KIT/files/scripts/ticket-loop.sh")" == 2 ]] || fail "호출부 세 곳이 screen_stop_check 를 보지 않음"
-grep -qF 'USAGE_LIMIT_REGEX="${USAGE_LIMIT_REGEX:-usage limit reached|(weekly|[0-9]+-hour) limit reached|(hit|reached) your .*limit}"' "$KIT/files/scripts/ticket-loop.sh" \
+grep -qF 'USAGE_LIMIT_REGEX="${USAGE_LIMIT_REGEX:-usage limit reached|(weekly|[0-9]+-hour) limit reached|(hit|reached) your( [a-z0-9-]+){0,2} limit}"' "$KIT/files/scripts/ticket-loop.sh" \
   && grep -qF 'line="$(grep -iE "$USAGE_LIMIT_REGEX" <<<"$tail"' "$KIT/files/scripts/ticket-loop.sh" \
   && grep -qF 'PERMISSION_PROMPT_REGEX="${PERMISSION_PROMPT_REGEX:-Do you want to proceed\?}"' "$KIT/files/scripts/ticket-loop.sh" \
   && [[ "$(grep -cF 'USAGE_LIMIT_REGEX="${USAGE_LIMIT_REGEX:-}"' "$KIT/files/scripts/ticket-loop.sh")" == 2 && "$(grep -cF 'PERMISSION_PROMPT_REGEX="${PERMISSION_PROMPT_REGEX:-}"' "$KIT/files/scripts/ticket-loop.sh")" == 2 ]] \
