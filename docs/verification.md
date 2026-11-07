@@ -23,12 +23,14 @@ The setup run found a bug fixed in 0.9.1: the fix PR title `fix: #17 …` closed
 
 Also verified: stop reporting (0.8.8) — iwishash/ticket-loop-dummy #3 on cmux, stopped twice (SIGHUP and SIGTERM → issue comment, `loop-stopped` label, Slack) and merged on the third run as PR #4 (3 min, label removed); `tests/smoke.sh`, the npx wrapper against a real fetch of the repository (then private), and migration of a 0.2 install (smoke test only).
 
+The check worktree reset before every post-merge check (0.9.23, #48) ran on a real loop: rsrehab/rental-portal (cmux, `POST_MERGE_KEEP=node_modules`), first run after the upgrade (2026-11-06, seven tickets merged). Every check that had something to remove logged `cleaned the check worktree — removed 15–16 untracked or ignored paths (kept POST_MERGE_KEEP: node_modules)`. After the last check the worktree was 4.9 GB (`.next` 4.0 GB, `node_modules` 766 MB), one check's worth instead of the 57 GB it had grown to. `post_merge_sec` went from 342–356 s (0.9.22) to 409–449 s, since every check now builds `.next` from scratch.
+
 Not yet verified:
 
 - Batched post-merge checks (`POST_MERGE_EVERY` other than 1) and bisecting a batched failure on a real loop (`tests/smoke.sh` covers them with a real git repository and fake commands).
 - The environment the check commands get (`TICKET_LOOP_POST_MERGE_WHY`, `TICKET_LOOP_POST_MERGE_SPEC_COMPLETE`, 0.9.17) on a real loop, especially a rerun after a failed spec-end check and a documentation PR that completes a spec (`tests/smoke.sh` covers them with fake commands and structural checks).
 - The loop-end check for a spec that closes once every merge has been checked (`spec_end` with an empty window, 0.9.18) on a real loop: a person closing the last ticket, a lagging sub-issue list, and a rerun after that check fails and stops on the spec issue (`tests/smoke.sh` covers them with a real git repository and fake commands).
-- The check worktree reset before every post-merge check (`POST_MERGE_KEEP`, #48) on a real loop: that after several tickets the check worktree stays at "what is kept + what one check makes" (rsrehab/rental-portal had reached 57 GB), and that the first check after upgrading clears the cache already piled up (`tests/smoke.sh` covers the reset, `POST_MERGE_KEEP`, `POST_MERGE_COPY`, the failed-clean warning and the safety checks with real git repositories and fake commands).
+- That the first check after upgrading to 0.9.23 clears a cache already piled up (#48). On rental-portal the check worktree had been emptied by hand before the upgrade, so the first check had nothing to remove (`tests/smoke.sh` covers the reset, `POST_MERGE_KEEP`, `POST_MERGE_COPY`, the failed-clean warning and the safety checks with real git repositories and fake commands).
 - `POST_MERGE_PORT`, `POST_MERGE_RETRY_CMD`, `CI_SKIP_CMD`, `CI_SKIP_REGEX`, and the repair prompt on a real ticket (`POST_MERGE_CMD` ran in the triage runs above; every run had 0 repairs). rental-portal (PR #82) has them configured.
 - The label creation and Orca registration steps of `install.sh` (turned off in testing).
 - `/setup-ticket-loop` beyond one run on boiler-webapp.
