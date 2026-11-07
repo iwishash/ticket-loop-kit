@@ -1592,7 +1592,8 @@ set -euo pipefail
 #                       뺀다. 뒤에 내용이 더 붙으면 남는다(이슈 #39)
 #   MODEL_REGEX         워커 터미널에서 모델 이름을 뽑는 정규식(ERE) (claude: 상태줄·배너의 "Opus 5.5" 꼴, codex: "gpt-5.1-codex" 꼴).
 #                       못 찾으면 리포트에 not recorded
-#   USAGE_LIMIT_REGEX   워커 화면 끝 25줄에서 사용량 한도 문구를 찾는 정규식(ERE) (claude: "reached your .* limit|usage limit", codex·그 외: 없음).
+#   USAGE_LIMIT_REGEX   워커 화면 끝 25줄에서 사용량 한도 문구를 찾는 정규식(ERE, 대소문자를 가리지 않는다) (claude: "usage limit reached|
+#                       (weekly|[0-9]+-hour) limit reached|(hit|reached) your( [a-z0-9-]+){0,2} limit", codex·그 외: 없음).
 #                       idle인 워커의 화면에 맞으면 strike를 세지 않고 usage_limit로 바로 멈춘다 — 무인 수습은 띄우지 않는다(같은 한도에 걸린다).
 #                       비우면 감지하지 않는다. 아래 "화면 분류" 절
 #   PERMISSION_PROMPT_REGEX  워커 화면 끝에서 권한 확인 창 문구를 찾는 정규식(ERE) (claude: "Do you want to proceed\?", codex·그 외: 없음). 그 줄이 든
@@ -1714,7 +1715,9 @@ REPORT_DIR="$(abs_path "$REPORT_DIR")"
 [[ -z "$POST_MERGE_WORKTREE" ]] || POST_MERGE_WORKTREE="$(abs_path "$POST_MERGE_WORKTREE")"
 # ----- 에이전트 프리셋 -----
 # AGENT가 기동 명령·배너·모델 정규식·스킬 접두사·화면 분류 정규식(사용량 한도·권한 확인 창)의 기본값을 정한다. loop.env나 환경변수로 준 값이 이긴다.
-#   claude  Claude Code. 스킬은 /이름. 모델명은 상태줄·배너의 "Opus 5.5" 꼴. 사용량 한도는 "You've reached your … limit"·"usage limit", 권한 확인 창은
+#   claude  Claude Code. 스킬은 /이름. 모델명은 상태줄·배너의 "Opus 5.5" 꼴. 사용량 한도는 "You've reached your … limit"(#10)·"You've hit your
+#           weekly limit"·"Usage limit reached"(#52 — 2026-11 실측, 문장 첫머리가 대문자다), 이전 판의 "Claude usage limit reached"·"5-hour limit
+#           reached"·"Weekly limit reached"(키트 실측 아님). "Context limit reached"(맥락 한도)는 맞지 않게 둔다. 권한 확인 창은
 #           "Do you want to proceed?"(screen_kind — idle strike 앞에서 본다)
 #   codex   Codex CLI. 스킬은 $이름 — Codex는 .claude/skills/ 를 읽지 않고 .agents/skills/ 를 읽는다(배치는 키트 다음 단계). 배너 "OpenAI Codex",
 #           모델명 "gpt-5.1-codex" 꼴(상태줄 설정에 따라 안 보일 수 있다 → not recorded). --dangerously-bypass-approvals-and-sandbox(=--yolo)는
@@ -1730,7 +1733,7 @@ case "$AGENT" in
     AGENT_BANNER_REGEX="${AGENT_BANNER_REGEX:-Claude Code|Opus|Sonnet|Fable|Haiku}"
     MODEL_REGEX="${MODEL_REGEX:-(Opus|Sonnet|Haiku|Fable|Mythos)[[:space:]]+[0-9]+(\.[0-9]+)?}"
     SKILL_PREFIX="${SKILL_PREFIX:-/}"
-    USAGE_LIMIT_REGEX="${USAGE_LIMIT_REGEX:-reached your .* limit|usage limit}"
+    USAGE_LIMIT_REGEX="${USAGE_LIMIT_REGEX:-usage limit reached|(weekly|[0-9]+-hour) limit reached|(hit|reached) your( [a-z0-9-]+){0,2} limit}"
     PERMISSION_PROMPT_REGEX="${PERMISSION_PROMPT_REGEX:-Do you want to proceed\?}" ;;
   codex)
     AGENT_RESTART_CMD="${AGENT_RESTART_CMD:-codex --dangerously-bypass-approvals-and-sandbox}"
@@ -2835,9 +2838,11 @@ session_active_recently() {
 # ----- 화면 분류 -----
 # 세 대기(wait_for_pr·repair·wait_for_verdict)가 strike를 세기 직전 — session_active_recently 가드 뒤(일하는 중이면 분류할 필요가 없다) — 와
 # 백엔드 idle 대기가 타임아웃으로 돌아온 바퀴마다 워커 화면 끝 25줄(terminal_tail)을 본다. 두 가지를 가른다:
-#   usage_limit        사용량 한도 문구(USAGE_LIMIT_REGEX). idle이면 strike 없이 바로 멈춘다. 무인 수습은 띄우지 않는다 — 수습 세션도 같은 한도에
-#                      걸린다(2026-10 실측 rental-portal #262: 한도 문구를 일반 idle로 보고 strike 셋 뒤 worker_no_pr로 멈춰 수습 세션까지 헛돌았다).
-#                      사람이 터미널에서 잇거나, 한도가 풀린 뒤 루프를 다시 돌려 새 워커로 시작한다
+#   usage_limit        사용량 한도 문구(USAGE_LIMIT_REGEX, 대소문자 무시). idle이면 strike 없이 바로 멈춘다. 무인 수습은 띄우지 않는다 — 수습
+#                      세션도 같은 한도에 걸린다(2026-10 실측 rental-portal #262: 한도 문구를 일반 idle로 보고 strike 셋 뒤 worker_no_pr로 멈춰 수습
+#                      세션까지 헛돌았다. 2026-11에 Claude Code 문구가 바뀌어 같은 일이 다시 났다 — #52).
+#                      사람이 터미널에서 잇거나, 한도가 풀린 뒤 루프를 다시 돌려 새 워커로 시작한다. Claude Code는 재설정 시각에 워커를 스스로 이어 가
+#                      루프 밖에서 PR을 열 수 있다(#52 실측) — 루프는 열린 PR을 이어받지 않으므로 멈춤 사유가 다시 돌리기 전에 그 PR을 보라고 적는다
 #   permission_prompt  권한 확인 창 문구(PERMISSION_PROMPT_REGEX). 그 문구가 든 화면이 PROMPT_STALL_SEC 동안 글자 그대로(체크섬)면 idle 신호와 무관하게
 #                      확인 창에 멈춘 워커로 보고 worker_no_pr(진단만 하는 수습)로 멈춘다. idle 신호가 살아 있어 strike가 먼저 차면 전과 같은 경로다.
 #                      idle 신호가 빈 값으로 이어지는 백엔드 상태(#2)에서도 닿는 경로다 — 2026-10 실측(#3, tmux)에서 bypass 모드의 워커(서브에이전트의
@@ -2863,22 +2868,24 @@ wait_stop_read() {
 
 # screen_kind 터미널 → usage_limit | permission_prompt | 빈 값을 stdout에 쓰고 SCREEN_KIND에도 둔다(커맨드 치환 없이 불러야 아래 값이 남는다).
 # 맞은 줄은 SCREEN_LINE(앞뒤 공백을 지운 것 — 멈춤 사유에 싣는다), 화면 체크섬은 SCREEN_SUM(확인 창 체류 시간용), 사용량 한도면 화면의
-# 재설정 시각 문구("resets at …", "try again at …")를 SCREEN_RESET에 둔다(맞은 줄 안에 이미 있으면 비운다). 두 문구가 다 있으면 한도가 먼저다
+# 재설정 시각 문구("resets at …", "try again at …")를 SCREEN_RESET에 둔다(맞은 줄에 재설정 문구가 이미 있으면 비운다 — 화면의 다른 줄, 예컨대
+# 서브에이전트의 API 오류 줄에서 뽑으면 같은 시각을 오류 꼬리와 함께 되풀이한다, #52). 두 문구가 다 있으면 한도가 먼저다
 SCREEN_KIND=""; SCREEN_LINE=""; SCREEN_SUM=""; SCREEN_RESET=""
 screen_trim() { sed -e 's/^[[:space:]]*\(│\)\{0,1\}[[:space:]]*//' -e 's/[[:space:]]*\(│\)\{0,1\}[[:space:]]*$//'; }   # 앞뒤 공백과 TUI 상자 테두리(│)
 screen_kind() {
-  local tail line
+  local tail line reset_re='(resets?|try again)( at| in| on)?[[:space:]]+'
   SCREEN_KIND=""; SCREEN_LINE=""; SCREEN_SUM=""; SCREEN_RESET=""
   [[ -n "${USAGE_LIMIT_REGEX:-}" || -n "${PERMISSION_PROMPT_REGEX:-}" ]] || return 0
   tail="$(terminal_tail "$1" 2&gt;/dev/null)" || true
   [[ -n "$tail" ]] || return 0
   SCREEN_SUM="$(cksum &lt;&lt;&lt;"$tail" | cut -d' ' -f1)"
   if [[ -n "${USAGE_LIMIT_REGEX:-}" ]]; then
-    line="$(grep -E "$USAGE_LIMIT_REGEX" &lt;&lt;&lt;"$tail" | tail -n 1 || true)"
+    # 대소문자를 가리지 않는다 — 한도 문구는 문장 첫머리("Usage limit reached")로도 나온다(#52). 아래 재설정 시각 추출과 같은 기준
+    line="$(grep -iE "$USAGE_LIMIT_REGEX" &lt;&lt;&lt;"$tail" | tail -n 1 || true)"
     if [[ -n "$line" ]]; then
       SCREEN_KIND=usage_limit; SCREEN_LINE="$(screen_trim &lt;&lt;&lt;"$line")"
-      SCREEN_RESET="$(grep -iEo '(resets?|try again)( at| in| on)?[[:space:]]+[^|]*' &lt;&lt;&lt;"$tail" | head -n 1 | screen_trim || true)"
-      [[ -n "$SCREEN_RESET" &amp;&amp; "$SCREEN_LINE" != *"$SCREEN_RESET"* ]] || SCREEN_RESET=""
+      grep -iqE "$reset_re" &lt;&lt;&lt;"$SCREEN_LINE" \
+        || SCREEN_RESET="$(grep -iEo "${reset_re}[^|]*" &lt;&lt;&lt;"$tail" | head -n 1 | screen_trim || true)"
     fi
   fi
   if [[ -z "$SCREEN_KIND" &amp;&amp; -n "${PERMISSION_PROMPT_REGEX:-}" ]]; then
@@ -2922,7 +2929,7 @@ screen_stop_check() {
   case "$WAIT_STOP_KIND" in
     usage_limit)
       STOP_KIND=usage_limit
-      die "#${n}: ${WAIT_STOP_REASON}${ctx}. No triage (it would hit the same limit) — rerun the loop after the limit resets. The ${BRANCH_PREFIX}${n} worktree is kept in ${BACKEND_NAME}." ;;
+      die "#${n}: ${WAIT_STOP_REASON}${ctx}. No triage (it would hit the same limit) — rerun the loop after the limit resets. The ${BRANCH_PREFIX}${n} worktree is kept in ${BACKEND_NAME}. The worker may resume on its own when the limit resets and open a PR outside the loop — check for one before you rerun (the loop does not take over an open PR)." ;;
     worker_no_pr)
       reason="#${n}: ${WAIT_STOP_REASON}${ctx}. The loop does not answer prompts — check the ${BRANCH_PREFIX}${n} worktree in ${BACKEND_NAME}."
       STOP_KIND=worker_no_pr

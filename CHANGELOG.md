@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.9.25 — 2026-11-07
+
+결함 하나(#52)를 고쳤다. 사용량 한도 감지만 바뀐다.
+
+- **claude 프리셋이 지금 Claude Code의 사용량 한도 문구를 알아본다(#52).** 0.9.12(#10)에 넣은 한도 감지가 2026-11 Claude Code 문구를 놓쳤다. 실측(키트 0.9.23, cmux, Opus 5.5): 워커의 리뷰 서브에이전트가 주간 한도에 걸려 화면 끝에 `You've hit your weekly limit · resets 10am`, `⚠ Usage limit reached · limit resets 10am`이 떴는데, 루프는 일반 idle로 세다 strike 셋 뒤 `worker_no_pr`로 멈췄다. 무인 수습 세션을 띄웠고, 그 세션도 같은 한도에 걸려 판정 없이 끝났다. 알림은 "질문 또는 실패"로 나갔다. 워커 세션은 재설정 시각에 스스로 이어 가 PR을 열었고, 루프는 이미 끝나 있어 CI·병합·병합 뒤 검증·워크트리 정리를 사람이 손으로 했다.
+  - 원인 둘: 프리셋의 `usage limit`은 소문자인데 화면은 문장 첫머리의 `Usage limit reached`였고, `reached your .* limit`은 동사가 `hit`인 새 문구에 맞지 않았다. 그리고 `screen_kind`의 한도 판정은 `grep -E`(대소문자 구분)였다 — 바로 아래 재설정 시각 추출은 `grep -iEo`였다.
+  - claude 프리셋 `USAGE_LIMIT_REGEX`: `usage limit reached|(weekly|[0-9]+-hour) limit reached|(hit|reached) your( [a-z0-9-]+){0,2} limit`. #10의 `You've reached your Fable limit`, 이번의 `You've hit your weekly limit`·`Usage limit reached`, 이전 판 Claude Code의 `Claude usage limit reached`·`5-hour limit reached`·`Weekly limit reached`(키트 실측 아님)에 맞는다. 맥락 한도 `Context limit reached`에는 맞지 않는다. 옛 값의 넓은 `usage limit`(낱말이 지나가기만 해도)은 `usage limit reached`로 좁혔다. `your`와 `limit` 사이는 낱말 둘까지만 받는다 — `reached your goal so the rate limit …` 같은 문장은 한도가 아니다.
+  - 한도 판정이 대소문자를 가리지 않는다(`grep -iE`). `loop.env`에 직접 적은 `USAGE_LIMIT_REGEX`에도 같다. 확인 창 판정(`PERMISSION_PROMPT_REGEX`)은 그대로 대소문자를 가린다.
+  - 재설정 시각: 맞은 줄에 재설정 문구가 이미 있으면 화면의 다른 줄에서 뽑아 덧붙이지 않는다. 옛 추출을 그대로 두면 이번 화면에서는 첫 재설정 문구가 서브에이전트의 API 오류 줄이라 사유에 `— resets 10am (Asia/Seoul) (error type rate_limit, HTTP 429, …)`가 붙는다.
+  - 멈춤 사유에 한 줄을 더했다: 워커가 재설정 시각에 스스로 이어 가 루프 밖에서 PR을 열 수 있으니 다시 돌리기 전에 그 PR을 보라(루프는 열린 PR을 이어받지 않는다 — 자동 선택은 건너뛰고 번호 지정은 멈춘다). loop-triage 스킬의 `usage_limit` 설명에도 같은 안내.
+  - 스모크: 실측 화면 꼬리(영문 그대로)가 strike 없이 `usage_limit`로 멈추고 사유에 `⚠ Usage limit reached · limit resets 10am`만 실림, `You've hit your weekly limit` 줄만 있는 화면, 맥락 한도 화면은 전처럼 idle strike, 수습 세션이 새 문구에 걸린 경우. 화면 분류 검사들이 옛 정규식을 글자로 적어 두던 것을 스크립트의 claude 프리셋 값을 읽도록 바꿨다 — 프리셋이 바뀌면 검사도 새 값으로 돈다. 실제 한도에 걸린 워커로 돌려 보지는 않았다.
+  - 문서: 루프 스크립트 머리 주석·프리셋 주석·화면 분류 절, `docs/loop.md`·`loop.ko.md`, loop-triage 스킬, 부록 D, PDF.
+- 이미 설치된 저장소: 키트를 올리면 바로 켜진다. 그동안 `loop.env`에 우회 값(`[Rr]eached your .*limit|[Hh]it your .*limit|…`)을 적어 두었다면 그대로 맞으니 지워도 된다. 범위 밖: 한도에 걸린 워커를 재설정까지 기다려 이어 가기는 #12에서 다룬다.
+
 ## 0.9.24 — 2026-11-07
 
 기능 하나(#50)를 PR #51로 더했다. 워커를 띄우는 명령에 모델 인자를 붙일 수 있다. 모델을 주지 않으면 지금과 같다.
