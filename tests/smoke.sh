@@ -815,7 +815,7 @@ echo "ok  병합 뒤 검증 재실행(포트 대기·첫 실행 로그·딱 한 
 # 메인 고리의 재시도·멈춤은 알림·멈춤 보고 검사 뒤에 같은 가짜 gh 로 본다
 GF="$(cd "$T" && pwd -P)/ghfail"; mkdir -p "$GF/bin"
 sed -n '/^# ---------- GitHub 조회 ----------/,/^# ---------- 백엔드 ----------/p' "$KIT/files/scripts/ticket-loop.sh" > "$GF/fn.sh"
-for f in blocked_by sub_issue_count open_pr_for candidates pick_targets pick_next_targets spec_sub_issues spec_empty_list_check issue_title; do grep -q "^${f}() " "$GF/fn.sh" || fail "GitHub 조회 절에 ${f} 가 없음"; done
+for f in blocked_by sub_issue_count open_pr_for candidates pick_targets pick_next_targets spec_sub_issues spec_empty_list_check issue_title issue_facts given_ticket given_tickets_check; do grep -q "^${f}() " "$GF/fn.sh" || fail "GitHub 조회 절에 ${f} 가 없음"; done
 cat > "$GF/bin/gh" <<'GH'
 #!/usr/bin/env bash
 [[ -z "${CALLS:-}" ]] || printf "%s\x1e" "$@" | jq -Rsc '{cmd: "gh", args: (split("\u001e")[:-1])}' >> "$CALLS"
@@ -838,7 +838,11 @@ case "$1 ${2:-}" in
                     [[ $k -lt ${KIDS_EMPTY_FROM:-9999} || $k -gt ${KIDS_EMPTY_TO:-9999} ]] || { echo '[]'; exit 0; }
                     printf '%s\n' "${KIDS_OUT:-[]}" ;;
       repos/o/r/issues/*) ! hit FAIL_SUBS "$n" || boom
-                          if [[ "$n" == "${PARENT:-x}" ]]; then printf '%s\n' "${SPEC_SUMMARY:-0 0}"; else printf '%s\n' "${SUBS_OUT:-0}"; fi ;;
+                          if [[ "$*" == *@tsv* ]]; then   # issue_facts — 닫힌 번호는 CLOSED_IN, 스펙은 SPEC_IN("번호:하위 이슈 수:닫힌 수 …"), 제목은 T번호
+                            st=open; [[ " ${CLOSED_IN:-} " != *" $n "* ]] || st=closed; tot=0; cmp=0
+                            for s in ${SPEC_IN:-}; do [[ "${s%%:*}" != "$n" ]] || IFS=: read -r _ tot cmp <<<"$s"; done
+                            printf '%s\t%s\t%s\tT%s\n' "$st" "$tot" "$cmp" "$n"
+                          elif [[ "$n" == "${PARENT:-x}" ]]; then printf '%s\n' "${SPEC_SUMMARY:-0 0}"; else printf '%s\n' "${SUBS_OUT:-0}"; fi ;;
     esac ;;
 esac
 GH
@@ -889,6 +893,17 @@ grep -qF 'list="$(candidates)" || return 1' "$GF/fn.sh" || fail "pick_targets �
 echo '[{"number":120,"headRefName":"issue-12"}]' > "$GF/prs.json"
 [[ "$(qf pick_targets)" == $'0|11\tT11|skip #12 (T12): PR already open' ]] || fail "pick_targets: PR 열린 티켓 건너뛰기 문구가 바뀜: $(qf pick_targets)"
 echo '[]' > "$GF/prs.json"
+# 번호 지정 티켓 하나의 조회(given_ticket, #46·#53): issue_facts 한 번으로 열림·닫힘·스펙(하위 이슈 있음)을 가른다. 스펙이면 다시 돌릴 명령(--parent)을,
+# 하위 이슈가 모두 닫힌 스펙이면 스펙을 닫으라는 문구를 GIVEN_WHY 에 둔다. 닫힌 스펙은 닫힘(건너뜀). 조회 실패는 빈 상태
+gt() { qf 'given_ticket '"$1"'; echo "$GIVEN_STATE/$GIVEN_TITLE/$GIVEN_WHY"' "${@:2}"; }
+[[ "$(gt 12)" == "0|open/T12/|" && "$(gt 12 CLOSED_IN=12)" == "0|closed/T12/|" && "$(gt 40 SPEC_IN=40:2:2 CLOSED_IN=40)" == "0|closed/T40/|" ]] \
+  || fail "given_ticket(열림·닫힘·닫힌 스펙): $(gt 12) / $(gt 12 CLOSED_IN=12) / $(gt 40 SPEC_IN=40:2:2 CLOSED_IN=40)"
+[[ "$(gt 40 SPEC_IN='11:0:0 40:5:1')" == "0|spec/T40/#40 (T40) is a spec issue with 4 open sub-issues — run them with: bash scripts/ticket-loop.sh --parent 40|" \
+   && "$(gt 40 SPEC_IN=40:1:0)" == "0|spec/T40/#40 (T40) is a spec issue with 1 open sub-issue — run them with: bash scripts/ticket-loop.sh --parent 40|" ]] \
+  || fail "given_ticket(스펙 — 열린 하위 이슈): $(gt 40 SPEC_IN='11:0:0 40:5:1') / $(gt 40 SPEC_IN=40:1:0)"
+[[ "$(gt 40 SPEC_IN=40:2:2)" == "0|spec/T40/#40 (T40) is a spec issue whose sub-issues are all closed — nothing to implement; close the spec instead|" ]] \
+  || fail "given_ticket(하위 이슈가 모두 닫힌 스펙): $(gt 40 SPEC_IN=40:2:2)"
+[[ "$(gt 12 FAIL_SUBS=12)" == "0|//|" ]] || fail "given_ticket: 조회 실패가 상태로 읽힘: $(gt 12 FAIL_SUBS=12)"
 # 후보 0행(#22): 조회가 성공했는데 목록이 비면(issue list 가 [], 또는 --parent 의 sub_issues 가 []) 비0(2)에 로그 한 줄 — "후보는 있었지만 모두
 # 걸러짐"(0, skip 줄)과 구분된다. 모두 걸러진 경우는 위의 BLOCKED_OUT·SUBS_OUT 검사대로 0
 E0='ticket lookup returned 0 candidates'
@@ -998,9 +1013,11 @@ due() { pmw "PM_PENDING=\"\$(printf '%s\n' \"$WIN4\" | awk 'NR <= $1')\"; $2; rc
   || fail "pm_due(0 — 스펙 끝·실행의 마지막에는 돌림): $(due 4 'POST_MERGE_EVERY=0; CLOSED_SPECS=" 40"' 12 40) / $(due 4 'POST_MERGE_EVERY=0')"
 [[ "$(pmw "PM_PENDING=\"\$(head -n 2 <<<\"$WIN4\")\"; pm_of; echo; POST_MERGE_EVERY=0; pm_of")" == $'2/4\n2' ]] || fail "미룬 병합 수 표시(2/4, 0 이면 2)"
 [[ "$(due 2 'CLOSED_SPECS=" 39 40"' 12 40)" == 'DUE=0 WHY=spec #40 complete SET=0' ]] || fail "pm_due(스펙 끝): $(due 2 'CLOSED_SPECS=" 39 40"' 12 40)"
-[[ "$(due 2 'MAX=3; done_count=2')" == 'DUE=0 WHY=last ticket of this run SET=0' && "$(due 2 'TICKETS=(11 12 13); done_count=2')" == 'DUE=0 WHY=last ticket of this run SET=0' ]] \
-  || fail "pm_due(--max·번호 지정의 마지막): $(due 2 'MAX=3; done_count=2') / $(due 2 'TICKETS=(11 12 13); done_count=2')"
-[[ "$(due 2 'TICKETS=(11 12 13); done_count=1')" == 'DUE=1 WHY= SET=0' ]] || fail "pm_due(번호 지정 중간 — 대상을 계산하지 않고 미룸): $(due 2 'TICKETS=(11 12 13); done_count=1')"
+[[ "$(due 2 'MAX=3; done_count=2')" == 'DUE=0 WHY=last ticket of this run SET=0' && "$(due 2 'TICKETS=(11 12 13); TICKET_IDX=2; done_count=2')" == 'DUE=0 WHY=last ticket of this run SET=0' ]] \
+  || fail "pm_due(--max·번호 지정의 마지막): $(due 2 'MAX=3; done_count=2') / $(due 2 'TICKETS=(11 12 13); TICKET_IDX=2; done_count=2')"
+[[ "$(due 2 'TICKETS=(11 12 13); TICKET_IDX=1; done_count=1')" == 'DUE=1 WHY= SET=0' ]] || fail "pm_due(번호 지정 중간 — 대상을 계산하지 않고 미룸): $(due 2 'TICKETS=(11 12 13); TICKET_IDX=1; done_count=1')"
+# 번호 지정의 마지막은 목록의 자리로 본다 — 도중에 닫혀 건너뛴 번호는 처리 건수에 없다(#46): 셋째 자리면 처리한 것이 하나여도 마지막이다
+[[ "$(due 2 'TICKETS=(11 12 13); TICKET_IDX=2; done_count=1')" == 'DUE=0 WHY=last ticket of this run SET=0' ]] || fail "pm_due(번호 지정 — 건너뛴 번호 뒤의 마지막): $(due 2 'TICKETS=(11 12 13); TICKET_IDX=2; done_count=1')"
 [[ "$(due 0 'CLOSED_SPECS=" 40"' 12 40)" == 'DUE=1 WHY= SET=0' ]] || fail "pm_due(창이 비면 돌리지 않음): $(due 0 'CLOSED_SPECS=" 40"' 12 40)"
 # 다음 대상 조회가 실제로 실패할 때(가짜 gh 의 issue list 가 502 — $GF) 미룬다. pick_targets 를 통째로 가짜로 바꾸지 않고 candidates 까지 실제 함수로
 # (0.9.9 의 이 분기는 pick_targets 가 실패를 돌려주지 못해 닿지 않았다 — #8). 같은 길로 성공하면 다음 대상(#11)을 메인 고리에 넘긴다
@@ -1121,7 +1138,7 @@ grep -qxF 'LOG post-merge-14.log: # ticket-loop: TICKET_LOOP_POST_MERGE_WHY="" T
 # 창이 차는 조건을 먼저 보므로 POST_MERGE_EVERY=1 이면 스펙을 끝낸 병합도 every 다(그래서 스펙 완료는 따로 넘긴다)
 due_key() { pmw "PM_PENDING=\"\$(printf '%s\n' \"$WIN4\" | awk 'NR <= $1')\"; PM_WHY_KEY=stale; $2; pm_due ${3:-12} ${4:-0} || true; echo \"KEY=[\$PM_WHY_KEY]\""; }
 [[ "$(due_key 4 : 14)" == 'KEY=[every]' && "$(due_key 1 'POST_MERGE_EVERY=1; CLOSED_SPECS=" 40"' 12 40)" == 'KEY=[every]' && "$(due_key 2 'CLOSED_SPECS=" 40"' 12 40)" == 'KEY=[spec_end]' \
-   && "$(due_key 2 'MAX=3; done_count=2')" == 'KEY=[run_end]' && "$(due_key 2 'TICKETS=(11 12 13); done_count=2')" == 'KEY=[run_end]' && "$(due_key 2 'PICK="12\tT02\n"')" == $'PICK\nKEY=[run_end]' \
+   && "$(due_key 2 'MAX=3; done_count=2')" == 'KEY=[run_end]' && "$(due_key 2 'TICKETS=(11 12 13); TICKET_IDX=2; done_count=2')" == 'KEY=[run_end]' && "$(due_key 2 'PICK="12\tT02\n"')" == $'PICK\nKEY=[run_end]' \
    && "$(due_key 2 'PICK="15\tT05\n"')" == $'PICK\nKEY=[]' && "$(due_key 0 'CLOSED_SPECS=" 40"' 12 40)" == 'KEY=[]' ]] \
   || fail "pm_due 의 이유 키: $(due_key 4 : 14) $(due_key 1 'POST_MERGE_EVERY=1; CLOSED_SPECS=" 40"' 12 40) $(due_key 2 'CLOSED_SPECS=" 40"' 12 40) $(due_key 2 'MAX=3; done_count=2') $(due_key 2 'PICK="12\tT02\n"') $(due_key 2 'PICK="15\tT05\n"')"
 # 스펙을 끝낸 병합(이번 실행이 스펙 이슈를 닫음 — CLOSED_SPECS)은 창에 적힌다. 같은 스펙은 한 번, 스펙이 없거나(0) 안 끝났으면 적지 않는다.
@@ -1534,6 +1551,12 @@ grep -qF "멈춤 기록 \`.ticket-loop/stops/$(basename "$rec")\`" <<<"$(gh_comm
 rc="$(stop_case die 'ORIG_ARGS=(--parent 96 "a b"); STOP_KIND=ci_failed; BASE_BRANCH=main; PARENT=96')"; rec="$(stops)"
 jq -e '.rerun == "bash scripts/ticket-loop.sh --parent 96 a\\ b" and .kind == "ci_failed" and .base_branch == "main" and .spec == 96' "$rec" >/dev/null \
   || fail "멈춤 기록의 다시 실행할 명령·종류·스펙: $(cat "$rec")"
+# 번호 지정(#46): 루프 끝(모든 번호 뒤 — 끝 검증 실패 등)에서 멈췄으면 마지막 번호를 남긴다. 시작 검사가 번호를 모두 건너뛴 실행이면 처음 번호
+# 그대로 — 번호가 없으면 다시 돌릴 때 자동 선택이 된다
+rc="$(stop_case die 'ORIG_ARGS=(5 --no-merge 6 7); TICKET_ARGS=(0 2 3); TICKETS=(5 6 7); TICKET_IDX=3')"
+jq -e '.rerun == "bash scripts/ticket-loop.sh --no-merge 7"' "$(stops)" >/dev/null || fail "번호 지정 루프 끝 멈춤의 rerun: $(cat "$(stops)")"
+rc="$(stop_case die 'ORIG_ARGS=(--no-merge "#5" 6); TICKET_ARGS=(1 2); TICKETS=(); TICKETS_GIVEN=1')"
+jq -e '.rerun == "bash scripts/ticket-loop.sh --no-merge \\#5 6"' "$(stops)" >/dev/null || fail "번호를 모두 건너뛴 실행의 rerun: $(cat "$(stops)")"
 rc="$(stop_case errexit)"; [[ "$(jq -r .kind "$(stops)")" == unexpected_exit ]] || fail "set -e 멈춤 기록의 종류가 unexpected_exit 가 아님"
 rc="$(stop_case HUP)"; [[ "$(jq -r .kind "$(stops)")" == signal ]] || fail "신호 멈춤 기록의 종류가 signal 이 아님"
 rc="$(stop_case die 'LOCK_HELD=0; STOP_ISSUE=; CUR_N=')"; [[ -z "$(stops)" ]] || fail "잠금을 못 잡은 실행이 멈춤 기록을 남김"
@@ -1591,21 +1614,26 @@ echo "ok  알림·멈춤 보고(Slack·GitHub 기록, die·set -e·신호, 긴 �
 ML="$(cd "$T" && pwd -P)/mainloop"; mkdir -p "$ML/bin"
 cp "$M/bin/curl" "$M/bin/osascript" "$GF/bin/gh" "$ML/bin/"; cp "$GF/issues.json" "$GF/prs.json" "$ML/"
 { sed -n '/^# ----- 알림 · 멈춤 보고 -----/,/^# ----- 알림 · 멈춤 보고 끝 -----/p' "$KIT/files/scripts/ticket-loop.sh"; cat "$GF/fn.sh"; } > "$ML/fn.sh"
-sed -n '/^pick_rc=0; targets="$(pick_targets)"/,/^\[\[ $pick_rc -ne 1 \]\] || die/p' "$KIT/files/scripts/ticket-loop.sh" > "$ML/prestart.sh"
+sed -n '/^\[\[ $TICKETS_GIVEN -eq 0 \]\] || given_tickets_check$/,/^\[\[ $pick_rc -ne 1 \]\] || die/p' "$KIT/files/scripts/ticket-loop.sh" > "$ML/prestart.sh"
 sed -n '/^done_count=0$/,$p' "$KIT/files/scripts/ticket-loop.sh" > "$ML/loop.sh"
-[[ "$(grep -c . "$ML/prestart.sh")" == 2 ]] && grep -q 'pick_targets' "$ML/prestart.sh" && grep -q '^while :; do' "$ML/loop.sh" && grep -q 'notify "Ticket loop finished"' "$ML/loop.sh" || fail "메인 고리를 찾지 못함"
+[[ "$(grep -c . "$ML/prestart.sh")" == 3 ]] && grep -q 'pick_targets' "$ML/prestart.sh" && grep -q '^while :; do' "$ML/loop.sh" && grep -q 'notify "Ticket loop finished"' "$ML/loop.sh" || fail "메인 고리를 찾지 못함"
 cat > "$ML/run.sh" <<'EOF'
 set -euo pipefail
 ROOT="$PWD"; MAIN_WT="$PWD"; OWNER_REPO=o/r; BASE_BRANCH=main; BACKEND=cmux; BACKEND_NAME=cmux; AGENT=claude; PARENT="${PARENT:-}"
 SLACK_WEBHOOK_URL=https://hooks.example/x; SLACK_MENTION="<@U1>"; STOPPED_LABEL=loop-stopped
 BRANCH_PREFIX=issue-; READY_LABEL=ready-for-agent; SCOPE_LABEL=""; IN_REVIEW_LABEL=in-review; ORDER_REGEX="^T(?<n>[0-9]+)"
 LOG_FILE="$PWD/loop.log"; : > "$LOG_FILE"; LOCK_DIR="$PWD/lock"
-PICK_RETRY_SEC="${PICK_RETRY_SEC:-2}"; PICK_RETRY_EVERY_SEC=1; PICK_RECHECK_SEC=0; MAX=0; NEXT_TARGETS_SET=0; NEXT_TARGETS=""; TRIAGE_USED=0; CLOSED_SPECS=""
+PICK_RETRY_SEC="${PICK_RETRY_SEC:-2}"; PICK_RETRY_EVERY_SEC=1; PICK_RECHECK_SEC=0; MAX="${MAX:-0}"; NEXT_TARGETS_SET=0; NEXT_TARGETS=""; TRIAGE_USED=0; CLOSED_SPECS=""
 # shellcheck disable=SC2206
 TICKETS=(${TICKETS_IN:-})
+# 인자 파싱이 남기는 것: 처음 인자(옵션 OPTS_IN 뒤에 번호), 번호 인자의 자리, 번호 지정 여부
+# shellcheck disable=SC2206
+OPTS=(${OPTS_IN:-}); ORIG_ARGS=(${OPTS[@]+"${OPTS[@]}"} ${TICKETS[@]+"${TICKETS[@]}"}); TICKET_ARGS=()
+for (( i = ${#OPTS[@]}; i < ${#ORIG_ARGS[@]}; i++ )); do TICKET_ARGS+=("$i"); done
+TICKETS_GIVEN=0; [[ ${#TICKETS[@]} -eq 0 ]] || TICKETS_GIVEN=1
 log() { case "$1" in title|step|ok|warn|err) shift ;; esac; printf '[2026-10-22 10:00:00] %s\n' "$*" >> "$LOG_FILE"; }
 record_ticket() { echo "record $1" >> ev; }
-run_ticket() { echo "run $1 $2" >> ev; }
+run_ticket() { echo "run $1 $2" >> ev; [[ "$1" != "${DIE_AT:-x}" ]] || die "#$1: boom"; }
 pm_flush_end() { :; }; pm_spec_closed() { :; }; close_spec_if_done() { :; }; write_spec_report() { :; }; suggest_retro() { :; }
 source fn.sh
 REPO_URL=https://github.com/o/r
@@ -1663,6 +1691,31 @@ cp "$ML/prs.json" "$ML/prs.bak"; echo '[{"number":120,"headRefName":"issue-12"}]
 rc="$(mlcase TICKETS_IN=12)"; [[ "$rc" == 1 ]] && grep -qF 'ERROR: #12: a PR is already open' "$ML/loop.log" || fail "번호 지정(PR 열림): rc $rc / $(cat "$ML/loop.log")"
 mv "$ML/prs.bak" "$ML/prs.json"
 echo "ok  메인 고리의 GitHub 조회 실패 — 시작 전 die, 티켓 사이 재시도 뒤 멈춤(could not list tickets, 코멘트 없이 알림·멈춤 기록만), 번호 지정은 die"
+
+# 번호 지정 실행(#46·#53). 시작 검사(given_tickets_check — 시작 전 첫 계산 앞): 닫힌 번호는 skip 줄을 남기고 목록에서 빠지고, 모두 닫혔으면 빈 목록이다.
+# 스펙 이슈(하위 이슈 있음)는 모두 적어 워크트리를 만들기 전에 멈춘다 — 다시 실행할 명령은 처음 번호 그대로. 조회가 실패하면 멈춘다
+rc="$(mlcase MODE=prestart TICKETS_IN='11 12 13' CLOSED_IN=12)"
+[[ "$rc" == 0 && "$(cat "$ML/ev")" == $'11\tT11\n13\tT13' ]] && grep -qF 'skip #12 (T12): already closed' "$ML/loop.log" || fail "번호 지정 시작 검사(닫힌 번호): rc $rc / $(cat "$ML/ev") / $(cat "$ML/loop.log")"
+rc="$(mlcase MODE=prestart TICKETS_IN='11 12' CLOSED_IN='11 12')"
+[[ "$rc" == 0 && -z "$(cat "$ML/ev")" && "$(grep -c 'already closed' "$ML/loop.log")" == 2 ]] && [[ "$(mlgh)" != *"issue list"* ]] || fail "번호 지정 시작 검사(모두 닫힘 — 자동 선택으로 바뀌면 안 됨): rc $rc / $(cat "$ML/ev") / $(mlgh)"
+rc="$(mlcase MODE=prestart TICKETS_IN='11 40 41' SPEC_IN='40:5:1 41:2:2')"; rec="$(mlstops)"
+[[ "$rc" == 1 && -z "$(cat "$ML/ev")" ]] && grep -qxF '[2026-10-22 10:00:00] ERROR: #40 (T40) is a spec issue with 4 open sub-issues — run them with: bash scripts/ticket-loop.sh --parent 40; #41 (T41) is a spec issue whose sub-issues are all closed — nothing to implement; close the spec instead' "$ML/loop.log" \
+  && jq -e '.rerun == "bash scripts/ticket-loop.sh 11 40 41"' "$rec" >/dev/null || fail "번호 지정 시작 검사(스펙 이슈 둘): rc $rc / $(cat "$ML/loop.log") / $(cat "$rec" 2>/dev/null)"
+rc="$(mlcase MODE=prestart TICKETS_IN='11 12' FAIL_SUBS=12)"
+[[ "$rc" == 1 && -z "$(cat "$ML/ev")" ]] && grep -qF 'ERROR: #12: could not look up the issue (GitHub)' "$ML/loop.log" || fail "번호 지정 시작 검사(조회 실패): rc $rc / $(cat "$ML/loop.log")"
+# 메인 고리: 시작 검사 뒤에 닫힌 번호는 건너뛰고 --max 에 세지 않는다. 스펙 이슈가 되었으면 멈춘다. 처음 조회가 실패하면 멈춘다
+rc="$(mlcase TICKETS_IN='11 12 13' CLOSED_IN=12 MAX=2)"
+[[ "$rc" == 0 && "$(cat "$ML/ev")" == $'run 11 T11\nrun 13 T13' ]] && grep -qF 'skip #12 (T12): closed since the run started' "$ML/loop.log" && grep -qF -- '--max 2 reached' "$ML/loop.log" \
+  && grep -qF 'done: 2 tickets' "$ML/loop.log" || fail "번호 지정(도중에 닫힌 번호 — 건너뛰고 --max 에 세지 않음): rc $rc / $(cat "$ML/ev") / $(cat "$ML/loop.log")"
+rc="$(mlcase TICKETS_IN='11 40' SPEC_IN=40:3:0)"
+[[ "$rc" == 1 && "$(cat "$ML/ev")" == "run 11 T11" ]] && grep -qF 'ERROR: #40 (T40) is a spec issue with 3 open sub-issues — run them with: bash scripts/ticket-loop.sh --parent 40' "$ML/loop.log" \
+  || fail "번호 지정(스펙 이슈 — 워커 없이 멈춤): rc $rc / $(cat "$ML/ev") / $(cat "$ML/loop.log")"
+rc="$(mlcase TICKETS_IN=12 FAIL_SUBS=12)"; [[ "$rc" == 1 && -z "$(cat "$ML/ev")" ]] && grep -qF 'ERROR: #12: could not look up the issue (GitHub)' "$ML/loop.log" || fail "번호 지정(조회 실패): rc $rc / $(cat "$ML/loop.log")"
+# 다시 실행할 명령(#46): 옵션은 처음 그대로, 번호는 멈춘 티켓부터 — 이미 끝낸 번호(병합·PR만 연 번호)는 빠진다
+rc="$(mlcase TICKETS_IN='11 12 13' OPTS_IN='--max 5 --no-merge' DIE_AT=12)"; rec="$(mlstops)"
+[[ "$rc" == 1 && "$(cat "$ML/ev")" == $'run 11 T11\nrun 12 T12' ]] && jq -e '.rerun == "bash scripts/ticket-loop.sh --max 5 --no-merge 12 13"' "$rec" >/dev/null \
+  || fail "번호 지정 중간 멈춤의 rerun: rc $rc / $(cat "$rec" 2>/dev/null)"
+echo "ok  번호 지정 실행 — 닫힌 번호 건너뜀(시작·도중, --max 에 안 셈), 스펙 이슈는 워커 없이 멈춤, rerun 은 남은 번호만(#46·#53)"
 
 # 메인 고리의 성공한 빈 응답(#22): 티켓 사이의 재계산이 후보 0행이면 PICK_RECHECK_SEC 뒤 한 번 더 — 회복하면 다음 티켓을 고른다(전에는
 # "No more tickets" 로 끝나고 finished 알림). 두 번 다 비고 --parent 의 스펙에 열린 하위 이슈가 남으면 PICK_RETRY_SEC 동안 다시 해 본 뒤

@@ -2,7 +2,7 @@
 
 ## 0.9.25 — 2026-11-07
 
-결함 하나(#52)를 고쳤다. 사용량 한도 감지만 바뀐다.
+결함 셋(#52, #46·#53)을 고쳤다. #52는 사용량 한도 감지만, #46·#53은 번호를 지정한 실행(`ticket-loop.sh 12 15`)만 바꾼다. 자동 선택과 `--parent`는 그대로다.
 
 - **claude 프리셋이 지금 Claude Code의 사용량 한도 문구를 알아본다(#52).** 0.9.12(#10)에 넣은 한도 감지가 2026-11 Claude Code 문구를 놓쳤다. 실측(키트 0.9.23, cmux, Opus 5.5): 워커의 리뷰 서브에이전트가 주간 한도에 걸려 화면 끝에 `You've hit your weekly limit · resets 10am`, `⚠ Usage limit reached · limit resets 10am`이 떴는데, 루프는 일반 idle로 세다 strike 셋 뒤 `worker_no_pr`로 멈췄다. 무인 수습 세션을 띄웠고, 그 세션도 같은 한도에 걸려 판정 없이 끝났다. 알림은 "질문 또는 실패"로 나갔다. 워커 세션은 재설정 시각에 스스로 이어 가 PR을 열었고, 루프는 이미 끝나 있어 CI·병합·병합 뒤 검증·워크트리 정리를 사람이 손으로 했다.
   - 원인 둘: 프리셋의 `usage limit`은 소문자인데 화면은 문장 첫머리의 `Usage limit reached`였고, `reached your .* limit`은 동사가 `hit`인 새 문구에 맞지 않았다. 그리고 `screen_kind`의 한도 판정은 `grep -E`(대소문자 구분)였다 — 바로 아래 재설정 시각 추출은 `grep -iEo`였다.
@@ -12,7 +12,17 @@
   - 멈춤 사유에 한 줄을 더했다: 워커가 재설정 시각에 스스로 이어 가 루프 밖에서 PR을 열 수 있으니 다시 돌리기 전에 그 PR을 보라(루프는 열린 PR을 이어받지 않는다 — 자동 선택은 건너뛰고 번호 지정은 멈춘다). loop-triage 스킬의 `usage_limit` 설명에도 같은 안내.
   - 스모크: 실측 화면 꼬리(영문 그대로)가 strike 없이 `usage_limit`로 멈추고 사유에 `⚠ Usage limit reached · limit resets 10am`만 실림, `You've hit your weekly limit` 줄만 있는 화면, 맥락 한도 화면은 전처럼 idle strike, 수습 세션이 새 문구에 걸린 경우. 화면 분류 검사들이 옛 정규식을 글자로 적어 두던 것을 스크립트의 claude 프리셋 값을 읽도록 바꿨다 — 프리셋이 바뀌면 검사도 새 값으로 돈다. 실제 한도에 걸린 워커로 돌려 보지는 않았다.
   - 문서: 루프 스크립트 머리 주석·프리셋 주석·화면 분류 절, `docs/loop.md`·`loop.ko.md`, loop-triage 스킬, 부록 D, PDF.
-- 이미 설치된 저장소: 키트를 올리면 바로 켜진다. 그동안 `loop.env`에 우회 값(`[Rr]eached your .*limit|[Hh]it your .*limit|…`)을 적어 두었다면 그대로 맞으니 지워도 된다. 범위 밖: 한도에 걸린 워커를 재설정까지 기다려 이어 가기는 #12에서 다룬다.
+- **번호를 지정한 실행이 닫힌 이슈를 건너뛰고, 스펙 이슈면 시작 전에 멈추고, 멈춤 기록의 다시 실행할 명령에 남은 번호만 싣는다(#46·#53).** 자동 선택은 닫힌 이슈를 목록에서 거르고 하위 이슈가 달린 이슈를 `spec issue with sub-issues`로 건너뛰지만, 번호 지정은 막힘·열린 PR만 보고 그 길을 타지 않았다. 실측 둘:
+  - #46(rsrehab/detection-tslite, 0.9.22): 명시 인자 열한 개로 돌던 실행이 일곱 건을 병합하고 멈췄는데, 멈춤 기록의 `rerun`은 처음 열한 개 그대로였다. 그 명령을 돌리자 첫 대상인 닫힌 #5에 워커를 띄웠고, 워커가 PR 없이 멈춰 `worker_no_pr` → 수습 세션까지 헛돌았다.
+  - #53(0.9.23): 하위 이슈 다섯 개가 달린 스펙 이슈를 번호로 넘기자 워커를 띄웠고, 워커는 "스펙이라 직접 구현하지 않음, `--parent`로 돌려라"를 남기고 멈췄다. 같은 헛돎.
+  - 시작 검사(`given_tickets_check`): 번호마다 이슈를 한 번 조회해(`issue_facts` — 상태·하위 이슈 요약·제목, 전에 제목만 따로 보던 조회를 대신한다) 닫힌 번호는 `skip #N (…): already closed`를 남기고 목록에서 뺀다. 하위 이슈가 달린 스펙 이슈가 있으면 모두 적어 워크트리를 만들기 전에 멈춘다 — 열린 하위 이슈가 있으면 `#N (…) is a spec issue with K open sub-issues — run them with: bash scripts/ticket-loop.sh --parent N`, 모두 닫혔으면 `… whose sub-issues are all closed — nothing to implement; close the spec instead`. 조회가 실패하면 멈춘다. `--dry-run`에도 같다. 번호를 모두 건너뛰면 "No tickets to process."로 끝난다 — 자동 선택으로 바뀌지 않는다.
+  - 티켓마다 다시 본다: 시작 뒤에 닫힌 번호(다른 PR의 `Closes`·사람)는 `closed since the run started`로 건너뛰고 `--max`에 세지 않는다. 목록의 자리(`TICKET_IDX`)와 처리 건수(`done_count`)를 나눴다 — 병합 뒤 검증의 "이번 실행의 마지막 티켓" 판정은 자리로 본다.
+  - 다시 실행할 명령(`rerun`): 옵션은 처음 그대로 두고, 번호는 멈춘 티켓부터 남은 것만 붙인다. 루프 끝(모든 번호 뒤 — 끝 검증 실패 등)에서 멈췄으면 마지막 번호를, 번호를 모두 건너뛴 실행이면 처음 번호를 그대로 둔다(번호가 없으면 자동 선택이 되므로). `--no-merge`로 PR만 연 번호도 빠져 다시 돌릴 때 `a PR is already open`에 멈추지 않는다.
+  - 시작 로그의 대상 머리줄이 번호 지정이면 `targets (in the given order — blockers and open PRs are checked before each starts):`다. 전의 `all blocking issues currently closed`는 그 시점에 확인하지 않은 말이었다.
+  - 이슈가 고른 기본값을 따랐다: 번호로 넘긴 스펙 이슈를 `--parent`로 바꿔 읽지 않고 멈춘다(사용자가 준 인자의 뜻을 바꾸지 않는다).
+  - 스모크: `given_ticket`(열림·닫힘·닫힌 스펙·열린 하위 이슈 단수/복수·모두 닫힌 스펙·조회 실패), 시작 검사(닫힌 번호 빠짐, 모두 닫힘에 목록 조회 없음, 스펙 둘을 한 줄에 적고 워커 없이 멈춤과 그 `rerun`, 조회 실패), 메인 고리(도중에 닫힌 번호를 건너뛰고 `--max`에 세지 않음, 스펙 이슈에 멈춤, 조회 실패), 중간 멈춤·루프 끝 멈춤·모두 건너뛴 실행의 `rerun`, `pm_due`의 마지막 판정이 자리를 봄.
+  - 문서: 루프 스크립트 사용법, README 예시 줄, 가이드북 6장 예시, `docs/stops.md`·`stops.ko.md`, loop-triage 스킬의 `rerun` 설명, 부록 D, PDF.
+- 이미 설치된 저장소: 키트를 올리면 바로 켜진다. #52는 그동안 `loop.env`에 우회 값(`[Rr]eached your .*limit|[Hh]it your .*limit|…`)을 적어 두었다면 그대로 맞으니 지워도 된다. 범위 밖: 한도에 걸린 워커를 재설정까지 기다려 이어 가기는 #12에서 다룬다.
 
 ## 0.9.24 — 2026-11-07
 
