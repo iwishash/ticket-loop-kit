@@ -135,7 +135,7 @@ set -euo pipefail
 #   MODEL_REGEX         워커 터미널에서 모델 이름을 뽑는 정규식(ERE) (claude: 상태줄·배너의 "Opus 5.5" 꼴, codex: "gpt-5.1-codex" 꼴).
 #                       못 찾으면 리포트에 not recorded
 #   USAGE_LIMIT_REGEX   워커 화면 끝 25줄에서 사용량 한도 문구를 찾는 정규식(ERE, 대소문자를 가리지 않는다) (claude: "usage limit reached|
-#                       (weekly|[0-9]+-hour) limit reached|(hit|reached) your( [a-z0-9-]+){0,2} limit", codex·그 외: 없음).
+#                       (weekly|[0-9]+-hour) limit reached|(hit|reached) your( [a-z0-9-]+)?( [a-z0-9-]+)? limit", codex·그 외: 없음).
 #                       idle인 워커의 화면에 맞으면 strike를 세지 않고 usage_limit로 바로 멈춘다 — 무인 수습은 띄우지 않는다(같은 한도에 걸린다).
 #                       비우면 감지하지 않는다. 아래 "화면 분류" 절
 #   PERMISSION_PROMPT_REGEX  워커 화면 끝에서 권한 확인 창 문구를 찾는 정규식(ERE) (claude: "Do you want to proceed\?", codex·그 외: 없음). 그 줄이 든
@@ -268,6 +268,9 @@ REPORT_DIR="$(abs_path "$REPORT_DIR")"
 #           사용량 한도·확인 창 문구는 실측 전이라 비워 둔다(감지하지 않음) — 실측 뒤 loop.env의 USAGE_LIMIT_REGEX·PERMISSION_PROMPT_REGEX로 켠다
 #   그 외   프리셋 없음. AGENT_RESTART_CMD·AGENT_BANNER_REGEX(·AGENT_MODEL_FLAG·MODEL_REGEX·SKILL_PREFIX·USAGE_LIMIT_REGEX·PERMISSION_PROMPT_REGEX)를 loop.env에 적는다.
 #           기동 명령·배너가 비어 있으면 시작 때 멈춘다
+# 기본값("${VAR:-…}")에는 }를 쓰지 않는다 — bash는 기본값을 처음 나오는 }에서 끊고 나머지를 글자 그대로 뒤에 붙인다. 0.9.25의 한도 정규식
+# "( [a-z0-9-]+){0,2} limit"이 "{0,2 limit}"으로 깨져 grep이 매번 rc=2(invalid repetition count)를 냈고 한도 감지가 꺼졌다(#57). 횟수 반복은
+# ?를 겹쳐 풀어 쓴다
 case "$AGENT" in
   claude)
     AGENT_RESTART_CMD="${AGENT_RESTART_CMD:-claude --dangerously-skip-permissions}"
@@ -275,7 +278,7 @@ case "$AGENT" in
     AGENT_BANNER_REGEX="${AGENT_BANNER_REGEX:-Claude Code|Opus|Sonnet|Fable|Haiku}"
     MODEL_REGEX="${MODEL_REGEX:-(Opus|Sonnet|Haiku|Fable|Mythos)[[:space:]]+[0-9]+(\.[0-9]+)?}"
     SKILL_PREFIX="${SKILL_PREFIX:-/}"
-    USAGE_LIMIT_REGEX="${USAGE_LIMIT_REGEX:-usage limit reached|(weekly|[0-9]+-hour) limit reached|(hit|reached) your( [a-z0-9-]+){0,2} limit}"
+    USAGE_LIMIT_REGEX="${USAGE_LIMIT_REGEX:-usage limit reached|(weekly|[0-9]+-hour) limit reached|(hit|reached) your( [a-z0-9-]+)?( [a-z0-9-]+)? limit}"
     PERMISSION_PROMPT_REGEX="${PERMISSION_PROMPT_REGEX:-Do you want to proceed\?}" ;;
   codex)
     AGENT_RESTART_CMD="${AGENT_RESTART_CMD:-codex --dangerously-bypass-approvals-and-sandbox}"

@@ -559,7 +559,7 @@ echo "ok  cmux 백엔드 wait_idle 세 경우, send 다섯 경우"
 A="$T/agent"; mkdir -p "$A"
 sed -n '/^# ----- 에이전트 프리셋 -----/,/^# ----- 에이전트 프리셋 끝 -----/p' "$KIT/files/scripts/ticket-loop.sh" > "$A/preset.sh"
 grep -q 'case "\$AGENT" in' "$A/preset.sh" || fail "에이전트 프리셋 블록을 찾지 못함"
-preset() { AGENT="$1" bash -c 'set -euo pipefail; source "$0"; printf "%s\n%s\n%s\n%s\n" "$AGENT_RESTART_CMD" "$AGENT_BANNER_REGEX" "$MODEL_REGEX" "$SKILL_PREFIX"' "$A/preset.sh"; }
+preset() { AGENT="$1" bash -c 'set -euo pipefail; source "$0"; printf "%s\n%s\n%s\n%s\n%s\n%s\n" "$AGENT_RESTART_CMD" "$AGENT_BANNER_REGEX" "$MODEL_REGEX" "$SKILL_PREFIX" "$USAGE_LIMIT_REGEX" "$PERMISSION_PROMPT_REGEX"' "$A/preset.sh"; }
 out="$(preset claude)"; [[ "$(sed -n 1p <<<"$out")" == "claude --dangerously-skip-permissions" && "$(sed -n 4p <<<"$out")" == "/" ]] || fail "claude 프리셋이 다름: $out"
 printf '[Opus 5.5 | Max]\n' | grep -oE "$(sed -n 3p <<<"$out")" | grep -qx 'Opus 5.5' || fail "claude MODEL_REGEX 가 Opus 5.5 를 못 뽑음"
 out="$(preset codex)"; [[ "$(sed -n 1p <<<"$out")" == "codex --dangerously-bypass-approvals-and-sandbox" && "$(sed -n 4p <<<"$out")" == '$' ]] || fail "codex 프리셋이 다름: $out"
@@ -568,6 +568,19 @@ printf 'codex --dangerously-bypass-approvals-and-sandbox "$(cat /tmp/p)"\n' | gr
 printf 'model: gpt-5.1-codex-max.\n' | grep -oE "$(sed -n 3p <<<"$out")" | grep -qx 'gpt-5.1-codex-max' || fail "codex MODEL_REGEX 가 모델명을 못 뽑음"
 out="$(AGENT_RESTART_CMD='codex --yolo' SKILL_PREFIX=/ preset codex)"; [[ "$(sed -n 1p <<<"$out")" == "codex --yolo" && "$(sed -n 4p <<<"$out")" == "/" ]] || fail "loop.env 값이 프리셋을 이기지 않음: $out"
 out="$(preset bogus)"; [[ -z "$(sed -n 1p <<<"$out")" && -z "$(sed -n 2p <<<"$out")" && "$(sed -n 4p <<<"$out")" == "/" ]] || fail "모르는 AGENT 에 프리셋이 생김: $out"
+# #57: 프리셋의 정규식은 bash 가 만든 값으로 본다 — 기본값("${VAR:-…}")에 } 가 있으면 bash 가 첫 } 에서 끊어 값이 깨진다(0.9.25 의 한도 정규식이
+# "{0,2 limit}" 이 되어 BSD grep 이 rc=2). 프리셋의 정규식이 모두 grep -E 로 컴파일되는지 본다. GNU grep 은 깨진 { 를 글자로 읽어 조용하므로
+# claude 한도 정규식은 값 자체도 비교한다(화면 사례는 아래 화면 분류 검사가 같은 평가 값으로 돈다)
+for ag in claude codex; do
+  out="$(USAGE_LIMIT_REGEX= PERMISSION_PROMPT_REGEX= preset "$ag")"
+  for i in 2 3 5 6; do
+    re="$(sed -n "${i}p" <<<"$out")"; [[ -n "$re" ]] || continue
+    rc=0; grep -E -- "$re" </dev/null >/dev/null 2>&1 || rc=$?; [[ $rc -le 1 ]] || fail "$ag 프리셋 ${i}번째 줄의 정규식이 grep -E 에서 오류(rc=$rc): $re"
+  done
+done
+out="$(USAGE_LIMIT_REGEX= PERMISSION_PROMPT_REGEX= preset claude)"
+[[ "$(sed -n 5p <<<"$out")" == 'usage limit reached|(weekly|[0-9]+-hour) limit reached|(hit|reached) your( [a-z0-9-]+)?( [a-z0-9-]+)? limit' \
+  && "$(sed -n 6p <<<"$out")" == 'Do you want to proceed\?' ]] || fail "claude 프리셋의 화면 분류 정규식이 다름(bash 가 기본값을 끊었나): $(sed -n '5,6p' <<<"$out")"
 grep -q 'AGENT=\${AGENT} has no preset' "$KIT/files/scripts/ticket-loop.sh" || fail "모르는 AGENT 를 시작 때 멈추는 검사가 없음"
 # 워커 모델(#50): --model·AGENT_MODEL 이 기동 명령 뒤에 프리셋의 모델 인자로 붙는다. Orca·인자 프리셋이 없는 AGENT 는 시작 때 종료 코드 2
 { cat "$A/preset.sh"; sed -n '/^while \[\[ \$# -gt 0 \]\]; do$/,/^done$/p; /^# ----- 워커 모델 -----/,/^# ----- 워커 모델 끝 -----/p' "$KIT/files/scripts/ticket-loop.sh"; } > "$A/model.sh"
@@ -1873,8 +1886,9 @@ tcase KIND=post_merge_failed SPAWN_FAIL=1 VERDICT="$V_FIX"
   && [[ "$(ncurl)" == 1 && -z "$(tcalls)" ]] || fail "세션이 안 뜸: 원래 사유로 멈춰야 함(멈춤 보고는 die 가 한 번): $(cat "$TG/repo/out.json") / $(tcalls)"
 # 6b) #10: 수습 세션 자체가 사용량 한도에 걸리면(idle + 한도 문구 화면) strike 없이 "판정 없이 멈춤"이 아니라 usage_limit 로 끝낸다 — STOP_KIND 가
 #     usage_limit 이고 사유에 그 줄이 있다. 같은 화면이라도 USAGE_LIMIT_REGEX 가 비어 있으면(codex) 전처럼 idle 세 번
-#     정규식은 스크립트의 claude 프리셋 값을 그대로 읽는다 — 프리셋이 바뀌면 이 검사들도 새 값으로 돈다(#52: 옛 값을 적어 두어 프리셋을 시험하지 않았다)
-CLAUDE_UL_RE="$(sed -n 's/^    USAGE_LIMIT_REGEX="\${USAGE_LIMIT_REGEX:-\(..*\)}"$/\1/p' "$KIT/files/scripts/ticket-loop.sh" | head -n 1)"
+#     정규식은 스크립트의 claude 프리셋을 bash 로 평가한 값이다 — 프리셋이 바뀌면 이 검사들도 새 값으로 돈다(#52: 옛 값을 적어 두어 프리셋을 시험하지
+#     않았다). 소스의 글자를 sed 로 뽑던 것은 bash 가 기본값을 첫 } 에서 끊어 깨진 실제 값을 시험하지 못했다(#57)
+CLAUDE_UL_RE="$(USAGE_LIMIT_REGEX= preset claude | sed -n 5p)"
 [[ -n "$CLAUDE_UL_RE" ]] || fail "claude 프리셋의 USAGE_LIMIT_REGEX 를 읽지 못함"
 LIMIT_SCREEN=$'│ > /loop-triage …\n│\n│  You\'ve reached your Fable limit · resets 3pm (Asia/Seoul)\n│'
 tcase KIND=ci_failed PR=34 SCREEN="$LIMIT_SCREEN" USAGE_LIMIT_REGEX="$CLAUDE_UL_RE"
@@ -2377,7 +2391,7 @@ out="$(stopchk_case "")"; [[ "$out" == "through|0|" ]] || fail "screen_stop_chec
   && "$(grep -c '! screen_check "$handle" "triage session" [01] || return 1' "$KIT/files/scripts/ticket-loop.sh")" == 2 ]] || fail "세 대기가 screen_check 를 idle·타임아웃 양쪽에서 부르지 않음"
 grep -q '^    screen_stop_check "${n}"   # 사용량 한도' <(sed -n '/^run_ticket() {/,/^}/p' "$KIT/files/scripts/ticket-loop.sh") \
   && [[ "$(grep -c 'screen_stop_check "${n}" " while repairing PR #${pr}"' "$KIT/files/scripts/ticket-loop.sh")" == 2 ]] || fail "호출부 세 곳이 screen_stop_check 를 보지 않음"
-grep -qF 'USAGE_LIMIT_REGEX="${USAGE_LIMIT_REGEX:-usage limit reached|(weekly|[0-9]+-hour) limit reached|(hit|reached) your( [a-z0-9-]+){0,2} limit}"' "$KIT/files/scripts/ticket-loop.sh" \
+[[ "$CLAUDE_UL_RE" == 'usage limit reached|(weekly|[0-9]+-hour) limit reached|(hit|reached) your( [a-z0-9-]+)?( [a-z0-9-]+)? limit' ]] \
   && grep -qF 'line="$(grep -iE "$USAGE_LIMIT_REGEX" <<<"$tail"' "$KIT/files/scripts/ticket-loop.sh" \
   && grep -qF 'PERMISSION_PROMPT_REGEX="${PERMISSION_PROMPT_REGEX:-Do you want to proceed\?}"' "$KIT/files/scripts/ticket-loop.sh" \
   && [[ "$(grep -cF 'USAGE_LIMIT_REGEX="${USAGE_LIMIT_REGEX:-}"' "$KIT/files/scripts/ticket-loop.sh")" == 2 && "$(grep -cF 'PERMISSION_PROMPT_REGEX="${PERMISSION_PROMPT_REGEX:-}"' "$KIT/files/scripts/ticket-loop.sh")" == 2 ]] \
