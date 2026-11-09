@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.9.27 — 2026-11-09
+
+문서만 바뀌었다(PR #59). pms-postgres 스펙 #317 기획 세션의 회고(rsrehab/pms-postgres#356)에서 고친 두 안내를 키트로 올렸다. 스크립트는 그대로다.
+
+- **티켓의 막는 관계는 만들 때 건다.** `templates/docs/agents/issue-tracker.md` Conventions에 **Blocking edges** 항목을 더했다: `gh issue create --parent <spec> --blocked-by <n>,<n>`로 만들면서 걸고, 그래서 막는 쪽부터 만든다. 나중에는 `gh issue edit <n> --add-blocked-by <m>` / `--remove-blocked-by <m>`. db id를 찾아 `gh api`로 거는 길은 이 플래그가 없는 옛 `gh` 대비로만 남겼다. 키트 자신의 `docs/agents/issue-tracker.md`도 같게 했고, Wayfinding의 Blocking은 이 항목을 가리킨다.
+  - 실측(키트 0.9.25, pms-postgres): `/to-tickets`가 티켓 18개를 만든 뒤 막는 관계 29개를 관계마다 db id 조회 + POST로 걸었다(약 58회 호출). zsh에서 `edges="03:02 04:03 …"; for e in $edges`가 한 번만 돌아 틀린 관계(#321 ← #335)가 생겼고, 지우고 다시 걸었다. 에이전트는 이 문서를 `head -40`으로 읽었는데, 막는 관계 안내는 그 아래 Wayfinding에 `gh api` 방식으로만 있었다. 새 항목은 템플릿 13행이다.
+  - 플래그는 `gh` 2.103.0의 `gh issue create --help`·`gh issue edit --help`로 확인했다.
+- **기획 세 단계는 사람이 입력한다.** `setup-ticket-loop` 6단계가 만드는 `docs/agents/ticket-loop.md`에 두 가지를 더 적게 했다(기획 스킬을 설치했을 때). `/grill-with-docs`·`/to-spec`·`/to-tickets`는 모델이 스스로 부르지 못하게 막혀 있어(Claude Code `disable-model-invocation`, Codex `allow_implicit_invocation: false`) 사람이 입력하고, 에이전트는 한 단계가 끝나면 다음에 입력할 명령을 알려 준다. `/grill-with-docs`가 고친 `GLOSSARY.md`·`docs/adr/`는 루프 전에 PR로 병합한다(워커는 `origin/main`만 본다).
+  - 실측: 같은 세션에서 에이전트가 grill 프롬프트의 "끝나면 /to-spec → /to-tickets 순서로 이어 간다"를 따라 Skill 도구로 `to-spec`을 부르다 `cannot be used with Skill tool due to disable-model-invocation`으로 막혔다.
+- 이미 설치된 저장소: 키트를 올려도 `docs/agents/issue-tracker.md`는 바뀌지 않는다(없을 때만 놓는다). **Blocking edges** 줄은 손으로 옮긴다. `setup-ticket-loop` 스킬은 키트와 함께 바뀌지만 이미 만든 `docs/agents/ticket-loop.md`는 그대로라, 두 가지를 손으로 더하거나 `/setup-ticket-loop`를 다시 돌린다. pms-postgres는 #356에서 먼저 고쳤고, rental-portal·web-site·pms-demo는 rsrehab/rental-portal#776, rsrehab/web-site#84, iwishash/pms-demo#2로 옮겼다.
+
 ## 0.9.26 — 2026-11-08
 
 결함 하나(#57)를 PR #58로 고쳤다. 0.9.25(#52)에서 바꾼 claude 프리셋의 사용량 한도 정규식이 bash에서 깨져 한도 감지가 꺼져 있었다.
