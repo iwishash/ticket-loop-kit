@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.9.29 — 2026-11-12
+
+결함 하나(#61)를 고쳤다. 백엔드 앱(cmux·Orca)이 살아 있지만 잠깐 응답하지 않으면 루프가 1분 만에 "app closed?"로 멈췄다.
+
+- **앱이 멈춘 동안은 기다린다(#61).** 실측(키트 0.9.26·0.9.28, cmux 0.65.2, 2026-11-12): pms-postgres #378과 rental-portal #862 루프가 14초 간격으로 `cannot reach cmux terminal … (cmux app closed?)`로 멈췄다. cmux 앱 프로세스(pid 1281)는 다시 뜨지 않았다. 그 프로세스의 시스템 로그는 21:19:28부터 21:22:06까지 비어 있었고, 그 뒤 앱이 다시 응답했다. 워커 둘은 루프가 멈춘 뒤 혼자 PR(#381·#879)을 열었다.
+  - 원인: `cmux_wait_idle`은 lifecycle도 화면도 못 읽으면 실패를 세어 `TERMINAL_RETRY`(5)번이면 3(닿지 못함)을 돌려줬다. 서피스가 없을 때(`not_found`)와 소켓이 응답하지 않을 때(`Connection refused`)를 가르지 않았고, 첫 실패에서 약 1분 뒤였다. Orca도 같은 구조였다(약 50초).
+  - 화면을 읽지 못하면 원인을 셋으로 가른다(`cmux_reach`·`orca_reach`). **터미널 없음**(앱이 답했다 — cmux `not_found`, Orca `terminal_handle_stale` 등)과 **앱 없음**(앱에 닿지 못했고 앱 프로세스도 없다)은 지금처럼 `TERMINAL_RETRY` 규칙대로 3이다. **응답 없음**(앱에 닿지 못했지만 프로세스는 있다)은 새 설정 `TERMINAL_UNRESPONSIVE_SEC`(기본 600초)까지 기다린다. 멈춘 앱에는 CLI 호출 하나가 15~60초씩 걸려, 상한은 횟수가 아니라 경과 시간으로 잰다. 시작할 때, 이어지는 동안 1분마다, 회복할 때 한 줄씩 찍는다.
+  - 앱 프로세스 판정: cmux는 소켓을 쥔 프로세스(`lsof -t`, 소켓은 `CMUX_SOCKET_PATH` 또는 `cmux socket-status --json`의 `.socket_path`). `socket-status`는 소켓에 연결하지 않는다 — 유닉스 소켓 연결을 막은 샌드박스에서도 답했다. `lsof -t`는 listen하는 프로세스만 돌려주고, 대기열의 클라이언트나 주인 없이 남은 소켓 파일에는 아무것도 돌려주지 않는다(확인). Orca는 `orca status --json`의 `app.running`·`app.pid`. `orca status`는 앱에 1초 상한으로 묻고, 답이 없으면 런타임 메타데이터의 pid가 살아 있는지 본다(Orca CLI `out/cli/runtime/status.js`). Orca에서 "앱에 닿지 못함"은 CLI 전송 계층의 코드(`runtime_unavailable`·`runtime_timeout`·`invalid_runtime_response`)와 빈 출력이고, 그 밖의 `error.code`는 앱이 답한 것으로 본다.
+  - 응답 없음이 시작된 시각은 터미널별 파일(`REACH_STATE_DIR` — 루프가 잠금을 잡을 때 만들고 끝날 때 지운다)에 둔다. 대기 함수가 `PROGRESS_SEC`마다 서브셸에서 새로 불려도 이어진다. 앱이 한 번이라도 응답하거나 새 대기(PR·수리·수습 판정)가 시작되면 지운다.
+  - `TERMINAL_RETRY`·`TERMINAL_RETRY_SEC`를 `${VAR:-기본값}` 꼴로 바꿔 `loop.env`·환경변수로 바꿀 수 있게 했다. 이에 맞춰 cmux·tmux 대기는 연달아 실패하는 동안 호출의 상한에서 돌아오지 않는다. 실패 횟수는 호출마다 0부터 세므로, 그대로 두면 `TERMINAL_RETRY`를 늘렸을 때 `PROGRESS_SEC`마다 돌아오는 대기가 3에 끝내 닿지 못한다.
+  - 멈춤 사유: PR 대기·수리 대기·수습 판정 대기 모두 원인(앱이 N초 동안 응답하지 않음 / 앱이 실행 중이 아님 / 터미널이 없음)을 적고, 사용량 한도 멈춤처럼 "워커가 루프 밖에서 PR을 열 수 있으니 다시 돌리기 전에 보라(루프는 열린 PR을 이어받지 않는다)"를 붙인다. `(… app closed?)` 추측은 없앴다. 멈춤 종류(`other`)와 무인 수습을 띄우지 않는 것은 그대로다. tmux는 창이 없으면 "터미널 없음"이다. tmux 대기는 응답 없음을 기다리지 않는다(tmux 서버가 끝나면 워커도 끝난다). 바뀐 것은 위의 연달아 실패하는 동안 돌아오지 않는 것뿐이다.
+  - 스모크: 가짜 cmux(소켓 거절·`socket-status`)와 가짜 `lsof`로 본다. 앱 프로세스가 있으면 `TERMINAL_RETRY`보다 긴 거절 뒤 회복해 0이고 응답 없음 줄·회복 줄이 남는다. 소켓을 쥔 프로세스나 소켓 파일이 없으면 3, `not_found`면 기다리지 않고 3이다. `CMUX_SOCKET_PATH`를 따른다. 가짜 시계로는 서브셸 호출 다섯 번에 걸쳐 상한에 닿아 3이 되고 1분마다 경과 줄이 나오며, `reach_reset` 뒤에는 새로 센다. `TERMINAL_RETRY=4`에서도 앱이 없으면 3에 닿는다. 가짜 orca로는 #72(빈 wait 응답, 터미널은 읽힘 → 1), `terminal_handle_stale` → 3, 앱 꺼짐 → 3, 앱이 멈췄다 회복 → 1을 본다. tmux 창이 사라지면 3과 그 원인이다. 설정은 기본값·환경변수·`loop.env`를 본다. 수리 대기를 실제로 돌려 die 문장 셋을 고정하고, PR 대기·수습 판정 대기의 배선, `(… app closed?)`가 남지 않음, 세 대기의 `reach_reset`, `REACH_STATE_DIR`의 생성·정리를 본다.
+  - 문서: 루프 스크립트 머리 주석(환경변수 목록·백엔드 계약·멈추는 조건), `docs/loop.md`·`loop.ko.md`, 부록 D, PDF.
+- 이미 설치된 저장소: 키트를 올리면 바로 바뀐다. 실제 앱 멈춤으로 돌려 보지는 않았다(스모크와 `bash -n`만). Orca가 멈췄을 때의 응답 모양은 실측하지 못해 가짜 CLI로만 봤다.
+
 ## 0.9.28 — 2026-11-12
 
 결함 하나를 PR #60으로 고쳤다. CI 체크가 끝내 등록되지 않은 PR(실패한 job이 없다)에 루프가 '실패' 수리 프롬프트를 보냈다.
