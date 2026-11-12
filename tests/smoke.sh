@@ -384,6 +384,7 @@ cat > "$F/run.sh" <<'SH'
 set -euo pipefail
 BACKEND=orca; ORCA_CLI=orca; CMUX_CLI=cmux; TMUX_CLI=tmux; TMUX_SESSION=""; OWNER_REPO=o/r; ROOT=/tmp; MAIN_WT=/tmp; BASE_BRANCH=main; BRANCH_PREFIX=issue-; AGENT=claude; SKILL_PREFIX=/
 AGENT_RESTART_CMD=claude; TERMINAL_RETRY=1; TERMINAL_RETRY_SEC=0; IDLE_POLL_SEC=0; WORKTREE_DIR=""; WORKTREE_SETUP_CMD=""
+TERMINAL_UNRESPONSIVE_SEC=600; TERMINAL_UNRESPONSIVE_LOG_SEC=60; REACH_STATE_DIR="$PWD/term-$BACKEND"; mkdir -p "$REACH_STATE_DIR"
 log() { :; }; die() { echo "die: $*" >&2; exit 1; }
 source "$1"
 orca_check; [[ "$REPO_ID" == r1 ]] || die "REPO_ID"
@@ -446,12 +447,75 @@ NONE='{"ok":true,"result":{"worktree":{"id":"r1::/w/issue-7"}}}'
 [[ "$(wtc "$NONE")" == "die: No agent terminal handle returned (r1::/w/issue-7)" ]] || fail "orca_worktree_create(핸들 없음): $(wtc "$NONE")"
 echo "ok  orca_worktree_create — Orca 1.4.244 의 result.launch 와 옛 모양, 채팅이면 멈춤, --surface 는 CLI·호스트가 다 알 때만(#41)"
 
+# orca_wait_idle 이 예상 밖 응답으로 끝났을 때(#72·#61): 터미널을 읽을 수 있으면 계속 기다림(1). 못 읽으면 원인대로 — 앱이 답했는데 터미널이
+# 없으면(terminal_handle_stale) 3, 앱에 닿지 못했고 앱도 꺼졌으면(runtime_unavailable, status 의 app.running false) 3, 앱에 닿지 못했지만
+# 앱 프로세스는 있으면 기다렸다가 회복한다. 가짜 orca: terminal wait 은 FAKE_WAIT 그대로, terminal read 는 FAKE_READ_DOWN_FILE 의 횟수만큼
+# FAKE_READ_ERR 로 실패한 뒤 성공, status 는 FAKE_APP_RUNNING=1 이면 앱 프로세스가 있다(Orca 1.4.224 의 꺼진 앱 모양 running:false·pid:null)
+OW="$T/orcawait"; mkdir -p "$OW"
+cat > "$OW/orca" <<'SH'
+#!/bin/bash
+case "$1 $2" in
+  "terminal wait") printf '%s' "${FAKE_WAIT:-}" ;;
+  "terminal read")
+    left="$(cat "$FAKE_READ_DOWN_FILE")"
+    if [[ "$left" -gt 0 ]]; then echo $(( left - 1 )) > "$FAKE_READ_DOWN_FILE"; echo "{\"ok\":false,\"error\":{\"code\":\"${FAKE_READ_ERR}\"}}"; exit 1; fi
+    echo '{"ok":true,"result":{"terminal":{"tail":["x"]}}}' ;;
+  "status --json")
+    if [[ "${FAKE_APP_RUNNING:-0}" == 1 ]]; then echo '{"ok":true,"result":{"app":{"running":true,"pid":4242}}}'
+    else echo '{"ok":true,"result":{"app":{"running":false,"pid":null}}}'; fi ;;
+  *) echo "fake orca: $*" >&2; exit 9 ;;
+esac
+SH
+chmod +x "$OW/orca"
+cat > "$OW/run.sh" <<'SH'
+set -euo pipefail
+BACKEND=orca; BACKEND_NAME=Orca; ORCA_CLI=orca; CMUX_CLI=cmux; TMUX_CLI=tmux; TMUX_SESSION=""; OWNER_REPO=o/r; ROOT=/tmp; MAIN_WT=/tmp; BASE_BRANCH=main; BRANCH_PREFIX=issue-; AGENT=claude; SKILL_PREFIX=/
+AGENT_RESTART_CMD=claude; TERMINAL_RETRY=2; TERMINAL_RETRY_SEC=0; IDLE_POLL_SEC=0; WORKTREE_DIR=""; WORKTREE_SETUP_CMD=""
+TERMINAL_UNRESPONSIVE_SEC=600; TERMINAL_UNRESPONSIVE_LOG_SEC=60; REACH_STATE_DIR="$PWD/term"
+log() { printf '%s\n' "$*" >> "$PWD/log"; }; die() { echo "die: $*" >&2; exit 1; }
+source "$1"
+ow_case() {   # $1 실패할 terminal read 수, 나머지는 환경(VAR=값) → "종료 코드|멈춤 사유 구절"
+  local rc=0; rm -rf "$REACH_STATE_DIR"; mkdir -p "$REACH_STATE_DIR"; : > log; echo "$1" > "$PWD/rdown"; shift
+  ( export FAKE_READ_DOWN_FILE="$PWD/rdown" "$@"; orca_wait_idle t1 60000 ) || rc=$?
+  echo "$rc|$(terminal_lost_why t1)"
+}
+out="$(ow_case 0 FAKE_WAIT=)"; [[ "$out" == 1\|* ]] || die "#72: wait 이 빈 출력인데 터미널은 읽힌다: $out (기대 1)"
+grep -q '^warn terminal t1: unexpected wait response (empty output) — terminal is alive, keep waiting$' log || die "#72 안내 줄이 없다: $(cat log)"
+out="$(ow_case 100 'FAKE_WAIT={"ok":false,"error":{"code":"terminal_handle_stale"}}' FAKE_READ_ERR=terminal_handle_stale FAKE_APP_RUNNING=1)"
+[[ "$out" == "3|the terminal no longer exists" ]] || die "앱이 답했는데 터미널이 없다(terminal_handle_stale): $out"
+! grep -q 'its process is running' log || die "terminal_handle_stale 인데 응답 없음으로 기다렸다: $(cat log)"
+out="$(ow_case 100 'FAKE_WAIT={"ok":false,"error":{"code":"runtime_unavailable"}}' FAKE_READ_ERR=runtime_unavailable)"
+[[ "$out" == "3|the Orca app is not running" ]] || die "앱이 꺼졌다(runtime_unavailable, running false): $out"
+out="$(ow_case 5 'FAKE_WAIT={"ok":false,"error":{"code":"runtime_timeout"}}' FAKE_READ_ERR=runtime_timeout FAKE_APP_RUNNING=1)"
+[[ "$out" == 1\|* ]] || die "앱 프로세스가 있는데 TERMINAL_RETRY(2)보다 긴 다섯 번 못 읽은 뒤 회복한 대기: $out (기대 1)"
+grep -q '^warn terminal t1: cannot reach the Orca app, but its process is running' log && grep -q '^ok terminal t1: the Orca app is responding again' log \
+  || die "Orca 응답 없음 줄·회복 줄이 없다: $(cat log)"
+echo ok
+SH
+(cd "$OW" && PATH="$OW:$PATH" bash run.sh "$F/backend.sh" >/dev/null) || fail "orca_wait_idle 예상 밖 응답(#72·#61) 가짜 호출 실패"
+echo "ok  orca_wait_idle — 예상 밖 wait 응답(#72), 터미널 없음·앱 없음은 3, 앱이 멈췄으면 기다렸다 회복(#61)"
+
+# 터미널 대기 설정(#61): 상수였던 TERMINAL_RETRY·TERMINAL_RETRY_SEC와 새 TERMINAL_UNRESPONSIVE_SEC를 환경변수·loop.env(VAR="${VAR:-값}")로 바꾼다
+TC="$(grep -E '^TERMINAL_(RETRY|RETRY_SEC|UNRESPONSIVE_SEC)=' "$KIT/files/scripts/ticket-loop.sh")"
+[[ "$(wc -l <<<"$TC")" -eq 3 ]] || fail "TERMINAL_RETRY·TERMINAL_RETRY_SEC·TERMINAL_UNRESPONSIVE_SEC 줄을 찾지 못함: $TC"
+tconf() { env -u TERMINAL_RETRY -u TERMINAL_RETRY_SEC -u TERMINAL_UNRESPONSIVE_SEC "$@" bash -c 'set -euo pipefail; [[ ! -f "${LOOPENV:-}" ]] || source "$LOOPENV"; eval "$1"; echo "$TERMINAL_RETRY $TERMINAL_RETRY_SEC $TERMINAL_UNRESPONSIVE_SEC"' _ "$TC"; }
+[[ "$(tconf)" == "5 10 600" ]] || fail "터미널 대기 설정의 기본값이 다름: $(tconf) (기대 5 10 600)"
+[[ "$(tconf TERMINAL_RETRY=9 TERMINAL_RETRY_SEC=3 TERMINAL_UNRESPONSIVE_SEC=1200)" == "9 3 1200" ]] || fail "환경변수가 터미널 대기 설정을 덮지 않음: $(tconf TERMINAL_RETRY=9 TERMINAL_RETRY_SEC=3 TERMINAL_UNRESPONSIVE_SEC=1200)"
+printf '%s\n' 'TERMINAL_UNRESPONSIVE_SEC="${TERMINAL_UNRESPONSIVE_SEC:-900}"' 'TERMINAL_RETRY="${TERMINAL_RETRY:-8}"' > "$T/terminal-loop.env"
+[[ "$(tconf LOOPENV="$T/terminal-loop.env")" == "8 10 900" ]] || fail "loop.env 가 터미널 대기 설정을 덮지 않음: $(tconf LOOPENV="$T/terminal-loop.env")"
+[[ "$(tconf LOOPENV="$T/terminal-loop.env" TERMINAL_UNRESPONSIVE_SEC=300)" == "8 10 300" ]] || fail "실행할 때 준 환경변수가 loop.env 를 이기지 않음"
+for f in docs/loop.md docs/loop.ko.md; do grep -q 'TERMINAL_UNRESPONSIVE_SEC' "$KIT/$f" && grep -q 'TERMINAL_RETRY_SEC' "$KIT/$f" || fail "$f 에 터미널 대기 설정이 없음"; done
+for v in TERMINAL_UNRESPONSIVE_SEC TERMINAL_RETRY TERMINAL_RETRY_SEC; do
+  grep -q "^#   ${v} " "$KIT/files/scripts/ticket-loop.sh" || fail "루프 스크립트 머리의 환경변수 목록에 ${v} 가 없음"
+done
+echo "ok  터미널 대기 설정(TERMINAL_RETRY·TERMINAL_RETRY_SEC·TERMINAL_UNRESPONSIVE_SEC)을 환경변수·loop.env 로 바꿈(#61)"
+
 # tmux 백엔드: 가짜 tmux 로 함수를 부르고, 훅 스크립트가 Claude Code(stdin)·Codex(인자) 페이로드를 상태 파일로 옮기는지, 기동 명령에 훅이 붙는지 본다.
 # 실제 tmux 3.8 + Claude Code 로는 손으로 확인했다(초기 프롬프트 인자 → running, 응답 끝 → idle, send-keys 제출 → running→idle, /exit → exited)
 cat > "$F/tmux" <<'SH'
 #!/bin/bash
 case "$1" in
-  display) case "$*" in *window_name*) echo "issue-7" ;; *pane_id*) echo "%0" ;; *) echo "ticket-loop" ;; esac ;;
+  display) case "$*" in *window_name*) echo "issue-7" ;; *pane_id*) [[ -z "${FAKE_PANE_GONE:-}" ]] || exit 1; echo "%0" ;; *) echo "ticket-loop" ;; esac ;;
   send-keys) [[ "${@: -1}" != Enter || -z "${FAKE_STATE:-}" ]] || printf 'running\n' > "$FAKE_STATE" ;;
   capture-pane) printf 'Claude Code\n\n[Opus 5.5 | Max]\n\n\n' ;;
   has-session) exit 1 ;;
@@ -466,6 +530,7 @@ set -euo pipefail
 export HOME="$2"
 BACKEND=tmux; ORCA_CLI=orca; CMUX_CLI=cmux; TMUX_CLI=tmux; TMUX_SESSION=""; OWNER_REPO=o/r; ROOT=/tmp; MAIN_WT=/tmp; BASE_BRANCH=main; BRANCH_PREFIX=issue-; AGENT=claude; SKILL_PREFIX=/
 AGENT_RESTART_CMD="claude --dangerously-skip-permissions"; TERMINAL_RETRY=1; TERMINAL_RETRY_SEC=0; IDLE_POLL_SEC=0; SEND_ACCEPT_SEC=15; WORKTREE_DIR=""; WORKTREE_SETUP_CMD=""
+TERMINAL_UNRESPONSIVE_SEC=600; TERMINAL_UNRESPONSIVE_LOG_SEC=60; REACH_STATE_DIR="$PWD/term-$BACKEND"; mkdir -p "$REACH_STATE_DIR"
 log() { :; }; die() { echo "die: $*" >&2; exit 1; }
 source "$1"
 tmux_check
@@ -483,6 +548,8 @@ TMUX_STATE_FILE="$S/issue-7"; export FAKE_STATE="$TMUX_STATE_FILE"
 tmux_set_status @0 in-progress; tmux_set_status @0 todo "" "comment"; tmux_set_status @0 in-review 7 "PR #7"; tmux_set_status @0 completed 7 "done"
 tmux_wait_idle %0 1000 || die "idle 인데 wait_idle 이 0 이 아님"
 printf 'running\n' > "$TMUX_STATE_FILE"; rc=0; tmux_wait_idle %0 0 || rc=$?; [[ $rc -eq 1 ]] || die "running 인데 wait_idle 이 1(타임아웃)이 아님: $rc"
+rc=0; FAKE_PANE_GONE=1 tmux_wait_idle %0 0 || rc=$?; [[ $rc -eq 3 && "$(terminal_lost_why %0)" == "the terminal no longer exists" ]] || die "창이 사라졌는데 3·사유가 다름: $rc $(terminal_lost_why %0)"
+rc=0; FAKE_PANE_GONE=1 TERMINAL_RETRY=3 tmux_wait_idle %0 0 || rc=$?; [[ $rc -eq 3 ]] || die "TERMINAL_RETRY=3 이면 상한(0)에서 돌아오지 말고 세 번 다 해 본 뒤 3 이어야: $rc"
 tmux_send %0 "hello" || die "send"; [[ "$(cat "$TMUX_STATE_FILE")" == running ]] || die "send 뒤 running 이 아님"
 tmux_type %0 "claude x"; tmux_interrupt %0
 [[ "$(tmux_tail %0 | tail -n1)" == "[Opus 5.5 | Max]" ]] || die "tail"
@@ -507,11 +574,25 @@ echo "ok  tmux 백엔드 함수·훅 가짜 호출"
 # 화면도 못 읽음 → 3(닿지 못함). 2026-10-14 rental-portal #100 에서 빈 값 5번(25초)으로 일하던 워커를 두고 루프가 죽은 오판을 고정한다.
 # send 의 다섯 경우 — 붙여 넣은 뒤 lifecycle 이 직전 턴의 idle 에서 running 으로 → 0, 끝까지 idle 이고 화면도 그대로 → 비0, 끝까지 idle 이지만
 # 프롬프트가 화면에 찍힘 → 0, lifecycle 빈 값 → 0, paste 거부 → 비0. 2026-10-20 rental-portal #251 에서 붙여 넣은 직후의 묵은 idle 을
-# 수리 끝으로 읽어 5초 만에 멈춘 것을 고정한다
+# 수리 끝으로 읽어 5초 만에 멈춘 것을 고정한다.
+# 화면도 못 읽을 때 원인을 가른다(#61): 앱이 멈춰 소켓이 거절해도 소켓을 쥔 앱 프로세스(가짜 lsof)가 있으면 TERMINAL_UNRESPONSIVE_SEC(경과 시간)까지
+# 기다렸다 회복하고, 앱 프로세스·소켓 파일이 없거나 서피스가 not_found 면 TERMINAL_RETRY 대로 3. 응답 없음 시작 시각은 서브셸 호출을 넘어 이어진다
 cat > "$F/cmux" <<'SH'
 #!/bin/bash
+# FAKE_DOWN_FILE 에 적힌 횟수만큼 rpc·read-screen 이 앱에 닿지 못한다(FAKE_DOWN_ERR, 기본은 앱이 멈췄을 때의 Connection refused).
+# 그때마다 FAKE_CLOCK 을 FAKE_DOWN_TICK 초 앞당긴다 — 멈춘 앱에는 CLI 호출 하나가 15초씩 걸린다(#61)
+down() {
+  local left
+  [[ -n "${FAKE_DOWN_FILE:-}" ]] || return 1
+  left="$(cat "$FAKE_DOWN_FILE")"; [[ "$left" -gt 0 ]] || return 1
+  echo $(( left - 1 )) > "$FAKE_DOWN_FILE"
+  [[ -z "${FAKE_CLOCK:-}" ]] || echo $(( $(cat "$FAKE_CLOCK") + ${FAKE_DOWN_TICK:-0} )) > "$FAKE_CLOCK"
+  echo "${FAKE_DOWN_ERR:-Error: Failed to connect to socket at /tmp/fake-cmux.sock (Connection refused, errno 61)}" >&2
+}
 case "$1" in
+  socket-status) echo '{"socket_path":"/tmp/fake-cmux.sock","socket_path_state":"present"}' ;;
   rpc)
+    if down; then exit 1; fi
     lc="${FAKE_LC:-idle}"
     if [[ -n "${FAKE_LC_FILE:-}" ]]; then   # 부를 때마다 한 줄씩, 마지막 줄은 이어진다
       lc="$(head -n 1 "$FAKE_LC_FILE")"
@@ -519,6 +600,7 @@ case "$1" in
     fi
     [[ "$lc" == none ]] || echo "{\"lifecycle\":\"$lc\"}" ;;
   read-screen)
+    if down; then exit 1; fi
     if [[ "${FAKE_SCREEN:-ok}" != ok ]]; then echo "Error: not_found: Workspace not found" >&2; exit 1; fi
     if [[ -n "${FAKE_SCREEN_FILE:-}" ]]; then cat "$FAKE_SCREEN_FILE"; else echo "[Opus 5.5 | Max]"; fi ;;
   paste)   # FAKE_PASTE_SHOWS=1 이면 붙여 넣은 줄이 화면에 찍힌다
@@ -528,11 +610,28 @@ case "$1" in
 esac
 SH
 chmod +x "$F/cmux"
+# 가짜 lsof -t <경로>: FAKE_APP_PID 가 있으면 그 프로세스가 FAKE_SOCK(기본 socket-status 의 경로)을 쥐고 있다. FAKE_APP_LEFT_FILE 이 있으면
+# 거기 적힌 횟수만큼만 보이고 그 뒤로는 앱이 끝난 것이다
+cat > "$F/lsof" <<'SH'
+#!/bin/bash
+[[ "$1" == -t && -n "${FAKE_APP_PID:-}" && "$2" == "${FAKE_SOCK:-/tmp/fake-cmux.sock}" ]] || exit 1
+if [[ -n "${FAKE_APP_LEFT_FILE:-}" ]]; then
+  left="$(cat "$FAKE_APP_LEFT_FILE")"; [[ "$left" -gt 0 ]] || exit 1
+  echo $(( left - 1 )) > "$FAKE_APP_LEFT_FILE"
+fi
+echo "$FAKE_APP_PID"
+SH
+chmod +x "$F/lsof"
 cat > "$F/run-cmux.sh" <<'SH'
 set -euo pipefail
-BACKEND=cmux; ORCA_CLI=orca; CMUX_CLI=cmux; TMUX_CLI=tmux; TMUX_SESSION=""; OWNER_REPO=o/r; ROOT=/tmp; MAIN_WT=/tmp; BASE_BRANCH=main; BRANCH_PREFIX=issue-; AGENT=claude; SKILL_PREFIX=/
+BACKEND=cmux; BACKEND_NAME=cmux; ORCA_CLI=orca; CMUX_CLI=cmux; TMUX_CLI=tmux; TMUX_SESSION=""; OWNER_REPO=o/r; ROOT=/tmp; MAIN_WT=/tmp; BASE_BRANCH=main; BRANCH_PREFIX=issue-; AGENT=claude; SKILL_PREFIX=/
 AGENT_RESTART_CMD=claude; TERMINAL_RETRY=2; TERMINAL_RETRY_SEC=0; IDLE_POLL_SEC=0; SEND_ACCEPT_SEC=2; WORKTREE_DIR=""; WORKTREE_SETUP_CMD=""
-LOGGED=""; log() { LOGGED+="$*"$'\n'; }; die() { echo "die: $*" >&2; exit 1; }
+TERMINAL_UNRESPONSIVE_SEC=600; TERMINAL_UNRESPONSIVE_LOG_SEC=60; REACH_STATE_DIR="$PWD/term"; rm -rf "$REACH_STATE_DIR"; mkdir -p "$REACH_STATE_DIR"
+unset CMUX_SOCKET_PATH   # cmux 터미널 안에서 돌리면 잡혀 있다 — 소켓 경로는 가짜 socket-status 에서 받는다
+# 로그는 파일에도 남긴다 — 서브셸에서 부른 대기의 줄도 보이게
+LOGGED=""; : > "$PWD/log"; log() { LOGGED+="$*"$'\n'; printf '%s\n' "$*" >> "$PWD/log"; }; die() { echo "die: $*" >&2; exit 1; }
+# FAKE_CLOCK 이 있으면 date +%s 는 그 파일의 값이다(가짜 cmux 가 앞당긴다)
+date() { if [[ "${1:-}" == +%s && -n "${FAKE_CLOCK:-}" ]]; then cat "$FAKE_CLOCK"; else command date "$@"; fi; }
 source "$1"
 export FAKE_SCREEN_FILE="$PWD/screen" FAKE_LC_FILE="$PWD/lc"
 send_case() {   # $1 lifecycle 차례(줄마다 한 번), $2 FAKE_PASTE_SHOWS, $3 FAKE_PASTE_RC → "종료 코드|남은 lifecycle 첫 줄"
@@ -550,10 +649,63 @@ export FAKE_LC=idle FAKE_SCREEN=ok; cmux_wait_idle s1 1000 || die "idle 인데 w
 export FAKE_LC=none FAKE_SCREEN=ok; rc=0; cmux_wait_idle s1 0 || rc=$?; [[ $rc -eq 1 ]] || die "lifecycle 빈 값·화면 읽힘인데 1(계속 기다림)이 아님: $rc"
 [[ "$LOGGED" == *"keep waiting"* ]] || die "화면이 읽히는데 안내 로그가 없다"
 export FAKE_LC=none FAKE_SCREEN=gone; rc=0; cmux_wait_idle s1 60000 || rc=$?; [[ $rc -eq 3 ]] || die "lifecycle 빈 값·화면도 못 읽는데 3 이 아님: $rc"
+# #61: 앱이 멈춰 소켓이 거절해도 앱 프로세스가 소켓을 쥐고 있으면 기다린다 — TERMINAL_RETRY(2) 바퀴보다 긴 다섯 바퀴(rpc·read-screen 열 번)
+# 거절 뒤 회복하면 회복 뒤의 lifecycle(idle)대로 0. 응답 없음 줄과 회복 줄이 남는다
+export FAKE_LC=idle FAKE_SCREEN=ok FAKE_APP_PID=4242 FAKE_DOWN_FILE="$PWD/down"; echo 10 > "$FAKE_DOWN_FILE"; : > log
+rc=0; cmux_wait_idle s1 60000 || rc=$?; [[ $rc -eq 0 ]] || die "앱 프로세스가 있는데 소켓 거절 다섯 바퀴 뒤 회복한 대기가 0 이 아님: $rc"
+grep -q '^warn terminal s1: cannot reach the cmux app, but its process is running' log || die "응답 없음 줄이 없다: $(cat log)"
+grep -q '^ok terminal s1: the cmux app is responding again' log || die "회복 줄이 없다: $(cat log)"
+# 원인마다 — $1 앱에 닿지 못할 rpc·read-screen 호출 수, 나머지는 환경(VAR=값) → "종료 코드|멈춤 사유 구절(terminal_lost_why)". 로그는 log 파일
+reach_case() {
+  local rc=0; rm -rf "$REACH_STATE_DIR"/*; : > log; echo "$1" > "$PWD/down"; shift
+  ( unset FAKE_APP_PID FAKE_DOWN_ERR; export FAKE_LC=idle FAKE_SCREEN=ok FAKE_DOWN_FILE="$PWD/down" "$@"; cmux_wait_idle s1 60000 ) || rc=$?
+  echo "$rc|$(terminal_lost_why s1)"
+}
+out="$(reach_case 100)"; [[ "$out" == "3|the cmux app is not running" ]] || die "소켓을 쥔 프로세스가 없는데: $out (기대 3|the cmux app is not running)"
+! grep -q 'its process is running' log || die "앱 프로세스가 없는데 응답 없음으로 기다렸다: $(cat log)"
+[[ "$(cat down)" == 96 ]] || die "앱이 없을 때 TERMINAL_RETRY(2) 바퀴(rpc·read-screen 네 번)에 3 이 아님: 남은 거절 $(cat down) (기대 96)"
+# 응답 없음 중에 앱 프로세스가 사라지면(세 바퀴 뒤) 앱 없음으로 TERMINAL_RETRY 바퀴 뒤 3
+echo 3 > "$PWD/appleft"; out="$(reach_case 100 FAKE_APP_PID=4242 FAKE_APP_LEFT_FILE="$PWD/appleft")"
+[[ "$out" == "3|the cmux app is not running" ]] && grep -q 'its process is running' log && [[ "$(cat down)" == 90 ]] \
+  || die "응답 없음 중 앱이 사라진 경우: $out, 남은 거절 $(cat down) (기대 3|the cmux app is not running, 90): $(cat log)"
+out="$(reach_case 100 FAKE_APP_PID=4242 FAKE_SOCK=/tmp/gone.sock 'FAKE_DOWN_ERR=Error: Socket not found at /tmp/fake-cmux.sock')"
+[[ "$out" == "3|the cmux app is not running" ]] || die "소켓 파일이 없는데: $out (기대 3|the cmux app is not running)"
+out="$(reach_case 0 FAKE_LC=none FAKE_SCREEN=gone FAKE_APP_PID=4242)"; [[ "$out" == "3|the terminal no longer exists" ]] || die "앱이 응답하고 서피스만 없는데: $out (기대 3|the terminal no longer exists)"
+! grep -q 'its process is running' log || die "서피스가 없는데(not_found) 응답 없음으로 기다렸다: $(cat log)"
+# 소켓 경로: CMUX_SOCKET_PATH 가 있으면 그 값을 본다(socket-status 는 그 변수를 따르지 않는다)
+out="$(reach_case 6 FAKE_APP_PID=4242 FAKE_SOCK=/tmp/other.sock CMUX_SOCKET_PATH=/tmp/other.sock)"; [[ "$out" == 0\|* ]] || die "CMUX_SOCKET_PATH 의 소켓을 쥔 앱이 있는데: $out"
+# 응답 없음의 상한(TERMINAL_UNRESPONSIVE_SEC=100)은 경과 시간이다. 대기 함수는 20초마다 돌아오고(1) 호출마다 서브셸이라도 시작 시각이 이어져
+# 다섯 번째 호출에서 3 — 호출 하나가 15초씩 걸리는 가짜 시계로 1030 에 시작, 1150 에 120초. 60초마다 경과 줄
+rm -rf "$REACH_STATE_DIR"/*; : > log; echo 1000 > "$PWD/down"; echo 1000 > "$PWD/clock"; rcs=""
+for _ in 1 2 3 4 5 6; do
+  rc=0; ( export FAKE_LC=idle FAKE_SCREEN=ok FAKE_APP_PID=4242 FAKE_DOWN_FILE="$PWD/down" FAKE_CLOCK="$PWD/clock" FAKE_DOWN_TICK=15 TERMINAL_UNRESPONSIVE_SEC=100
+          cmux_wait_idle s1 20000 ) || rc=$?
+  rcs+="$rc "; [[ $rc -eq 1 ]] || break
+done
+[[ "$rcs" == "1 1 1 1 3 " ]] || die "응답 없음 상한까지 나눠 부른 대기의 종료 코드: $rcs (기대 1 1 1 1 3)"
+[[ "$(terminal_lost_why s1)" == "the cmux app has not responded for 120s, though its process is still running" ]] || die "응답 없음 상한의 사유: $(terminal_lost_why s1)"
+[[ "$(grep -c '^warn terminal s1: cannot reach the cmux app, but its process is running' log)" == 1 \
+   && "$(grep -c '^warn terminal s1: the cmux app has not responded for 60s (waiting up to 100s)$' log)" == 1 && "$(grep -c '^ok ' log)" == 0 ]] \
+  || die "응답 없음 줄(시작 한 번, 60초마다 경과)이 다르다: $(cat log)"
+# 대기 하나(PR·수리·수습 판정)를 시작할 때 reach_reset 으로 지우면 앞 대기의 응답 없음을 이어 세지 않는다 — 위 120초 뒤라도 상한 안(1)이고 새로 알린다
+reach_reset s1; : > log; rc=0
+( export FAKE_LC=idle FAKE_SCREEN=ok FAKE_APP_PID=4242 FAKE_DOWN_FILE="$PWD/down" FAKE_CLOCK="$PWD/clock" FAKE_DOWN_TICK=15 TERMINAL_UNRESPONSIVE_SEC=100
+  cmux_wait_idle s1 20000 ) || rc=$?
+[[ $rc -eq 1 && "$(terminal_lost_why s1)" == "the terminal could not be read" ]] && grep -q 'cannot reach the cmux app, but its process is running' log \
+  || die "reach_reset 뒤에도 앞 응답 없음을 이어 셈: $rc $(terminal_lost_why s1) $(cat log)"
+# TERMINAL_RETRY 를 늘려도(4) 앱이 없으면 3 에 닿는다 — 연달아 실패하는 동안은 호출의 상한(20초, 한 바퀴 30초)에서 돌아오지 않는다.
+# 돌아오면 횟수가 0 부터라 다시는 3 에 닿지 못한다
+rm -rf "$REACH_STATE_DIR"/*; echo 1000 > "$PWD/down"; echo 1000 > "$PWD/clock"; rcs=""
+for _ in 1 2 3 4 5 6; do
+  rc=0; ( unset FAKE_APP_PID; export FAKE_LC=idle FAKE_SCREEN=ok FAKE_DOWN_FILE="$PWD/down" FAKE_CLOCK="$PWD/clock" FAKE_DOWN_TICK=15 TERMINAL_RETRY=4
+          cmux_wait_idle s1 20000 ) || rc=$?
+  rcs+="$rc "; [[ $rc -eq 1 ]] || break
+done
+[[ "$rcs" == "3 " && "$(terminal_lost_why s1)" == "the cmux app is not running" ]] || die "TERMINAL_RETRY=4 에서 앱이 없는데 3 에 닿지 않음: $rcs $(terminal_lost_why s1)"
 echo ok
 SH
 (cd "$F" && PATH="$F:$PATH" bash run-cmux.sh "$F/backend.sh" >/dev/null) || fail "cmux 백엔드 wait_idle·send 가짜 호출 실패"
-echo "ok  cmux 백엔드 wait_idle 세 경우, send 다섯 경우"
+echo "ok  cmux 백엔드 wait_idle 세 경우, send 다섯 경우, 화면도 못 읽을 때의 원인(앱 응답 없음은 기다림 — #61)"
 
 # 에이전트 프리셋: AGENT 가 기동 명령·배너·모델 정규식·스킬 접두사의 기본값을 정하고, 준 값이 이긴다. 프롬프트에는 특정 에이전트의 이름·도구가 없다
 A="$T/agent"; mkdir -p "$A"
@@ -1994,6 +2146,7 @@ for f in wait_for_pr idle_fp_add bg_wait pr_settle repair session_active_recentl
 done
 sed -n '/^idle_fp_count() /p; /^ci_run_sec() {/,/^}/p; /^claude_project_dir() /p' "$KIT/files/scripts/ticket-loop.sh" >> "$W/fn.sh"
 grep -q '^idle_fp_count() ' "$W/fn.sh" && grep -q '^ci_run_sec() ' "$W/fn.sh" && grep -q '^claude_project_dir() ' "$W/fn.sh" || fail "idle_fp_count·ci_run_sec·claude_project_dir 를 찾지 못함"
+echo 'reach_reset() { :; }   # 백엔드 절의 것 — 이 검사들은 응답 없음 상태를 쓰지 않는다(터미널 끊김 사유 검사는 백엔드 절을 덧씌운다)' >> "$W/fn.sh"
 sed -n '/^# ----- 화면 분류 -----/,/^# ----- 화면 분류 끝 -----/p' "$KIT/files/scripts/ticket-loop.sh" >> "$W/fn.sh"   # 세 대기가 부르는 screen_check(#10)
 grep -q '^screen_kind() {' "$W/fn.sh" && grep -q '^screen_check() {' "$W/fn.sh" && grep -q '^screen_stop_check() {' "$W/fn.sh" || fail "화면 분류 블록을 찾지 못함"
 # $1 open_pr_for 가 PR 을 돌려줄 호출 번호들, $2 PR 생성 시각(지금 기준 초, 빈 값이면 못 읽음), $3 terminal_idle 이 "일하는 중"(1)을 돌려줄
@@ -2418,6 +2571,36 @@ for f in docs/loop.md docs/loop.ko.md; do grep -q 'USAGE_LIMIT_REGEX' "$KIT/$f" 
 grep -q '`usage_limit`' "$KIT/files/.agents/skills/loop-triage/SKILL.md" || fail "loop-triage 스킬 종류 표에 usage_limit 가 없음"
 ! grep -q 'USAGE_LIMIT_REGEX\|PERMISSION_PROMPT_REGEX' "$KIT/files/.agents/skills/setup-ticket-loop/SKILL.md" || fail "setup-ticket-loop 결정 표에 화면 분류 정규식을 넣지 않기로 했다"
 echo "ok  strike 전 화면 분류(#10 — 사용량 한도는 수습 없이 usage_limit, 확인 창 PROMPT_STALL_SEC 체류는 idle 없이도 worker_no_pr, 빈 정규식은 전처럼)"
+
+# 터미널에 닿지 못해 멈출 때(#61): 사유가 원인(앱이 N초 응답하지 않음·앱 없음·터미널 없음)을 가르고, 워커가 루프 밖에서 PR 을 열 수 있으니 다시
+# 돌리기 전에 보라는 안내를 싣는다. 앱이 살아 있는데 "app closed?"라고 추측하지 않는다. 수리 대기(repair)는 진짜로 돌려 die 문장을 고정한다 —
+# 백엔드 대기 대역이 원인을 남기고 3 을 돌려준다. PR 대기·수습 판정 대기는 같은 구절을 쓰는지 배선으로 본다
+lost_case() {   # $1 원인(unresponsive | app | terminal), $2 응답 없음이 이어진 초 → die 줄
+  (cd "$W" && KIND="$1" SECS="${2:-}" BK="$F/backend.sh" bash -c '
+    set -euo pipefail
+    source fn.sh; BACKEND=cmux; source "$BK"
+    REACH_STATE_DIR="$(mktemp -d)"; CUR_N=7; PROGRESS_SEC=0
+    log() { :; }; idle_wait_ms() { echo 1; }; send_prompt() { :; }; pr_head_sha() { echo aaa1111; }; die() { echo "die $*"; exit 9; }
+    terminal_idle() { reach_lost h "$KIND" "$SECS"; return 3; }
+    repair h "고쳐라" $(( $(date +%s) + 60 )) 77') || true
+}
+LOST_NOTE="The worker may keep running outside the loop and open or update a PR — check for one before you rerun (the loop does not take over an open PR)."
+out="$(lost_case unresponsive 612)"; [[ "$out" == "die #7: cannot reach cmux terminal h while repairing PR #77: the cmux app has not responded for 612s, though its process is still running. $LOST_NOTE" ]] \
+  || fail "수리 대기: 앱이 응답하지 않아 멈춘 사유: $out"
+out="$(lost_case app)"; [[ "$out" == "die #7: cannot reach cmux terminal h while repairing PR #77: the cmux app is not running. $LOST_NOTE" ]] || fail "수리 대기: 앱이 없어 멈춘 사유: $out"
+out="$(lost_case terminal)"; [[ "$out" == "die #7: cannot reach cmux terminal h while repairing PR #77: the terminal no longer exists. $LOST_NOTE" ]] || fail "수리 대기: 터미널이 없어 멈춘 사유: $out"
+RT="$(sed -n '/^run_ticket() {/,/^}/p' "$KIT/files/scripts/ticket-loop.sh")"
+grep -qF '[[ $rc -ne 3 ]] || die "#${n}: cannot reach ${BACKEND_NAME} terminal ${handle}: $(terminal_lost_why "${handle}"). The worktree is still on disk. $(terminal_lost_note worker)"' <<<"$RT" \
+  || fail "PR 대기(run_ticket)의 터미널 끊김 사유가 원인·안내를 싣지 않음"
+grep -qF '3) why="lost the session terminal: $(terminal_lost_why "$t_handle"). $(terminal_lost_note "triage session")"' "$KIT/files/scripts/ticket-loop.sh" \
+  || fail "수습 판정 대기(triage)의 터미널 끊김 사유가 원인·안내를 싣지 않음"
+! grep -qF 'app closed?)' "$KIT/files/scripts/ticket-loop.sh" || fail "멈춤 사유에 아직 '(… app closed?)' 추측이 있다"
+for f in wait_for_pr repair wait_for_verdict; do
+  sed -n "/^${f}() {/,/^}/p" "$KIT/files/scripts/ticket-loop.sh" | sed -n '2,4p' | grep -qF 'reach_reset "$handle"' || fail "${f} 가 시작할 때 앞 대기의 응답 없음 시각을 지우지 않음(reach_reset)"
+done
+grep -q '^  REACH_STATE_DIR="$(mktemp -d ' "$KIT/files/scripts/ticket-loop.sh" && grep -qF '[[ -z "${REACH_STATE_DIR:-}" ]] || rm -rf "$REACH_STATE_DIR"' <(sed -n '/^on_exit() {/,/^}/p' "$KIT/files/scripts/ticket-loop.sh") \
+  || fail "REACH_STATE_DIR 를 잠금을 잡을 때 만들고 on_exit 에서 지우지 않음"
+echo "ok  터미널 끊김 사유(#61 — 원인 셋, 열린 PR 안내, 대기마다 응답 없음 시각을 새로)"
 
 # CI 수리(repair_ci): 수리 뒤 head 가 바뀌면 0(충돌·CI 확인부터 다시), 그대로면 CI 를 한 번 더 보고 통과면 0, 실패면 1(호출부가 멈춘다).
 # 2026-10-21 rental-portal #258: 러너 설치 경합으로 실패한 job 을 워커가 `gh run rerun --failed` 로만 다시 돌려 1분 뒤 통과했는데,
