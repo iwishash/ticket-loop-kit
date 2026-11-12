@@ -2,7 +2,7 @@
 
 ## 0.9.28 — 2026-11-12
 
-결함 하나를 고쳤다. CI 체크가 끝내 등록되지 않은 PR(실패한 job이 없다)에 루프가 '실패' 수리 프롬프트를 보냈다.
+결함 하나를 PR #60으로 고쳤다. CI 체크가 끝내 등록되지 않은 PR(실패한 job이 없다)에 루프가 '실패' 수리 프롬프트를 보냈다.
 
 - **체크가 등록되지 않으면 진단 프롬프트를 보낸다.** 실측(키트 0.9.27, rental-portal #833, 2026-11-11): GitHub Actions major outage 중 PR 실행이 job 0개로 `queued`에 굳었다. `wait_checks_appear`가 `CI_APPEAR_TIMEOUT_SEC`(900초) 뒤 실패로 돌아가자, 루프는 "CI가 실패했다 … `gh run view --log-failed` … `gh run rerun --failed`" 프롬프트를 보냈는데 볼 로그도 다시 돌릴 job도 없었다. 워커는 22분 걸려 길을 찾았다.
   - 굳은 실행은 장애가 풀린 뒤에도 `gh run cancel`("already completed")과 `gh run rerun`("already running")이 모두 거절됐다.
