@@ -2183,7 +2183,23 @@ ci2_case() {  # $1 --watch 가 차례로 낼 종료 코드(공백, 마지막 값
 [[ "$(ci2_case 1 "")" == "1|3|3|0" ]] || fail "ci_passed: 체크 목록이 끝내 비어 있으면 GH_TRIES 번 뒤 실패여야: $(ci2_case 1 "")"
 [[ "$(ci2_case 1 "" "1 0" 0)" == "1|1|2|0" ]] || fail "ci_passed: 빈 체크 목록 뒤 체크가 다시 나타나지 않으면 실패여야: $(ci2_case 1 "" "1 0" 0)"
 [[ "$(ci2_case 1 "" "0" 0)" == "1|0|1|0" ]] || fail "ci_passed: 체크가 처음부터 없으면 실패여야: $(ci2_case 1 "" "0" 0)"
-echo "ok  CI 대기(--watch 가 1 이면 체크 상태를 다시 읽어 실패가 있을 때만 실패, 빈 목록은 재등록 대기 뒤 다시 봄, stderr 는 로그에 섞이지 않음)"
+# 체크가 끝내 등록되지 않은 실패만 CI_NO_CHECKS=1 이다 — repair_ci 가 '실패' 대신 진단 프롬프트(job 수·githubstatus·빈 커밋)를 고른다
+# (2026-11-11 rental-portal #833: Actions 장애로 job 0개인 실행이 queued 에 굳었다). 실패·취소한 체크로 끝난 실패와 통과는 0 이다
+ci_no_checks_case() {  # ci2_case 와 같은 인자 → "종료 코드|CI_NO_CHECKS"
+  echo 0 > "$GW/w"; echo 0 > "$GW/n"
+  (cd "$GW" && PATH="$GW/bin:$PATH" GW="$GW" WATCH="$1" BUCKETS="$2" NAMES="${3:-1}" APPEAR="${4:-5}" bash -c '
+    set -euo pipefail
+    log() { :; }
+    GH_TRIES=3; CI_APPEAR_TIMEOUT_SEC="$APPEAR"; BG_PID=""; CI_NO_CHECKS=1
+    source ci.sh
+    rc=0; ci_passed 7 2> /dev/null || rc=$?
+    echo "$rc|$CI_NO_CHECKS"')
+}
+[[ "$(ci_no_checks_case 1 "" "0" 0)" == "1|1" ]] || fail "ci_passed: 체크가 처음부터 없는 실패는 CI_NO_CHECKS=1 이어야: $(ci_no_checks_case 1 "" "0" 0)"
+[[ "$(ci_no_checks_case 1 "" "1 0" 0)" == "1|1" ]] || fail "ci_passed: 빈 목록 뒤 다시 나타나지 않은 실패는 CI_NO_CHECKS=1 이어야: $(ci_no_checks_case 1 "" "1 0" 0)"
+[[ "$(ci_no_checks_case 1 "fail pass")" == "1|0" && "$(ci_no_checks_case 0 "")" == "0|0" ]] || fail "ci_passed: 실패한 체크·통과는 CI_NO_CHECKS=0 이어야(앞 값을 지움): $(ci_no_checks_case 1 "fail pass") $(ci_no_checks_case 0 "")"
+grep -q 'if \[\[ "${CI_NO_CHECKS:-0}" -eq 1 \]\]; then' <(sed -n '/^repair_ci() {/,/^}/p' "$SCRIPT") || fail "repair_ci 가 CI_NO_CHECKS 로 프롬프트를 고르지 않음"
+echo "ok  CI 대기(--watch 가 1 이면 체크 상태를 다시 읽어 실패가 있을 때만 실패, 빈 목록은 재등록 대기 뒤 다시 봄, stderr 는 로그에 섞이지 않음, 체크 미등록은 CI_NO_CHECKS)"
 
 # 수리 끝 알아채기: idle 이 끝내 안 잡혀도(cmux lifecycle 공백) 새 커밋이 push 돼 REPAIR_SETTLE_SEC 동안 그대로이고 워크트리가 깨끗하면 끝.
 # 커밋이 없거나 워크트리가 더러우면 제한 시간까지 기다린다(1). idle 이 잡히면 새 커밋이 있을 때 바로 끝(0), 새 커밋이 아직 없으면 화면이
@@ -2214,7 +2230,8 @@ repair_case() {  # $1 수리 뒤 head(공백으로 가른 차례, 마지막 값�
 [[ "$(repair_case "aaa1111 bbb2222" "" 0)" == "0|1" ]] || fail "repair: 묵은 idle 뒤 들어온 커밋으로 끝내지 않음(#251): $(repair_case "aaa1111 bbb2222" "" 0)"
 [[ "$(repair_case aaa1111 "" 0 "s1 s2")" == "0|4" ]] || fail "repair: 화면이 바뀌면 idle 을 처음부터 세야: $(repair_case aaa1111 "" 0 "s1 s2")"
 grep -q 'repair "${handle}" "PR #${pr} 이 ${BASE_BRANCH}과 충돌한다.* "$deadline" "${pr}"' "$KIT/files/scripts/ticket-loop.sh" \
-  && grep -q 'repair "${handle}" "PR #${pr} 의 CI가 실패했다.* "$deadline" "${pr}"' "$KIT/files/scripts/ticket-loop.sh" || fail "수리 두 곳이 PR 번호를 넘기지 않음"
+  && grep -q 'repair "${handle}" "$prompt" "$deadline" "${pr}"' "$KIT/files/scripts/ticket-loop.sh" \
+  && grep -q 'prompt="PR #${pr} 의 CI가 실패했다' "$KIT/files/scripts/ticket-loop.sh" || fail "수리 두 곳이 PR 번호를 넘기지 않음"
 echo "ok  수리 끝 알아채기(idle 없이 새 커밋, 새 커밋 없는 idle 은 연달아 볼 때만)"
 
 # #11: 백엔드가 idle 을 돌려줘도 Claude Code 세션 기록(CLAUDE_CONFIG_DIR/projects/<WT_PATH 변환>/ 아래 *.jsonl, subagents/ 포함)이
@@ -2430,7 +2447,7 @@ grep -q 'if ! repair_ci "${n}" "${pr}" "${handle}" "$deadline"; then' "$KIT/file
   && grep -qF 'reason="#${n}: no new commit was pushed after the repair, and CI still fails"' "$KIT/files/scripts/ticket-loop.sh" \
   || fail "CI 수리 호출부가 repair_ci 의 1 에서만 멈추지 않음"
 ! grep -q 'before="$(pr_head_sha "${pr}")"' <(sed -n '/^run_ticket() {/,/^}/p' "$KIT/files/scripts/ticket-loop.sh") || fail "run_ticket 이 아직 head 비교만으로 수리 결과를 가른다"
-grep -q 'repair "${handle}" "PR #${pr} 의 CI가 실패했다.*코드와 무관하면 코드를 바꾸지 말고 \\`gh run rerun <run-id> --failed\\` 로 실패한 job만 다시 돌려라(push할 커밋이 없어도 된다)' "$KIT/files/scripts/ticket-loop.sh" \
+grep -q 'prompt="PR #${pr} 의 CI가 실패했다.*코드와 무관하면 코드를 바꾸지 말고 \\`gh run rerun <run-id> --failed\\` 로 실패한 job만 다시 돌려라(push할 커밋이 없어도 된다)' "$KIT/files/scripts/ticket-loop.sh" \
   || fail "CI 수리 프롬프트에 러너·네트워크 오류면 재실행만 하라는 안내가 없음"
 echo "ok  CI 수리 뒤 새 커밋이 없으면 CI 를 다시 봄(재실행만 한 수리는 통과면 계속, 실패면 멈춤)"
 

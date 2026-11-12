@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.9.28 — 2026-11-12
+
+결함 하나를 고쳤다. CI 체크가 끝내 등록되지 않은 PR(실패한 job이 없다)에 루프가 '실패' 수리 프롬프트를 보냈다.
+
+- **체크가 등록되지 않으면 진단 프롬프트를 보낸다.** 실측(키트 0.9.27, rental-portal #833, 2026-11-11): GitHub Actions major outage 중 PR 실행이 job 0개로 `queued`에 굳었다. `wait_checks_appear`가 `CI_APPEAR_TIMEOUT_SEC`(900초) 뒤 실패로 돌아가자, 루프는 "CI가 실패했다 … `gh run view --log-failed` … `gh run rerun --failed`" 프롬프트를 보냈는데 볼 로그도 다시 돌릴 job도 없었다. 워커는 22분 걸려 길을 찾았다.
+  - 굳은 실행은 장애가 풀린 뒤에도 `gh run cancel`("already completed")과 `gh run rerun`("already running")이 모두 거절됐다.
+  - 같은 커밋의 `workflow_dispatch` 실행은 통과했지만 그 체크는 `gh pr checks`에 잡히지 않았다.
+  - 빈 커밋 push가 새 `pull_request` 실행을 만들어 통과했다.
+  - `ci_passed`가 이 경우를 `CI_NO_CHECKS=1`로 표시한다. `repair_ci`는 그때 job 수 확인(`gh api …/runs/<id>/jobs`), githubstatus 확인, 회복 뒤 빈 커밋 push, 러너가 받지 못한 경우의 PR 코멘트를 안내하는 프롬프트를 보낸다. 로그 줄도 `no CI checks were registered → asking the worker to diagnose`로 나눈다. 수리 횟수(`REPAIR_ROUNDS`)와 그 뒤 흐름은 그대로다.
+  - 스모크: 체크가 처음부터 없거나 빈 목록 뒤 다시 나타나지 않은 실패는 `CI_NO_CHECKS=1`, 실패한 체크로 끝난 실패와 통과는 0(앞 값을 지운다). `repair_ci`가 그 값으로 프롬프트를 고르는지, 두 프롬프트가 PR 번호를 넘기는지 본다.
+  - 문서: 부록 D, PDF.
+- 이미 설치된 저장소: 키트를 올리면 바로 바뀐다. 실제 장애로 돌려 보지는 않았다(스모크와 `bash -n`만).
+
 ## 0.9.27 — 2026-11-09
 
 문서만 바뀌었다(PR #59). pms-postgres 스펙 #317 기획 세션의 회고(rsrehab/pms-postgres#356)에서 고친 두 안내를 키트로 올렸다. 스크립트는 그대로다.
