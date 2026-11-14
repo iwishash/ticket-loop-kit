@@ -125,7 +125,8 @@ set -euo pipefail
 #                       (기본 300초). 목록이 같으면 아무리 지나도 찍지 않는다 — 같은 내용을 되풀이하지 않는다
 #   TERMINAL_UNRESPONSIVE_SEC  워커 터미널을 읽지 못하는데 백엔드 앱(cmux·Orca)의 프로세스는 살아 있을 때(앱이 멈춤) 응답을 기다리는 상한
 #                       (기본 600초, 경과 시간). 기다리는 동안 1분마다 한 줄, 응답이 돌아오면 한 줄을 찍고 이어 간다. 넘기면 터미널 끊김으로
-#                       멈춘다(#61). 터미널이나 앱 프로세스가 없으면 기다리지 않고 아래 두 설정대로 다시 읽어 본 뒤 멈춘다
+#                       멈춘다(#61). 터미널이나 앱 프로세스가 없으면 기다리지 않고 아래 두 설정대로 다시 읽어 본 뒤 멈춘다.
+#                       cmux 워크스페이스를 만드는 중에 앱이 멈춰도 같은 상한으로 기다린다(#63)
 #   TERMINAL_RETRY      터미널 화면을 읽지 못할 때(터미널·앱이 없음) 연달아 다시 읽어 보는 횟수 (기본 5). 다 실패하면 터미널 끊김으로 멈춘다
 #   TERMINAL_RETRY_SEC  그 사이 쉬는 간격 (기본 10초)
 #   RECORDS_FILE        티켓별 기록 JSONL (기본 .ticket-loop/tickets.jsonl, 기계별 — 커밋하지 않는다). 상대 경로는 저장소 루트 기준
@@ -161,7 +162,9 @@ set -euo pipefail
 # 멈추는 조건(루프 종료, 워크트리는 조사용으로 남긴다):
 #   - 워커가 PR 없이 멈춤(질문·실패, 확인 창에 PROMPT_STALL_SEC 머묾) / 워커가 사용량 한도에 걸림(usage_limit — 수습 없음) / 티켓 타임아웃 /
 #     백엔드 터미널 끊김(터미널·앱이 없음, 앱이 TERMINAL_UNRESPONSIVE_SEC 넘게 응답하지 않음 — 사유가 셋을 가르고, 워커가 루프 밖에서 PR을 열 수
-#     있으니 다시 돌리기 전에 보라고 적는다) / 에이전트 기동 실패
+#     있으니 다시 돌리기 전에 보라고 적는다) / 에이전트 기동 실패 / cmux 워크스페이스를 만들지 못함(앱이 없음, 앱이 TERMINAL_UNRESPONSIVE_SEC
+#     넘게 응답하지 않음 — 사유에 CLI 문구를 싣고, 앱이 뒤늦게 워크스페이스를 만들어 워커가 루프 밖에서 돌 수 있다고 적는다. 앱이 답한 뒤
+#     목록에 새 워크스페이스가 있으면 이어받고, 없으면 한 번만 다시 만든다)
 #   - 수리 REPAIR_ROUNDS회 뒤에도 CI 실패 또는 충돌, 수리 뒤 새 커밋이 없고 CI도 그대로 실패(재실행만 한 수리가 통과하면 이어 간다)
 #   - 병합 뒤 POST_MERGE_CMD 실패(POST_MERGE_RETRY_CMD가 있으면 재실행까지 실패), 또는 POST_MERGE_PORT가 10분 안에 비지 않음.
 #     여러 병합을 묶어 검증했으면(POST_MERGE_EVERY) 사유에 묶음과 이분 탐색으로 찾은 처음 실패하는 병합을 적는다
@@ -971,14 +974,14 @@ agent_launch_cmd() { printf '%s "$(cat %q)"' "$AGENT_RESTART_CMD" "$1"; }   # �
 reach_file() { printf '%s/%s' "$REACH_STATE_DIR" "${1//[^A-Za-z0-9_.-]/_}"; }
 # 대기 하나(PR·수리·수습 판정)를 시작할 때 — 앞 대기가 응답 없음 중에 끝났으면(그사이 PR이 열림) 그 시작 시각을 이어 쓰지 않는다
 reach_reset() { rm -f "$(reach_file "$1")" "$(reach_file "$1").lost"; }
-# 앱이 응답했다 — 응답 없음이 이어지던 중이었으면 회복 줄을 한 번 찍는다
+# 앱이 응답했다 — 응답 없음이 이어지던 중이었으면 회복 줄을 한 번 찍는다. 아래 둘의 $2는 로그 줄의 주어(기본 "terminal $1")
 reach_ok() {
   local f since=""
   f="$(reach_file "$1")"
   [[ -s "$f" ]] || return 0
   read -r since _ < "$f" || true
   rm -f "$f"
-  log ok "terminal $1: the ${BACKEND_NAME} app is responding again after $(( $(date +%s) - ${since:-0} ))s"
+  log ok "${2:-terminal $1}: the ${BACKEND_NAME} app is responding again after $(( $(date +%s) - ${since:-0} ))s"
 }
 # 앱에 닿지 못했지만 프로세스는 있다 — 상한 안이면 0, 넘었으면 원인을 남기고 1. 시작할 때 한 줄, 이어지는 동안 TERMINAL_UNRESPONSIVE_LOG_SEC마다 한 줄
 reach_unresponsive() {
@@ -988,12 +991,12 @@ reach_unresponsive() {
     read -r since logged_at < "$f" || true
   else
     since="$now"; logged_at="$now"; printf '%s %s\n' "$since" "$logged_at" > "$f"
-    log warn "terminal $1: cannot reach the ${BACKEND_NAME} app, but its process is running — waiting up to ${TERMINAL_UNRESPONSIVE_SEC}s for it to respond"
+    log warn "${2:-terminal $1}: cannot reach the ${BACKEND_NAME} app, but its process is running — waiting up to ${TERMINAL_UNRESPONSIVE_SEC}s for it to respond"
   fi
   if [[ $(( now - since )) -ge $TERMINAL_UNRESPONSIVE_SEC ]]; then reach_lost "$1" unresponsive $(( now - since )); return 1; fi
   if [[ $(( now - logged_at )) -ge $TERMINAL_UNRESPONSIVE_LOG_SEC ]]; then
     printf '%s %s\n' "$since" "$now" > "$f"
-    log warn "terminal $1: the ${BACKEND_NAME} app has not responded for $(( now - since ))s (waiting up to ${TERMINAL_UNRESPONSIVE_SEC}s)"
+    log warn "${2:-terminal $1}: the ${BACKEND_NAME} app has not responded for $(( now - since ))s (waiting up to ${TERMINAL_UNRESPONSIVE_SEC}s)"
   fi
   return 0
 }
@@ -1197,15 +1200,60 @@ cmux_check() {
   claude_trust_check
 }
 
+# workspace create가 실패해도 워크스페이스가 생길 수 있다(#63). 앱이 멈추면 CLI는 응답 상한(15초) 뒤 "Command timed out"·exit 1로 끝나지만
+# 요청은 이미 앱에 닿아 있어 앱이 풀리면 처리된다. 2026-11-15 실측(키트 0.9.29, cmux 0.65.2, pdmate #16): 루프는 "cmux workspace create
+# failed"로 멈췄고 2초 뒤 그 워크스페이스에서 워커가 떠 혼자 PR까지 열었다. 그래서 실패하면 CLI 문구를 남기고, 앱 프로세스가 있는 동안
+# 응답을 기다린 뒤(대기 함수와 같은 상한·리듬) 만들기 전 목록에 없던 같은 이름·같은 경로의 워크스페이스를 찾아 이어받는다. 없으면 요청이
+# 앱에 닿지 않은 것이라 한 번만 다시 만든다 — 확인 없이 다시 만들면 같은 워크트리에 워커 둘이 뜬다. 앱이 없거나 상한을 넘으면 멈추되,
+# 워크스페이스가 생겨 워커가 루프 밖에서 돌 수 있다고 적는다. 무인 수습 세션도 이 함수로 띄운다(triage_spawn)
 cmux_worktree_create() {
-  local n="$1" prompt="$2" name="${3:-${BRANCH_PREFIX}${1}}" out pf
+  local n="$1" prompt="$2" name="${3:-${BRANCH_PREFIX}${1}}" out pf errf err="" key subject who=worker try before
   loop_worktree_add "$n" "$name"
-  pf="$(prompt_file "$n" "$prompt")"
-  out="$(cmux_j workspace create --name "$name" --cwd "$WT_PATH" --focus false --id-format uuids \
-           --command "$(agent_launch_cmd "$pf")" 2>/dev/null)" || die "cmux workspace create failed"
-  WT="$(jq -r '.workspace_id // empty' <<<"$out" 2>/dev/null || true)"
-  HANDLE="$(jq -r '.surface_id // empty' <<<"$out" 2>/dev/null || true)"
-  [[ -n "$WT" && -n "$HANDLE" ]] || die "workspace_id/surface_id missing from cmux workspace create response: ${out}"
+  pf="$(prompt_file "$n" "$prompt")"; errf="${pf}.err"
+  key="workspace-${name}"; subject="workspace ${name}"; reach_reset "$key"
+  [[ "$name" == "${BRANCH_PREFIX}${n}" ]] || who="triage session"
+  # 만들기 전의 워크스페이스 — 조사용으로 남겨 둔 같은 이름의 옛 워크스페이스를 새것으로 잡지 않게
+  cmux_ws_list "$key" "$subject" || die "#${n}: cannot list cmux workspaces before creating ${name}: $(terminal_lost_why "$key")"
+  before="$(jq -c '[.workspaces[]?.id]' <<<"$CMUX_WS_LIST" 2>/dev/null)" || before='[]'
+  for try in 1 2; do
+    if out="$(cmux_j workspace create --name "$name" --cwd "$WT_PATH" --focus false --id-format uuids \
+                --command "$(agent_launch_cmd "$pf")" 2>"$errf")"; then
+      rm -f "$errf"
+      WT="$(jq -r '.workspace_id // empty' <<<"$out" 2>/dev/null || true)"
+      HANDLE="$(jq -r '.surface_id // empty' <<<"$out" 2>/dev/null || true)"
+      [[ -n "$WT" && -n "$HANDLE" ]] || die "workspace_id/surface_id missing from cmux workspace create response: ${out}"
+      return 0
+    fi
+    err="$(tr -s '\n' ' ' < "$errf" | sed 's/ *$//')"; rm -f "$errf"
+    log warn "#${n}: cmux workspace create failed (${err:-no message}) — checking whether the cmux app created ${name} anyway"
+    cmux_ws_list "$key" "$subject" \
+      || die "#${n}: cmux workspace create failed (${err:-no message}) and $(terminal_lost_why "$key"). The cmux app may still create the ${name} workspace — the worktree is still on disk. $(terminal_lost_note "$who")"
+    WT="$(jq -r --argjson before "$before" --arg name "$name" --arg p "$WT_PATH" '
+      [.workspaces[]? | . as $w | select((any($before[]; . == $w.id) | not) and .custom_title == $name and .current_directory == $p) | .id]
+      | first // empty' <<<"$CMUX_WS_LIST" 2>/dev/null || true)"
+    if [[ -n "$WT" ]]; then
+      HANDLE="$(cmux_j list-pane-surfaces --workspace "$WT" --id-format uuids 2>/dev/null | jq -r '.surfaces[0].id // empty' 2>/dev/null || true)"
+      [[ -n "$HANDLE" ]] \
+        || die "#${n}: the cmux app created workspace ${WT} (${name}) after the request failed, but listed no terminal in it. $(terminal_lost_note "$who")"
+      log warn "#${n}: the cmux app created workspace ${WT} (${name}) after all — taking it over"
+      return 0
+    fi
+    [[ $try -eq 2 ]] || log warn "#${n}: no new ${name} workspace in cmux — the request did not reach the app; creating it once more"
+  done
+  die "#${n}: cmux workspace create failed twice (${err:-no message})"
+}
+
+# 워크스페이스 목록(workspace list JSON)을 CMUX_WS_LIST에 읽는다. 앱에 닿지 못하고 앱 프로세스는 있으면(앱이 멈춤) 응답할 때까지 기다린다 —
+# 상한·로그 리듬은 대기 함수와 같다(reach_unresponsive). 0 읽음, 1 못 읽음(원인은 reach_lost로 남겨 terminal_lost_why $1이 구절로 준다).
+# $1 응답 없음을 세는 열쇠, $2 로그 줄의 주어
+CMUX_WS_LIST=""
+cmux_ws_list() {
+  while ! CMUX_WS_LIST="$(cmux_j workspace list --id-format uuids 2>/dev/null)"; do
+    cmux_app_running || { reach_lost "$1" app; return 1; }
+    reach_unresponsive "$1" "$2" || return 1
+    sleep "$TERMINAL_RETRY_SEC"
+  done
+  reach_ok "$1" "$2"
 }
 
 cmux_worktree_remove() {
