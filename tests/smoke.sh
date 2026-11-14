@@ -610,24 +610,27 @@ case "$1" in
     exit "${FAKE_PASTE_RC:-0}" ;;
   workspace)   # 워크스페이스는 FAKE_WS_FILE(JSON 배열)에 둔다(#63)
     case "$2" in
-      list)
+      list)   # FAKE_LIST_BAD=1 이면 앱은 답하지만 목록 모양이 아니다
         if down; then exit 1; fi
+        if [[ "${FAKE_LIST_BAD:-0}" == 1 ]]; then echo "OK"; exit 0; fi
         jq -c '{window_id: "win1", workspaces: .}' "$FAKE_WS_FILE" ;;
       create)
         # FAKE_CREATE_FILE 에서 부를 때마다 한 줄씩: ok | made(만들었지만 응답 타임아웃 — 앱이 멈춘 동안 받은 요청을 풀린 뒤 처리한다) |
-        # none(만들지 않고 타임아웃) | bad(인자 오류). 타임아웃 뒤 앱은 FAKE_FREEZE 번의 호출 동안 더 멈춰 있다. 부른 횟수는 FAKE_CREATES 의 줄 수
+        # none(만들지 않고 타임아웃) | elsewhere(다른 경로에 만들고 타임아웃) | bad(인자 오류). 타임아웃 뒤 앱은 FAKE_FREEZE 번의 호출 동안 더 멈춰
+        # 있다. 부른 횟수는 FAKE_CREATES 의 줄 수
         name=""; cwd=""; shift 2
         while [[ $# -gt 0 ]]; do case "$1" in --name) name="$2"; shift 2 ;; --cwd) cwd="$2"; shift 2 ;; *) shift ;; esac; done
         echo "$name" >> "$FAKE_CREATES"; id="ws-new-$(wc -l < "$FAKE_CREATES" | tr -d ' ')"
         mode="$(head -n 1 "$FAKE_CREATE_FILE")"
         if [[ "$(wc -l < "$FAKE_CREATE_FILE")" -gt 1 ]]; then tail -n +2 "$FAKE_CREATE_FILE" > "$FAKE_CREATE_FILE.n"; mv "$FAKE_CREATE_FILE.n" "$FAKE_CREATE_FILE"; fi
-        if [[ "$mode" == ok || "$mode" == made ]]; then
+        [[ "$mode" != elsewhere ]] || cwd=/elsewhere
+        if [[ "$mode" == ok || "$mode" == made || "$mode" == elsewhere ]]; then
           jq --arg id "$id" --arg t "$name" --arg d "$cwd" '. + [{id: $id, custom_title: $t, has_custom_title: true, current_directory: $d}]' \
             "$FAKE_WS_FILE" > "$FAKE_WS_FILE.n" && mv "$FAKE_WS_FILE.n" "$FAKE_WS_FILE"
         fi
         case "$mode" in
           ok) echo "{\"workspace_id\":\"$id\",\"surface_id\":\"sf-$id\",\"window_id\":\"win1\"}" ;;
-          made|none)
+          made|none|elsewhere)
             [[ -z "${FAKE_DOWN_FILE:-}" ]] || echo "${FAKE_FREEZE:-0}" > "$FAKE_DOWN_FILE"
             [[ -z "${FAKE_CLOCK:-}" ]] || echo $(( $(cat "$FAKE_CLOCK") + 15 )) > "$FAKE_CLOCK"
             echo "Error: Command timed out" >&2; exit 1 ;;
@@ -635,8 +638,11 @@ case "$1" in
         esac ;;
       *) exit 0 ;;
     esac ;;
-  list-pane-surfaces)
+  list-pane-surfaces)   # FAKE_LPS_DOWN_FILE 에 적힌 횟수만큼은 이 명령만 앱에 닿지 못한다(목록을 읽은 뒤 앱이 다시 멈춤)
     if down; then exit 1; fi
+    if [[ -n "${FAKE_LPS_DOWN_FILE:-}" && "$(cat "$FAKE_LPS_DOWN_FILE")" -gt 0 ]]; then
+      echo $(( $(cat "$FAKE_LPS_DOWN_FILE") - 1 )) > "$FAKE_LPS_DOWN_FILE"; echo "Error: Command timed out" >&2; exit 1
+    fi
     ws=""; while [[ $# -gt 0 ]]; do [[ "$1" != --workspace ]] || ws="$2"; shift; done
     if [[ "${FAKE_NO_SURFACE:-0}" == 1 ]]; then echo "{\"workspace_id\":\"$ws\",\"pane_id\":\"p1\",\"surfaces\":[]}"; exit 0; fi
     echo "{\"workspace_id\":\"$ws\",\"pane_id\":\"p1\",\"surfaces\":[{\"id\":\"sf-$ws\",\"index\":0,\"selected\":true,\"type\":\"terminal\"}]}" ;;
@@ -790,6 +796,19 @@ out="$(create_case made '[]' FAKE_APP_PID=4242 FAKE_NO_SURFACE=1)"
 out="$(CASE_DOWN=2 create_case ok '[]' FAKE_APP_PID=4242)"
 [[ "$out" == "0|ws-new-1|sf-ws-new-1|1" ]] && grep -q '^ok workspace issue-7: the cmux app is responding again' log \
   || die "만들기 전 앱이 멈춘 경우: $out $(cat err) $(cat log)"
+# 앱이 답했는데 목록 모양이 아니면 만들지 않고 멈춘다 — 만들기 전 목록 없이 만들면 옛 워크스페이스와 새것을 가를 수 없다
+out="$(create_case ok '[]' FAKE_APP_PID=4242 FAKE_LIST_BAD=1)"
+[[ "$out" == "1|||0" && "$(cat err)" == "die: #7: cannot list cmux workspaces before creating issue-7: cmux workspace list gave an unexpected response (OK)" ]] \
+  || die "목록 모양이 아닌 응답: $out $(cat err)"
+# 실패 뒤 이름은 같지만 다른 경로의 새 워크스페이스가 있으면 이어받지도 다시 만들지도 않는다 — 다시 만들면 워커 둘이 뜰 수 있다
+out="$(create_case "elsewhere ok" '[]' FAKE_APP_PID=4242)"
+[[ "$out" == "1|||1" && "$(cat err)" == "die: #7: cmux workspace create failed (Error: Command timed out), and the cmux app then created workspaces named issue-7 that the loop does not take over (it takes over exactly one, in $PWD/wts/issue-7): ws-new-1 (/elsewhere). $CREATE_NOTE" ]] \
+  || die "다른 경로의 같은 이름 워크스페이스: $out $(cat err)"
+# 목록을 읽은 뒤 터미널을 찾는 사이 앱이 다시 멈춰도 기다렸다 이어받는다
+echo 2 > lpsdown
+out="$(create_case made '[]' FAKE_APP_PID=4242 FAKE_FREEZE=1 FAKE_LPS_DOWN_FILE="$PWD/lpsdown")"
+[[ "$out" == "0|ws-new-1|sf-ws-new-1|1" && "$(grep -c 'cannot reach the cmux app, but its process is running' log)" == 2 ]] \
+  || die "터미널을 찾는 사이 앱이 다시 멈춤: $out $(cat err) $(cat log)"
 echo ok
 SH
 (cd "$F" && PATH="$F:$PATH" bash run-cmux.sh "$F/backend.sh" >/dev/null) || fail "cmux 백엔드 wait_idle·send 가짜 호출 실패"
@@ -2122,7 +2141,8 @@ tcase KIND=post_merge_failed
 tcase KIND=post_merge_failed TRIAGE_TIMEOUT_SEC=0
 [[ "$(o .note)" == " — triage: timed out after 0m (session worktree "* ]] || fail "시간 초과: $(o .note)"
 tcase KIND=post_merge_failed SPAWN_FAIL=1 VERDICT="$V_FIX"
-[[ "$(o .rc)" == 1 && "$(o .note)" == " (triage session did not start — see the loop log)" ]] && grep -q 'triage session did not start — fake create failed' "$TG/repo/.ticket-loop/loop.log" \
+# 띄우지 못한 이유(백엔드의 die 문장)는 사유에도 싣는다(#63 — cmux 앱이 멈춘 사이라면 수습 세션이 루프 밖에서 돌 수 있다는 안내가 그 안에 있다)
+[[ "$(o .rc)" == 1 && "$(o .note)" == " (triage session did not start: fake create failed)" ]] && grep -q 'triage session did not start — fake create failed' "$TG/repo/.ticket-loop/loop.log" \
   && [[ "$(ncurl)" == 1 && -z "$(tcalls)" ]] || fail "세션이 안 뜸: 원래 사유로 멈춰야 함(멈춤 보고는 die 가 한 번): $(cat "$TG/repo/out.json") / $(tcalls)"
 # 6b) #10: 수습 세션 자체가 사용량 한도에 걸리면(idle + 한도 문구 화면) strike 없이 "판정 없이 멈춤"이 아니라 usage_limit 로 끝낸다 — STOP_KIND 가
 #     usage_limit 이고 사유에 그 줄이 있다. 같은 화면이라도 USAGE_LIMIT_REGEX 가 비어 있으면(codex) 전처럼 idle 세 번

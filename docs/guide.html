@@ -2428,7 +2428,9 @@ agent_launch_cmd() { printf '%s "$(cat %q)"' "$AGENT_RESTART_CMD" "$1"; }   # �
 # 살아 있었고 워커 둘은 혼자 PR까지 열었다.
 # 응답 없음이 시작된 시각은 REACH_STATE_DIR의 터미널별 파일에 둔다 — 대기 함수는 PROGRESS_SEC마다 돌아오고 수리 대기는 매 바퀴 bg_wait
 # 서브셸에서 새로 불러 셸 변수가 남지 않는다. 앱이 한 번이라도 응답하면 지운다. 3으로 끝날 때의 원인도 같은 자리에 남겨 호출부가
-# 멈춤 사유에 싣는다(terminal_lost_why). 디렉터리는 루프가 잠금을 잡을 때 만들고 on_exit가 지운다
+# 멈춤 사유에 싣는다(terminal_lost_why). 디렉터리는 루프가 잠금을 잡을 때 만들고 on_exit가 지운다.
+# cmux 워크스페이스를 만드는 동안(cmux_answer — #63)도 같은 상한·리듬으로 기다린다. 그때 열쇠는 터미널 대신 workspace-&lt;이름&gt;이고,
+# 상한을 넘으면 3이 아니라 1을 돌려주며 terminal_lost_why로 같은 구절을 받는다
 reach_file() { printf '%s/%s' "$REACH_STATE_DIR" "${1//[^A-Za-z0-9_.-]/_}"; }
 # 대기 하나(PR·수리·수습 판정)를 시작할 때 — 앞 대기가 응답 없음 중에 끝났으면(그사이 PR이 열림) 그 시작 시각을 이어 쓰지 않는다
 reach_reset() { rm -f "$(reach_file "$1")" "$(reach_file "$1").lost"; }
@@ -2662,17 +2664,19 @@ cmux_check() {
 # 요청은 이미 앱에 닿아 있어 앱이 풀리면 처리된다. 2026-11-15 실측(키트 0.9.29, cmux 0.65.2, pdmate #16): 루프는 "cmux workspace create
 # failed"로 멈췄고 2초 뒤 그 워크스페이스에서 워커가 떠 혼자 PR까지 열었다. 그래서 실패하면 CLI 문구를 남기고, 앱 프로세스가 있는 동안
 # 응답을 기다린 뒤(대기 함수와 같은 상한·리듬) 만들기 전 목록에 없던 같은 이름·같은 경로의 워크스페이스를 찾아 이어받는다. 없으면 요청이
-# 앱에 닿지 않은 것이라 한 번만 다시 만든다 — 확인 없이 다시 만들면 같은 워크트리에 워커 둘이 뜬다. 앱이 없거나 상한을 넘으면 멈추되,
-# 워크스페이스가 생겨 워커가 루프 밖에서 돌 수 있다고 적는다. 무인 수습 세션도 이 함수로 띄운다(triage_spawn)
+# 앱에 닿지 않은 것이라 한 번만 다시 만든다 — 확인 없이 다시 만들면 같은 워크트리에 워커 둘이 뜬다. 같은 이름의 새 워크스페이스가 다른
+# 경로에 있거나 둘 이상이면 이어받지도 다시 만들지도 않고 멈춘다. 앱이 없거나 상한을 넘으면 멈추되, 워크스페이스가 생겨 워커가 루프 밖에서
+# 돌 수 있다고 적는다. 무인 수습 세션도 이 함수로 띄운다(triage_spawn — 그 die 문장이 수습 사유에 실린다)
 cmux_worktree_create() {
-  local n="$1" prompt="$2" name="${3:-${BRANCH_PREFIX}${1}}" out pf errf err="" key subject who=worker try before
+  local n="$1" prompt="$2" name="${3:-${BRANCH_PREFIX}${1}}" out pf errf err="" key subject who=worker try before fresh left
   loop_worktree_add "$n" "$name"
   pf="$(prompt_file "$n" "$prompt")"; errf="${pf}.err"
   key="workspace-${name}"; subject="workspace ${name}"; reach_reset "$key"
   [[ "$name" == "${BRANCH_PREFIX}${n}" ]] || who="triage session"
-  # 만들기 전의 워크스페이스 — 조사용으로 남겨 둔 같은 이름의 옛 워크스페이스를 새것으로 잡지 않게
-  cmux_ws_list "$key" "$subject" || die "#${n}: cannot list cmux workspaces before creating ${name}: $(terminal_lost_why "$key")"
-  before="$(jq -c '[.workspaces[]?.id]' &lt;&lt;&lt;"$CMUX_WS_LIST" 2&gt;/dev/null)" || before='[]'
+  left="$(terminal_lost_note "$who")"
+  # 만들기 전의 워크스페이스 — 조사용으로 남겨 둔 같은 이름의 옛 워크스페이스를 새것으로 잡지 않게. 못 읽으면 만들지 않는다
+  cmux_ws_list "$key" "$subject" || die "#${n}: cannot list cmux workspaces before creating ${name}: ${CMUX_WHY}"
+  before="$(jq -c '[.workspaces[].id]' &lt;&lt;&lt;"$CMUX_OUT")"
   for try in 1 2; do
     if out="$(cmux_j workspace create --name "$name" --cwd "$WT_PATH" --focus false --id-format uuids \
                 --command "$(agent_launch_cmd "$pf")" 2&gt;"$errf")"; then
@@ -2685,14 +2689,20 @@ cmux_worktree_create() {
     err="$(tr -s '\n' ' ' &lt; "$errf" | sed 's/ *$//')"; rm -f "$errf"
     log warn "#${n}: cmux workspace create failed (${err:-no message}) — checking whether the cmux app created ${name} anyway"
     cmux_ws_list "$key" "$subject" \
-      || die "#${n}: cmux workspace create failed (${err:-no message}) and $(terminal_lost_why "$key"). The cmux app may still create the ${name} workspace — the worktree is still on disk. $(terminal_lost_note "$who")"
-    WT="$(jq -r --argjson before "$before" --arg name "$name" --arg p "$WT_PATH" '
-      [.workspaces[]? | . as $w | select((any($before[]; . == $w.id) | not) and .custom_title == $name and .current_directory == $p) | .id]
-      | first // empty' &lt;&lt;&lt;"$CMUX_WS_LIST" 2&gt;/dev/null || true)"
-    if [[ -n "$WT" ]]; then
-      HANDLE="$(cmux_j list-pane-surfaces --workspace "$WT" --id-format uuids 2&gt;/dev/null | jq -r '.surfaces[0].id // empty' 2&gt;/dev/null || true)"
-      [[ -n "$HANDLE" ]] \
-        || die "#${n}: the cmux app created workspace ${WT} (${name}) after the request failed, but listed no terminal in it. $(terminal_lost_note "$who")"
+      || die "#${n}: cmux workspace create failed (${err:-no message}) and ${CMUX_WHY}. The cmux app may still create the ${name} workspace — the worktree is still on disk. ${left}"
+    # 만들기 전 목록에 없던 같은 이름의 워크스페이스 — 한 줄에 "id&lt;탭&gt;경로"
+    fresh="$(jq -r --argjson before "$before" --arg name "$name" '
+      .workspaces[] | . as $w | select(.custom_title == $name and (any($before[]; . == $w.id) | not))
+      | "\(.id)\t\(.current_directory // "")"' &lt;&lt;&lt;"$CMUX_OUT")"
+    if [[ -n "$fresh" ]]; then
+      # 정확히 하나이고 경로도 같을 때만 이어받는다. 경로가 다르거나 둘 이상이면 어느 것이 이 워크트리의 워커인지 모른다 — 다시 만들지도 않는다
+      WT="$(awk -F'\t' -v p="$WT_PATH" '$2 == p { print $1 }' &lt;&lt;&lt;"$fresh")"
+      [[ -n "$WT" &amp;&amp; "$(wc -l &lt;&lt;&lt;"$fresh")" -eq 1 ]] \
+        || die "#${n}: cmux workspace create failed (${err:-no message}), and the cmux app then created workspaces named ${name} that the loop does not take over (it takes over exactly one, in ${WT_PATH}): $(awk -F'\t' '{ printf "%s%s (%s)", (NR &gt; 1 ? ", " : ""), $1, $2 }' &lt;&lt;&lt;"$fresh"). ${left}"
+      cmux_answer "$key" "$subject" list-pane-surfaces --workspace "$WT" --id-format uuids \
+        || die "#${n}: the cmux app created workspace ${WT} (${name}) after the request failed, but its terminal could not be listed: ${CMUX_WHY}. ${left}"
+      HANDLE="$(jq -r '.surfaces[0].id // empty' &lt;&lt;&lt;"$CMUX_OUT" 2&gt;/dev/null || true)"
+      [[ -n "$HANDLE" ]] || die "#${n}: the cmux app created workspace ${WT} (${name}) after the request failed, but listed no terminal in it. ${left}"
       log warn "#${n}: the cmux app created workspace ${WT} (${name}) after all — taking it over"
       return 0
     fi
@@ -2701,17 +2711,29 @@ cmux_worktree_create() {
   die "#${n}: cmux workspace create failed twice (${err:-no message})"
 }
 
-# 워크스페이스 목록(workspace list JSON)을 CMUX_WS_LIST에 읽는다. 앱에 닿지 못하고 앱 프로세스는 있으면(앱이 멈춤) 응답할 때까지 기다린다 —
-# 상한·로그 리듬은 대기 함수와 같다(reach_unresponsive). 0 읽음, 1 못 읽음(원인은 reach_lost로 남겨 terminal_lost_why $1이 구절로 준다).
-# $1 응답 없음을 세는 열쇠, $2 로그 줄의 주어
-CMUX_WS_LIST=""
-cmux_ws_list() {
-  while ! CMUX_WS_LIST="$(cmux_j workspace list --id-format uuids 2&gt;/dev/null)"; do
-    cmux_app_running || { reach_lost "$1" app; return 1; }
-    reach_unresponsive "$1" "$2" || return 1
+# cmux 명령(cmux_j "$@" — $3부터)의 출력을 CMUX_OUT에 읽는다. 앱에 닿지 못하고 앱 프로세스는 있으면(앱이 멈춤) 응답할 때까지 기다린다 —
+# 상한·로그 리듬은 대기 함수와 같다(reach_unresponsive). 0 읽음, 1 못 읽음(원인 구절은 CMUX_WHY). 앱 프로세스가 없으면 다시 해 보지 않는다.
+# 앱이 답한 오류도 닿지 못한 것과 가르지 않아, 모르는 오류에 앱이 살아 있으면 기다리는 쪽(상한까지)으로 틀린다(cmux_reach와 같은 쪽).
+# $1 응답 없음을 세는 열쇠(REACH_STATE_DIR의 파일 이름), $2 로그 줄의 주어
+CMUX_OUT=""; CMUX_WHY=""
+cmux_answer() {
+  local key="$1" subject="$2"
+  shift 2
+  CMUX_WHY=""
+  while ! CMUX_OUT="$(cmux_j "$@" 2&gt;/dev/null)"; do
+    cmux_app_running || { CMUX_WHY="the cmux app is not running"; return 1; }
+    reach_unresponsive "$key" "$subject" || { CMUX_WHY="$(terminal_lost_why "$key")"; return 1; }
     sleep "$TERMINAL_RETRY_SEC"
   done
-  reach_ok "$1" "$2"
+  reach_ok "$key" "$subject"
+}
+# 워크스페이스 목록(workspace list JSON)을 CMUX_OUT에 — 앱이 답했는데 목록 모양이 아니면 1(CMUX_WHY에 그 응답). 모양을 보지 않으면 빈 목록으로
+# 읽혀, 옛 워크스페이스를 이어받거나 이미 생긴 워크스페이스 옆에 하나를 더 만든다
+cmux_ws_list() {
+  cmux_answer "$1" "$2" workspace list --id-format uuids || return 1
+  jq -e '.workspaces | type == "array"' &lt;&lt;&lt;"$CMUX_OUT" &gt;/dev/null 2&gt;&amp;1 &amp;&amp; return 0
+  CMUX_WHY="cmux workspace list gave an unexpected response (${CMUX_OUT:0:200})"
+  return 1
 }
 
 cmux_worktree_remove() {
@@ -3843,11 +3865,14 @@ triage_prompt() {
 
 # 수습 세션의 워크트리와 에이전트를 띄운다. bg_wait로(백그라운드 서브셸에서) 부른다 — 백엔드 함수는 실패하면 die하는데, 여기서의 실패가
 # 원래 멈춤 사유를 덮으면 안 되므로 die를 "이 서브셸만 끝냄"으로 바꾼다(EXIT trap은 서브셸에 이어지지 않는다).
-# 결과(WT, WT_PATH, WT_BRANCH, HANDLE)를 $4 파일에 탭으로 쓴다
+# 결과(WT, WT_PATH, WT_BRANCH, HANDLE)를 $4 파일에 탭으로 쓴다. 띄우지 못한 이유(die 문장)는 $4.why에 남겨 triage가 사유에 싣는다(#63 —
+# cmux 앱이 멈춘 사이라면 수습 세션이 루프 밖에서 돌 수 있다는 안내가 그 안에 있다). die는 백엔드 함수 안에서 불리니 그 함수의 지역 변수
+# (cmux_worktree_create의 out 등)가 가리지 않는 이름으로 경로를 둔다
 triage_spawn() {
   local n="$1" prompt="$2" name="$3" out="$4"
   set -e
-  die() { log warn "#${n}: triage session did not start — $*"; exit 1; }
+  TRIAGE_SPAWN_WHY="${out}.why"
+  die() { log warn "#${n}: triage session did not start — $*"; printf '%s' "$*" &gt; "$TRIAGE_SPAWN_WHY"; exit 1; }
   WT=""; WT_PATH=""; WT_BRANCH=""; HANDLE=""
   backend_worktree_create "$n" "$prompt" "$name"
   ensure_agent_started "$n" "$HANDLE" "$prompt"
@@ -3985,8 +4010,10 @@ triage() {
   prompt="$(triage_prompt "$stopfile" "$vfile")"
   tmp="$(mktemp "${TMPDIR:-/tmp}/ticket-loop-triage-${n}.XXXXXX")"
   if ! bg_wait triage_spawn "$n" "$prompt" "$name" "$tmp" || [[ ! -s "$tmp" ]]; then
-    rm -f "$tmp"
-    TRIAGE_NOTE=" (triage session did not start — see the loop log)"; TRIAGE_RESULT="no session"
+    why="$(cat "${tmp}.why" 2&gt;/dev/null || true)"; rm -f "$tmp" "${tmp}.why"
+    if [[ -n "$why" ]]; then TRIAGE_NOTE=" (triage session did not start: ${why})"
+    else TRIAGE_NOTE=" (triage session did not start — see the loop log)"; fi
+    TRIAGE_RESULT="no session"
     return 1
   fi
   IFS=$'\t' read -r t_wt t_path t_branch t_handle &lt; "$tmp"; rm -f "$tmp"
