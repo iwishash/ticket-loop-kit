@@ -576,7 +576,9 @@ echo "ok  tmux 백엔드 함수·훅 가짜 호출"
 # 프롬프트가 화면에 찍힘 → 0, lifecycle 빈 값 → 0, paste 거부 → 비0. 2026-10-20 rental-portal #251 에서 붙여 넣은 직후의 묵은 idle 을
 # 수리 끝으로 읽어 5초 만에 멈춘 것을 고정한다.
 # 화면도 못 읽을 때 원인을 가른다(#61): 앱이 멈춰 소켓이 거절해도 소켓을 쥔 앱 프로세스(가짜 lsof)가 있으면 TERMINAL_UNRESPONSIVE_SEC(경과 시간)까지
-# 기다렸다 회복하고, 앱 프로세스·소켓 파일이 없거나 서피스가 not_found 면 TERMINAL_RETRY 대로 3. 응답 없음 시작 시각은 서브셸 호출을 넘어 이어진다
+# 기다렸다 회복하고, 앱 프로세스·소켓 파일이 없거나 서피스가 not_found 면 TERMINAL_RETRY 대로 3. 응답 없음 시작 시각은 서브셸 호출을 넘어 이어진다.
+# workspace create 가 응답 타임아웃으로 실패하면(#63) 앱이 풀리기를 기다려, 만들기 전 목록에 없던 같은 이름·경로의 워크스페이스를 이어받거나
+# 없으면 한 번만 다시 만든다. 앱이 없거나 상한을 넘으면 CLI 문구와 "워커가 루프 밖에서 돌 수 있다"를 사유에 싣고 멈춘다
 cat > "$F/cmux" <<'SH'
 #!/bin/bash
 # FAKE_DOWN_FILE 에 적힌 횟수만큼 rpc·read-screen 이 앱에 닿지 못한다(FAKE_DOWN_ERR, 기본은 앱이 멈췄을 때의 Connection refused).
@@ -606,6 +608,44 @@ case "$1" in
   paste)   # FAKE_PASTE_SHOWS=1 이면 붙여 넣은 줄이 화면에 찍힌다
     [[ "${FAKE_PASTE_SHOWS:-0}" != 1 ]] || echo "> ${*: -1}" >> "$FAKE_SCREEN_FILE"
     exit "${FAKE_PASTE_RC:-0}" ;;
+  workspace)   # 워크스페이스는 FAKE_WS_FILE(JSON 배열)에 둔다(#63)
+    case "$2" in
+      list)   # FAKE_LIST_BAD=1 이면 앱은 답하지만 목록 모양이 아니다
+        if down; then exit 1; fi
+        if [[ "${FAKE_LIST_BAD:-0}" == 1 ]]; then echo "OK"; exit 0; fi
+        jq -c '{window_id: "win1", workspaces: .}' "$FAKE_WS_FILE" ;;
+      create)
+        # FAKE_CREATE_FILE 에서 부를 때마다 한 줄씩: ok | made(만들었지만 응답 타임아웃 — 앱이 멈춘 동안 받은 요청을 풀린 뒤 처리한다) |
+        # none(만들지 않고 타임아웃) | elsewhere(다른 경로에 만들고 타임아웃) | bad(인자 오류). 타임아웃 뒤 앱은 FAKE_FREEZE 번의 호출 동안 더 멈춰
+        # 있다. 부른 횟수는 FAKE_CREATES 의 줄 수
+        name=""; cwd=""; shift 2
+        while [[ $# -gt 0 ]]; do case "$1" in --name) name="$2"; shift 2 ;; --cwd) cwd="$2"; shift 2 ;; *) shift ;; esac; done
+        echo "$name" >> "$FAKE_CREATES"; id="ws-new-$(wc -l < "$FAKE_CREATES" | tr -d ' ')"
+        mode="$(head -n 1 "$FAKE_CREATE_FILE")"
+        if [[ "$(wc -l < "$FAKE_CREATE_FILE")" -gt 1 ]]; then tail -n +2 "$FAKE_CREATE_FILE" > "$FAKE_CREATE_FILE.n"; mv "$FAKE_CREATE_FILE.n" "$FAKE_CREATE_FILE"; fi
+        [[ "$mode" != elsewhere ]] || cwd=/elsewhere
+        if [[ "$mode" == ok || "$mode" == made || "$mode" == elsewhere ]]; then
+          jq --arg id "$id" --arg t "$name" --arg d "$cwd" '. + [{id: $id, custom_title: $t, has_custom_title: true, current_directory: $d}]' \
+            "$FAKE_WS_FILE" > "$FAKE_WS_FILE.n" && mv "$FAKE_WS_FILE.n" "$FAKE_WS_FILE"
+        fi
+        case "$mode" in
+          ok) echo "{\"workspace_id\":\"$id\",\"surface_id\":\"sf-$id\",\"window_id\":\"win1\"}" ;;
+          made|none|elsewhere)
+            [[ -z "${FAKE_DOWN_FILE:-}" ]] || echo "${FAKE_FREEZE:-0}" > "$FAKE_DOWN_FILE"
+            [[ -z "${FAKE_CLOCK:-}" ]] || echo $(( $(cat "$FAKE_CLOCK") + 15 )) > "$FAKE_CLOCK"
+            echo "Error: Command timed out" >&2; exit 1 ;;
+          *) echo "Error: invalid_params: unknown flag" >&2; exit 1 ;;
+        esac ;;
+      *) exit 0 ;;
+    esac ;;
+  list-pane-surfaces)   # FAKE_LPS_DOWN_FILE 에 적힌 횟수만큼은 이 명령만 앱에 닿지 못한다(목록을 읽은 뒤 앱이 다시 멈춤)
+    if down; then exit 1; fi
+    if [[ -n "${FAKE_LPS_DOWN_FILE:-}" && "$(cat "$FAKE_LPS_DOWN_FILE")" -gt 0 ]]; then
+      echo $(( $(cat "$FAKE_LPS_DOWN_FILE") - 1 )) > "$FAKE_LPS_DOWN_FILE"; echo "Error: Command timed out" >&2; exit 1
+    fi
+    ws=""; while [[ $# -gt 0 ]]; do [[ "$1" != --workspace ]] || ws="$2"; shift; done
+    if [[ "${FAKE_NO_SURFACE:-0}" == 1 ]]; then echo "{\"workspace_id\":\"$ws\",\"pane_id\":\"p1\",\"surfaces\":[]}"; exit 0; fi
+    echo "{\"workspace_id\":\"$ws\",\"pane_id\":\"p1\",\"surfaces\":[{\"id\":\"sf-$ws\",\"index\":0,\"selected\":true,\"type\":\"terminal\"}]}" ;;
   *) exit 0 ;;
 esac
 SH
@@ -702,10 +742,77 @@ for _ in 1 2 3 4 5 6; do
   rcs+="$rc "; [[ $rc -eq 1 ]] || break
 done
 [[ "$rcs" == "3 " && "$(terminal_lost_why s1)" == "the cmux app is not running" ]] || die "TERMINAL_RETRY=4 에서 앱이 없는데 3 에 닿지 않음: $rcs $(terminal_lost_why s1)"
+# #63: workspace create 가 응답 타임아웃으로 실패해도 요청은 앱에 닿아 있어, 앱이 풀리면 워크스페이스를 만든다. 워크트리(git)는 이 자리 밖이라
+# 디렉터리만 만든다
+loop_worktree_add() { WT_PATH="$PWD/wts/${2:-issue-$1}"; WT_BRANCH="${2:-issue-$1}"; mkdir -p "$WT_PATH"; }
+# $1 workspace create 의 차례(호출마다 한 단어), $2 미리 있던 워크스페이스(JSON 배열), 나머지는 환경(VAR=값), CASE_DOWN 은 시작 때 앱이 멈춰
+# 있는 호출 수 → "종료 코드|WT|HANDLE|create 횟수". die 문장은 err, 로그는 log
+create_case() {
+  local rc=0 seq="$1" pre="$2"; shift 2
+  rm -rf "$REACH_STATE_DIR"/* wts got; : > log; : > creates; printf '%s\n' $seq > create; printf '%s' "$pre" > ws; echo "${CASE_DOWN:-0}" > down
+  ( unset FAKE_APP_PID FAKE_DOWN_ERR FAKE_CLOCK
+    export FAKE_WS_FILE="$PWD/ws" FAKE_CREATE_FILE="$PWD/create" FAKE_CREATES="$PWD/creates" FAKE_DOWN_FILE="$PWD/down" "$@"
+    WT=""; HANDLE=""; cmux_worktree_create 7 "고쳐라" 2> err; echo "$WT|$HANDLE" > got ) || rc=$?
+  echo "$rc|$(cat got 2>/dev/null || echo '|')|$(wc -l < creates | tr -d ' ')"
+}
+CREATE_NOTE="The worker may keep running outside the loop and open or update a PR — check for one before you rerun (the loop does not take over an open PR)."
+# 앱 프로세스가 없으면 지금처럼 멈춘다 — 사유에 CLI 문구, 워크스페이스가 생겼을 수 있다는 안내
+out="$(create_case none '[]' FAKE_FREEZE=100 'FAKE_DOWN_ERR=Error: Socket not found at /tmp/fake-cmux.sock')"
+[[ "$out" == "1|||1" ]] || die "앱이 없을 때 workspace create 실패: $out (기대 1|||1): $(cat err)"
+[[ "$(cat err)" == "die: #7: cmux workspace create failed (Error: Command timed out) and the cmux app is not running. The cmux app may still create the issue-7 workspace — the worktree is still on disk. $CREATE_NOTE" ]] \
+  || die "앱이 없을 때 workspace create 실패의 사유: $(cat err)"
+# 타임아웃으로 실패했지만 앱이 세 번의 호출 동안 멈췄다 풀리며 워크스페이스를 만들었다 — 기다렸다 그것을 이어받는다(다시 만들지 않는다)
+out="$(create_case made '[]' FAKE_APP_PID=4242 FAKE_FREEZE=3)"
+[[ "$out" == "0|ws-new-1|sf-ws-new-1|1" ]] || die "앱이 늦게 만든 워크스페이스를 이어받지 않음: $out (기대 0|ws-new-1|sf-ws-new-1|1): $(cat err) $(cat log)"
+grep -q '^warn #7: cmux workspace create failed (Error: Command timed out) — checking whether the cmux app created issue-7 anyway$' log \
+  && grep -q '^warn workspace issue-7: cannot reach the cmux app, but its process is running' log \
+  && grep -q '^ok workspace issue-7: the cmux app is responding again' log \
+  && grep -q '^warn #7: the cmux app created workspace ws-new-1 (issue-7) after all — taking it over$' log \
+  || die "이어받기의 로그 줄이 다르다: $(cat log)"
+# 실패했고 앱이 풀린 뒤에도 워크스페이스가 없다 — 요청이 앱에 닿지 않았으니 한 번 더 만든다
+out="$(create_case "none ok" '[]' FAKE_APP_PID=4242 FAKE_FREEZE=2)"
+[[ "$out" == "0|ws-new-2|sf-ws-new-2|2" ]] || die "아무것도 만들지 않은 실패 뒤 다시 만들지 않음: $out (기대 0|ws-new-2|sf-ws-new-2|2): $(cat err) $(cat log)"
+grep -q '^warn #7: no new issue-7 workspace in cmux — the request did not reach the app; creating it once more$' log || die "다시 만드는 줄이 없다: $(cat log)"
+# 조사용으로 남겨 둔 같은 이름·같은 경로의 옛 워크스페이스는 새것으로 잡지 않는다 — 만들기 전 목록에 있었다
+out="$(create_case "none ok" "[{\"id\":\"ws-old\",\"custom_title\":\"issue-7\",\"current_directory\":\"$PWD/wts/issue-7\"}]" FAKE_APP_PID=4242)"
+[[ "$out" == "0|ws-new-2|sf-ws-new-2|2" ]] || die "같은 이름의 옛 워크스페이스를 이어받음: $out (기대 0|ws-new-2|sf-ws-new-2|2): $(cat err) $(cat log)"
+# 앱이 TERMINAL_UNRESPONSIVE_SEC(100)를 넘게 응답하지 않으면 멈춘다 — 호출 하나가 15초씩 걸리는 가짜 시계로 1030 에 응답 없음이 시작되어 1135 에 105초
+echo 1000 > clock
+out="$(create_case made '[]' FAKE_APP_PID=4242 FAKE_FREEZE=1000 FAKE_CLOCK="$PWD/clock" FAKE_DOWN_TICK=15 TERMINAL_UNRESPONSIVE_SEC=100)"
+[[ "$out" == "1|||1" ]] || die "앱이 상한을 넘게 멈췄을 때: $out (기대 1|||1): $(cat err)"
+[[ "$(cat err)" == "die: #7: cmux workspace create failed (Error: Command timed out) and the cmux app has not responded for 105s, though its process is still running. The cmux app may still create the issue-7 workspace — the worktree is still on disk. $CREATE_NOTE" ]] \
+  || die "앱이 상한을 넘게 멈췄을 때의 사유: $(cat err)"
+grep -q '^warn workspace issue-7: the cmux app has not responded for 60s (waiting up to 100s)$' log || die "응답 없음 경과 줄이 없다: $(cat log)"
+# 앱은 답하는데 두 번 다 실패(인자 오류 등) — 세 번째는 없고, 기다리지 않으며, 사유에 CLI 문구가 실린다
+out="$(create_case "bad bad" '[]' FAKE_APP_PID=4242)"
+[[ "$out" == "1|||2" && "$(cat err)" == "die: #7: cmux workspace create failed twice (Error: invalid_params: unknown flag)" ]] \
+  || die "앱이 답하는데 두 번 실패: $out $(cat err)"
+! grep -q 'cannot reach' log || die "앱이 답하는데 응답 없음으로 기다렸다: $(cat log)"
+# 늦게 생긴 워크스페이스에서 터미널을 찾지 못하면 빈 핸들로 가지 않고 멈춘다 — 워커는 그 워크스페이스에서 돌 수 있다
+out="$(create_case made '[]' FAKE_APP_PID=4242 FAKE_NO_SURFACE=1)"
+[[ "$out" == "1|||1" && "$(cat err)" == "die: #7: the cmux app created workspace ws-new-1 (issue-7) after the request failed, but listed no terminal in it. $CREATE_NOTE" ]] \
+  || die "이어받을 워크스페이스에 터미널이 없을 때: $out $(cat err)"
+# 만들기 전 목록을 읽을 때 이미 앱이 멈춰 있으면 응답을 기다렸다 만든다
+out="$(CASE_DOWN=2 create_case ok '[]' FAKE_APP_PID=4242)"
+[[ "$out" == "0|ws-new-1|sf-ws-new-1|1" ]] && grep -q '^ok workspace issue-7: the cmux app is responding again' log \
+  || die "만들기 전 앱이 멈춘 경우: $out $(cat err) $(cat log)"
+# 앱이 답했는데 목록 모양이 아니면 만들지 않고 멈춘다 — 만들기 전 목록 없이 만들면 옛 워크스페이스와 새것을 가를 수 없다
+out="$(create_case ok '[]' FAKE_APP_PID=4242 FAKE_LIST_BAD=1)"
+[[ "$out" == "1|||0" && "$(cat err)" == "die: #7: cannot list cmux workspaces before creating issue-7: cmux workspace list gave an unexpected response (OK)" ]] \
+  || die "목록 모양이 아닌 응답: $out $(cat err)"
+# 실패 뒤 이름은 같지만 다른 경로의 새 워크스페이스가 있으면 이어받지도 다시 만들지도 않는다 — 다시 만들면 워커 둘이 뜰 수 있다
+out="$(create_case "elsewhere ok" '[]' FAKE_APP_PID=4242)"
+[[ "$out" == "1|||1" && "$(cat err)" == "die: #7: cmux workspace create failed (Error: Command timed out), and the cmux app then created workspaces named issue-7 that the loop does not take over (it takes over exactly one, in $PWD/wts/issue-7): ws-new-1 (/elsewhere). $CREATE_NOTE" ]] \
+  || die "다른 경로의 같은 이름 워크스페이스: $out $(cat err)"
+# 목록을 읽은 뒤 터미널을 찾는 사이 앱이 다시 멈춰도 기다렸다 이어받는다
+echo 2 > lpsdown
+out="$(create_case made '[]' FAKE_APP_PID=4242 FAKE_FREEZE=1 FAKE_LPS_DOWN_FILE="$PWD/lpsdown")"
+[[ "$out" == "0|ws-new-1|sf-ws-new-1|1" && "$(grep -c 'cannot reach the cmux app, but its process is running' log)" == 2 ]] \
+  || die "터미널을 찾는 사이 앱이 다시 멈춤: $out $(cat err) $(cat log)"
 echo ok
 SH
 (cd "$F" && PATH="$F:$PATH" bash run-cmux.sh "$F/backend.sh" >/dev/null) || fail "cmux 백엔드 wait_idle·send 가짜 호출 실패"
-echo "ok  cmux 백엔드 wait_idle 세 경우, send 다섯 경우, 화면도 못 읽을 때의 원인(앱 응답 없음은 기다림 — #61)"
+echo "ok  cmux 백엔드 wait_idle 세 경우, send 다섯 경우, 화면도 못 읽을 때의 원인(앱 응답 없음은 기다림 — #61), workspace create 실패 뒤 늦게 생긴 워크스페이스 이어받기·한 번 다시 만들기(#63)"
 
 # 에이전트 프리셋: AGENT 가 기동 명령·배너·모델 정규식·스킬 접두사의 기본값을 정하고, 준 값이 이긴다. 프롬프트에는 특정 에이전트의 이름·도구가 없다
 A="$T/agent"; mkdir -p "$A"
@@ -2034,7 +2141,8 @@ tcase KIND=post_merge_failed
 tcase KIND=post_merge_failed TRIAGE_TIMEOUT_SEC=0
 [[ "$(o .note)" == " — triage: timed out after 0m (session worktree "* ]] || fail "시간 초과: $(o .note)"
 tcase KIND=post_merge_failed SPAWN_FAIL=1 VERDICT="$V_FIX"
-[[ "$(o .rc)" == 1 && "$(o .note)" == " (triage session did not start — see the loop log)" ]] && grep -q 'triage session did not start — fake create failed' "$TG/repo/.ticket-loop/loop.log" \
+# 띄우지 못한 이유(백엔드의 die 문장)는 사유에도 싣는다(#63 — cmux 앱이 멈춘 사이라면 수습 세션이 루프 밖에서 돌 수 있다는 안내가 그 안에 있다)
+[[ "$(o .rc)" == 1 && "$(o .note)" == " (triage session did not start: fake create failed)" ]] && grep -q 'triage session did not start — fake create failed' "$TG/repo/.ticket-loop/loop.log" \
   && [[ "$(ncurl)" == 1 && -z "$(tcalls)" ]] || fail "세션이 안 뜸: 원래 사유로 멈춰야 함(멈춤 보고는 die 가 한 번): $(cat "$TG/repo/out.json") / $(tcalls)"
 # 6b) #10: 수습 세션 자체가 사용량 한도에 걸리면(idle + 한도 문구 화면) strike 없이 "판정 없이 멈춤"이 아니라 usage_limit 로 끝낸다 — STOP_KIND 가
 #     usage_limit 이고 사유에 그 줄이 있다. 같은 화면이라도 USAGE_LIMIT_REGEX 가 비어 있으면(codex) 전처럼 idle 세 번
