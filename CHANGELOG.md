@@ -7,7 +7,7 @@
 - **시작 줄의 검증 주기 문구를 명령 치환 밖에서 만든다(#65).** 0.9.9부터 이 줄은 `$( … )` 안에 `case "$POST_MERGE_EVERY" in 1) … esac`를 두었다. bash 3.2는 여는 괄호 없는 패턴의 `)`를 치환의 끝으로 읽는다(bash 4+는 정상). 그래서 `command substitution: line 3199: syntax error near unexpected token` 두 줄 뒤에 `post-merge check: on ;; 0) echo , when a spec or the run ends ;; …`가 찍혔다. 이제 `case`를 치환 앞에 두고 로그는 그 값(`pm_every_note`)만 쓴다. 찍는 문구는 그대로다.
   - `bash -n`은 이 결함을 잡지 못한다. bash 3.2는 큰따옴표 안 명령 치환을 그 줄을 실행할 때에야 파싱해서, `/bin/bash -n`(3.2.57)은 고치기 전 파일에도 0으로 끝난다. smoke CI는 Ubuntu(bash 5)에서만 돈다.
   - 스모크: 둘을 더했다.
-    - 정적 검사 — `install.sh`·`files/scripts/*.sh`·`docs/build-pdf.sh`에서 한 줄 안의 `$(` 뒤에 여는 괄호 없는 `case` 패턴이 오면 실패한다. bash 버전과 무관해 CI에서도 걸린다. 여러 줄에 걸친 치환은 보지 못한다.
+    - 정적 검사 — `install.sh`·`files/scripts/*.sh`·`docs/build-pdf.sh`에서 한 줄 안의 `$(` 뒤에 여는 괄호 없는 `case` 패턴이 오면 실패한다. bash 버전과 무관해 CI에서도 걸린다. 닫힌 치환 뒤의 `case`를 잡지 않으려고 `$(`와 `case` 사이에 `)`가 없는 줄만 본다. 그래서 여러 줄에 걸친 치환과, 안쪽 치환이 닫힌 뒤에 오는 `case`는 보지 못한다.
     - 실행 검사 — 가짜 gh·tmux로 `ticket-loop.sh --dry-run`을 시작 줄까지 돌려 `POST_MERGE_EVERY` 1·0·4의 문구와 `--skip-post-merge`의 `off`를 본다. `/bin/bash`가 3.x면 그 bash로도 돌리고, 아니면 건너뛰었다고 찍는다. 시작 줄만 떼어 `eval`하던 검사는 이것으로 바꿨다.
   - 문서: 부록 D, PDF.
 - 이미 설치된 저장소: 키트를 올리면 바로 바뀐다. bash 3.2.57(macOS)에서 `--dry-run`으로 확인했다.

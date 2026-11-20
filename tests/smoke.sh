@@ -12,10 +12,12 @@ for f in "$KIT"/install.sh "$KIT"/files/scripts/*.sh "$KIT"/docs/build-pdf.sh; d
 done
 echo "ok  bash -n"
 # bash 3.2(macOS 기본 /bin/bash)는 $( ) 안 case 의 여는 괄호 없는 패턴 `x)` 를 치환의 끝으로 읽는다 — bash -n 은 통과하고 그 줄을 실행할 때에야
-# 깨진다(#65). 한 줄 안에서 $( 뒤에 오는 case 는 패턴을 `(x)` 로 쓰거나 치환 밖으로 뺀다(여러 줄에 걸친 치환은 이 검사가 보지 못한다)
-case_in_subst() { grep -nE '\$\((.*[;&|({ ])?case +.+ +in +[^( ]' "$@" | grep -vE '^([^:]*:)?[0-9]+:[[:space:]]*#' || true; }
-[[ -n "$(printf '%s\n' 'x="a$(case "$v" in 1) ;; *) echo b ;; esac)"' | case_in_subst)" \
-   && -z "$(printf '%s\n' 'x="a$(case "$v" in (1) ;; (*) echo b ;; esac)"' 'case "$v" in 1) y="$(echo b)" ;; esac' '# $(case "$v" in 1) ;; esac)' | case_in_subst)" ]] \
+# 깨진다(#65). 한 줄 안에서 $( 뒤에 오는 case 는 패턴을 `(x)` 로 쓰거나 치환 밖으로 뺀다. 닫힌 치환 뒤의 case 를 잡지 않으려고 $( 와 case 사이에 ) 가 없는 줄만
+# 본다 — 여러 줄에 걸친 치환과, 안쪽 치환이 닫힌 뒤에 오는 case(`$(a "$(b)"; case …)`)는 보지 못한다
+case_in_subst() { grep -nE '\$\(([^)]*[;&|({[:space:]])?case[[:space:]]+.+[[:space:]]+in[[:space:]]+[^([:space:]]' "$@" | grep -vE '^([^:]*:)?[0-9]+:[[:space:]]*#' || true; }
+[[ "$(printf '%s\n' 'x="a$(case "$v" in 1) ;; *) echo b ;; esac)"' $'x="$(\tcase "$v" in\t1) ;; esac)"' 'x="$([[ $v -eq 1 ]] && echo "a$(case "$v" in 1) ;; esac)")"' | case_in_subst | wc -l)" -eq 3 \
+   && -z "$(printf '%s\n' 'x="a$(case "$v" in (1) ;; (*) echo b ;; esac)"' 'case "$v" in 1) y="$(echo b)" ;; esac' 'x="$(echo b)"; case "$x" in 1) ;; esac' \
+              'echo "$(date)" # in case you are in doubt' '# $(case "$v" in 1) ;; esac)' | case_in_subst)" ]] \
   || fail "case_in_subst 가 치환 안의 괄호 없는 case 패턴만 잡지 않는다"
 bad="$(case_in_subst "$KIT"/install.sh "$KIT"/files/scripts/*.sh "$KIT"/docs/build-pdf.sh)"
 [[ -z "$bad" ]] || fail "\$( ) 안 case 에 여는 괄호 없는 패턴 — bash 3.2 에서 구문 오류다(패턴을 (x) 로 쓰거나 치환 밖으로): $bad"
@@ -1601,8 +1603,8 @@ grep -qxF 'POST_MERGE_EVERY="${POST_MERGE_EVERY:-4}"' "$KIT/files/scripts/ticket
 echo "ok  묶어 돌리는 검증 — 연결·값 검사"
 # 시작 줄의 검증 주기 — --dry-run 을 시작 줄까지 돌려 본다(가짜 gh·tmux, 후보 0건, 임시 HOME). bash 3.2(macOS 기본 /bin/bash)는 $( ) 안 case 의
 # 괄호 없는 패턴에서 구문 오류를 내고 case 원문을 찍었다(#65) — bash -n 은 통과하므로 /bin/bash 가 3.x 면 그 bash 로도 돌린다
-D3="$T/dry-start"; mkdir -p "$D3/bin" "$D3/home"
-cat > "$D3/bin/gh" <<'GH'
+DS="$T/dry-start"; mkdir -p "$DS/bin" "$DS/home"
+cat > "$DS/bin/gh" <<'GH'
 #!/bin/bash
 case "$1 $2" in
   "repo view") case "$*" in *nameWithOwner*) echo o/r ;; *defaultBranchRef*) echo main ;; *) echo https://example.test/o/r ;; esac ;;
@@ -1610,17 +1612,17 @@ case "$1 $2" in
   *) echo "unexpected gh $*" >&2; exit 1 ;;
 esac
 GH
-printf '#!/bin/bash\nexit 0\n' > "$D3/bin/tmux"; chmod +x "$D3/bin/gh" "$D3/bin/tmux"
+printf '#!/bin/bash\nexit 0\n' > "$DS/bin/tmux"; chmod +x "$DS/bin/gh" "$DS/bin/tmux"
 shells=(bash)
 if [[ "$(/bin/bash -c 'echo "${BASH_VERSINFO[0]}"' 2>/dev/null)" == 3 ]]; then shells+=(/bin/bash); else echo "skip  시작 줄의 검증 주기 — /bin/bash 가 3.x 가 아니라 bash 3.2 실행 검사는 건너뜀"; fi
-for sh in "${shells[@]}"; do
+for shell in "${shells[@]}"; do
   for c in '1|post-merge check: on — c' '0|post-merge check: on, when a spec or the run ends — c' '4|post-merge check: on, every 4 merged tickets and when a spec or the run ends — c'; do
-    rc=0; out="$(cd "$T" && HOME="$D3/home" PATH="$D3/bin:$PATH" BACKEND=tmux AGENT=codex POST_MERGE_CMD=c POST_MERGE_RETRY_CMD= POST_MERGE_EVERY="${c%%|*}" "$sh" scripts/ticket-loop.sh --dry-run 2>&1)" || rc=$?
+    rc=0; out="$(cd "$T" && HOME="$DS/home" PATH="$DS/bin:$PATH" BACKEND=tmux AGENT=codex POST_MERGE_CMD=c POST_MERGE_RETRY_CMD= POST_MERGE_EVERY="${c%%|*}" "$shell" scripts/ticket-loop.sh --dry-run 2>&1)" || rc=$?
     [[ $rc -eq 0 ]] && ! grep -q 'syntax error' <<<"$out" && sed 's/^\[[^]]*\] //' <<<"$out" | grep -qxF "${c#*|}" \
-      || fail "시작 줄의 검증 주기($sh, POST_MERGE_EVERY=${c%%|*}, rc=$rc): $out"
+      || fail "시작 줄의 검증 주기($shell, POST_MERGE_EVERY=${c%%|*}, rc=$rc): $out"
   done
 done
-out="$(cd "$T" && HOME="$D3/home" PATH="$D3/bin:$PATH" BACKEND=tmux AGENT=codex POST_MERGE_CMD=c bash scripts/ticket-loop.sh --dry-run --skip-post-merge 2>&1)" || fail "--skip-post-merge --dry-run 실패: $out"
+out="$(cd "$T" && HOME="$DS/home" PATH="$DS/bin:$PATH" BACKEND=tmux AGENT=codex POST_MERGE_CMD=c bash scripts/ticket-loop.sh --dry-run --skip-post-merge 2>&1)" || fail "--skip-post-merge --dry-run 실패: $out"
 sed 's/^\[[^]]*\] //' <<<"$out" | grep -qxF 'post-merge check: off' || fail "검증을 끈 실행의 시작 줄: $out"
 echo "ok  시작 줄의 검증 주기 — --dry-run(${shells[*]})"
 grep -q 'LOG_START_BYTES=$(( $(wc -c < "$LOG_FILE") ))' "$KIT/files/scripts/ticket-loop.sh" || fail "시작 때 로그 파일 크기(LOG_START_BYTES)를 기억하지 않음"
