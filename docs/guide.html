@@ -4654,7 +4654,13 @@ pick_rc=0; targets="$(pick_targets)" || pick_rc=$?
 [[ $pick_rc -ne 1 ]] || die "could not list tickets (GitHub)"
 log "repository ${OWNER_REPO} / backend ${BACKEND_NAME} / base branch ${BASE_BRANCH} / label ${READY_LABEL}${SCOPE_LABEL:+ + ${SCOPE_LABEL}}${PARENT:+ / sub-issues of spec #${PARENT}}"
 [[ -z "$AGENT_MODEL" ]] || log "worker model: ${AGENT_MODEL} (${AGENT_MODEL_FLAG} on the agent command)"
-log "post-merge check: $([[ $POST_MERGE -eq 1 ]] &amp;&amp; echo "on$(case "$POST_MERGE_EVERY" in 1) ;; 0) echo ", when a spec or the run ends" ;; *) echo ", every ${POST_MERGE_EVERY} merged tickets and when a spec or the run ends" ;; esac) — ${POST_MERGE_CMD}${POST_MERGE_RETRY_CMD:+ (retry once on failure: ${POST_MERGE_RETRY_CMD})}" || echo "off")"
+# 주기 문구는 치환 밖에서 만든다 — bash 3.2(macOS 기본)는 $( ) 안 case 의 괄호 없는 패턴 `1)` 를 치환의 끝으로 읽는다(#65)
+case "$POST_MERGE_EVERY" in
+  1) pm_every_note="" ;;
+  0) pm_every_note=", when a spec or the run ends" ;;
+  *) pm_every_note=", every ${POST_MERGE_EVERY} merged tickets and when a spec or the run ends" ;;
+esac
+log "post-merge check: $([[ $POST_MERGE -eq 1 ]] &amp;&amp; echo "on${pm_every_note} — ${POST_MERGE_CMD}${POST_MERGE_RETRY_CMD:+ (retry once on failure: ${POST_MERGE_RETRY_CMD})}" || echo "off")"
 if [[ -n "$PM_PENDING" ]]; then
   log warn "post-merge check: $(pm_count) merged ticket$([[ "$(pm_count)" -eq 1 ]] || echo s) from an earlier run not checked yet ($(pm_list)) — $([[ $POST_MERGE -eq 1 ]] &amp;&amp; echo "the next check covers them" || echo "left for a run with the check on")"
 elif [[ -n "$PM_SPEC_COMPLETE" ]]; then   # 지난 실행의 스펙 끝 검증이 실패해 멈춤(#34) — 대상이 없어도 루프 끝에 돈다
