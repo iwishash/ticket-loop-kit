@@ -11,6 +11,8 @@
 
 멈춤은 어떻게 끝나든 한 번 보고된다: 멈추는 조건(PR 없이 멈춤, 타임아웃, 수리 소진 등), 터미널 창 닫힘, Ctrl-C, `kill`, `set -e`에 걸린 명령(네트워크가 끊겨 `git fetch`·`gh`가 실패하는 등). `kill -9`, 전원 꺼짐, 잠자기는 스크립트가 아무것도 보내지 못해 잡지 못한다.
 
+**PR 없이 멈춤(`worker_no_pr`).** 워커가 PR 없이 `IDLE_STRIKES`번(기본 3) 연달아 idle이거나 확인 창에 머물면 멈춘다. 백그라운드 셸을 기다리며 턴을 끝낸 워커(화면에 `1 shell still running` — `BACKGROUND_WAIT_REGEX`)는 같은 화면으로 `BACKGROUND_WAIT_SEC`(기본 900초)까지 기다린 뒤에야 세기 시작한다. 멈춘 뒤에도 워커는 계속 돌아 루프 밖에서 PR을 열 수 있고, 루프는 열린 PR을 이어받지 않는다. 사유에 그 안내가 붙으니 다시 돌리기 전에 PR이 있는지 본다. 기다리는 폭은 `IDLE_STRIKES`·`IDLE_RECHECK_SEC`·`BACKGROUND_WAIT_SEC`로 바꾼다([루프 돌리기](loop.ko.md)).
+
 Slack 설정(컴퓨터마다 한 번):
 
 1. <https://api.slack.com/apps> → **Create New App** → **Blank app**(예전 화면의 From scratch) → 이름(예 `ticket-loop`)과 워크스페이스.

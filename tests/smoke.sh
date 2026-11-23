@@ -521,6 +521,25 @@ for v in TERMINAL_UNRESPONSIVE_SEC TERMINAL_RETRY TERMINAL_RETRY_SEC; do
 done
 echo "ok  터미널 대기 설정(TERMINAL_RETRY·TERMINAL_RETRY_SEC·TERMINAL_UNRESPONSIVE_SEC)을 환경변수·loop.env 로 바꿈(#61)"
 
+# idle 대기 설정(#69): 상수였던 IDLE_STRIKES·IDLE_RECHECK_SEC와 새 BACKGROUND_WAIT_SEC·BACKGROUND_WAIT_REGEX도 같은 꼴로 바꾼다. 숫자가 아니면 시작하지
+# 않는다(종료 코드 2)
+IC="$(grep -E '^(IDLE_STRIKES|IDLE_RECHECK_SEC|BACKGROUND_WAIT_SEC)=' "$KIT/files/scripts/ticket-loop.sh"; sed -n '/^# ----- 에이전트 프리셋 -----/,/^# ----- 에이전트 프리셋 끝 -----/p' "$KIT/files/scripts/ticket-loop.sh")"
+iconf() { env -u IDLE_STRIKES -u IDLE_RECHECK_SEC -u BACKGROUND_WAIT_SEC -u BACKGROUND_WAIT_REGEX AGENT=claude "$@" bash -c 'set -euo pipefail; [[ ! -f "${LOOPENV:-}" ]] || source "$LOOPENV"; eval "$1"; echo "$IDLE_STRIKES $IDLE_RECHECK_SEC $BACKGROUND_WAIT_SEC $BACKGROUND_WAIT_REGEX"' _ "$IC"; }
+[[ "$(iconf)" == "3 30 900 [0-9]+ shells? still running" ]] || fail "idle 대기 설정의 기본값이 다름: $(iconf)"
+[[ "$(iconf IDLE_STRIKES=5 IDLE_RECHECK_SEC=60 BACKGROUND_WAIT_SEC=0 BACKGROUND_WAIT_REGEX='jobs? running')" == "5 60 0 jobs? running" ]] || fail "환경변수가 idle 대기 설정을 덮지 않음"
+printf '%s\n' 'IDLE_STRIKES="${IDLE_STRIKES:-6}"' 'IDLE_RECHECK_SEC="${IDLE_RECHECK_SEC:-45}"' 'BACKGROUND_WAIT_SEC="${BACKGROUND_WAIT_SEC:-1800}"' 'BACKGROUND_WAIT_REGEX="${BACKGROUND_WAIT_REGEX:-tasks? running}"' > "$T/idle-loop.env"
+[[ "$(iconf LOOPENV="$T/idle-loop.env")" == "6 45 1800 tasks? running" ]] || fail "loop.env 가 idle 대기 설정을 덮지 않음: $(iconf LOOPENV="$T/idle-loop.env")"
+[[ "$(iconf LOOPENV="$T/idle-loop.env" IDLE_STRIKES=4)" == "4 45 1800 tasks? running" ]] || fail "실행할 때 준 환경변수가 loop.env 를 이기지 않음(idle 대기 설정)"
+for v in IDLE_STRIKES=0 IDLE_STRIKES=abc IDLE_RECHECK_SEC=0 IDLE_RECHECK_SEC=30s BACKGROUND_WAIT_SEC=-1 BACKGROUND_WAIT_SEC=15m; do
+  rc=0; out="$(cd "$T" && env "$v" bash scripts/ticket-loop.sh --dry-run 2>&1)" || rc=$?
+  [[ $rc -eq 2 && "$out" == "${v%%=*} must be "*"(got '${v#*=}')" ]] || fail "$v 인데 시작함(rc=$rc): $out"
+done
+for v in IDLE_STRIKES IDLE_RECHECK_SEC BACKGROUND_WAIT_SEC BACKGROUND_WAIT_REGEX; do
+  grep -q "^#   ${v} " "$KIT/files/scripts/ticket-loop.sh" || fail "루프 스크립트 머리의 환경변수 목록에 ${v} 가 없음"
+  for f in docs/loop.md docs/loop.ko.md docs/guide.html; do grep -q "$v" <(sed '/<h3>D\./,$d' "$KIT/$f") || fail "$f 에 ${v} 가 없음"; done
+done
+echo "ok  idle 대기 설정(IDLE_STRIKES·IDLE_RECHECK_SEC·BACKGROUND_WAIT_SEC·BACKGROUND_WAIT_REGEX)을 환경변수·loop.env 로 바꿈(#69)"
+
 # tmux 백엔드: 가짜 tmux 로 함수를 부르고, 훅 스크립트가 Claude Code(stdin)·Codex(인자) 페이로드를 상태 파일로 옮기는지, 기동 명령에 훅이 붙는지 본다.
 # 실제 tmux 3.8 + Claude Code 로는 손으로 확인했다(초기 프롬프트 인자 → running, 응답 끝 → idle, send-keys 제출 → running→idle, /exit → exited)
 cat > "$F/tmux" <<'SH'
@@ -829,7 +848,7 @@ echo "ok  cmux 백엔드 wait_idle 세 경우, send 다섯 경우, 화면도 못
 A="$T/agent"; mkdir -p "$A"
 sed -n '/^# ----- 에이전트 프리셋 -----/,/^# ----- 에이전트 프리셋 끝 -----/p' "$KIT/files/scripts/ticket-loop.sh" > "$A/preset.sh"
 grep -q 'case "\$AGENT" in' "$A/preset.sh" || fail "에이전트 프리셋 블록을 찾지 못함"
-preset() { AGENT="$1" bash -c 'set -euo pipefail; source "$0"; printf "%s\n%s\n%s\n%s\n%s\n%s\n" "$AGENT_RESTART_CMD" "$AGENT_BANNER_REGEX" "$MODEL_REGEX" "$SKILL_PREFIX" "$USAGE_LIMIT_REGEX" "$PERMISSION_PROMPT_REGEX"' "$A/preset.sh"; }
+preset() { AGENT="$1" bash -c 'set -euo pipefail; source "$0"; printf "%s\n%s\n%s\n%s\n%s\n%s\n%s\n" "$AGENT_RESTART_CMD" "$AGENT_BANNER_REGEX" "$MODEL_REGEX" "$SKILL_PREFIX" "$USAGE_LIMIT_REGEX" "$PERMISSION_PROMPT_REGEX" "$BACKGROUND_WAIT_REGEX"' "$A/preset.sh"; }
 out="$(preset claude)"; [[ "$(sed -n 1p <<<"$out")" == "claude --dangerously-skip-permissions" && "$(sed -n 4p <<<"$out")" == "/" ]] || fail "claude 프리셋이 다름: $out"
 printf '[Opus 5.5 | Max]\n' | grep -oE "$(sed -n 3p <<<"$out")" | grep -qx 'Opus 5.5' || fail "claude MODEL_REGEX 가 Opus 5.5 를 못 뽑음"
 out="$(preset codex)"; [[ "$(sed -n 1p <<<"$out")" == "codex --dangerously-bypass-approvals-and-sandbox" && "$(sed -n 4p <<<"$out")" == '$' ]] || fail "codex 프리셋이 다름: $out"
@@ -842,15 +861,19 @@ out="$(preset bogus)"; [[ -z "$(sed -n 1p <<<"$out")" && -z "$(sed -n 2p <<<"$ou
 # "{0,2 limit}" 이 되어 BSD grep 이 rc=2). 프리셋의 정규식이 모두 grep -E 로 컴파일되는지 본다. GNU grep 은 깨진 { 를 글자로 읽어 조용하므로
 # claude 한도 정규식은 값 자체도 비교한다(화면 사례는 아래 화면 분류 검사가 같은 평가 값으로 돈다)
 for ag in claude codex; do
-  out="$(USAGE_LIMIT_REGEX= PERMISSION_PROMPT_REGEX= preset "$ag")"
-  for i in 2 3 5 6; do
+  out="$(USAGE_LIMIT_REGEX= PERMISSION_PROMPT_REGEX= BACKGROUND_WAIT_REGEX= preset "$ag")"
+  for i in 2 3 5 6 7; do
     re="$(sed -n "${i}p" <<<"$out")"; [[ -n "$re" ]] || continue
     rc=0; grep -E -- "$re" </dev/null >/dev/null 2>&1 || rc=$?; [[ $rc -le 1 ]] || fail "$ag 프리셋 ${i}번째 줄의 정규식이 grep -E 에서 오류(rc=$rc): $re"
   done
 done
-out="$(USAGE_LIMIT_REGEX= PERMISSION_PROMPT_REGEX= preset claude)"
+out="$(USAGE_LIMIT_REGEX= PERMISSION_PROMPT_REGEX= BACKGROUND_WAIT_REGEX= preset claude)"
 [[ "$(sed -n 5p <<<"$out")" == 'usage limit reached|(weekly|[0-9]+-hour) limit reached|(hit|reached) your( [a-z0-9-]+)?( [a-z0-9-]+)? limit' \
-  && "$(sed -n 6p <<<"$out")" == 'Do you want to proceed\?' ]] || fail "claude 프리셋의 화면 분류 정규식이 다름(bash 가 기본값을 끊었나): $(sed -n '5,6p' <<<"$out")"
+  && "$(sed -n 6p <<<"$out")" == 'Do you want to proceed\?' && "$(sed -n 7p <<<"$out")" == '[0-9]+ shells? still running' ]] \
+  || fail "claude 프리셋의 화면 분류 정규식이 다름(bash 가 기본값을 끊었나): $(sed -n '5,7p' <<<"$out")"
+# #69: 백그라운드 대기 문구는 claude 만 — codex·그 외는 빈 값(감지 안 함), 준 값이 이긴다
+for ag in codex bogus; do [[ -z "$(BACKGROUND_WAIT_REGEX= preset "$ag" | sed -n 7p)" ]] || fail "$ag 프리셋에 BACKGROUND_WAIT_REGEX 기본값이 있음"; done
+for ag in claude codex; do [[ "$(BACKGROUND_WAIT_REGEX='jobs? running' preset "$ag" | sed -n 7p)" == 'jobs? running' ]] || fail "$ag: 준 BACKGROUND_WAIT_REGEX 가 프리셋을 이기지 않음"; done
 grep -q 'AGENT=\${AGENT} has no preset' "$KIT/files/scripts/ticket-loop.sh" || fail "모르는 AGENT 를 시작 때 멈추는 검사가 없음"
 # 워커 모델(#50): --model·AGENT_MODEL 이 기동 명령 뒤에 프리셋의 모델 인자로 붙는다. Orca·인자 프리셋이 없는 AGENT 는 시작 때 종료 코드 2
 { cat "$A/preset.sh"; sed -n '/^while \[\[ \$# -gt 0 \]\]; do$/,/^done$/p; /^# ----- 워커 모델 -----/,/^# ----- 워커 모델 끝 -----/p' "$KIT/files/scripts/ticket-loop.sh"; } > "$A/model.sh"
@@ -2447,6 +2470,8 @@ tcase KIND=post_merge_failed SPAWN_FAIL=1 VERDICT="$V_FIX"
 #     않았다). 소스의 글자를 sed 로 뽑던 것은 bash 가 기본값을 첫 } 에서 끊어 깨진 실제 값을 시험하지 못했다(#57)
 CLAUDE_UL_RE="$(USAGE_LIMIT_REGEX= preset claude | sed -n 5p)"
 [[ -n "$CLAUDE_UL_RE" ]] || fail "claude 프리셋의 USAGE_LIMIT_REGEX 를 읽지 못함"
+CLAUDE_BG_RE="$(BACKGROUND_WAIT_REGEX= preset claude | sed -n 7p)"
+[[ -n "$CLAUDE_BG_RE" ]] || fail "claude 프리셋의 BACKGROUND_WAIT_REGEX 를 읽지 못함"
 LIMIT_SCREEN=$'│ > /loop-triage …\n│\n│  You\'ve reached your Fable limit · resets 3pm (Asia/Seoul)\n│'
 tcase KIND=ci_failed PR=34 SCREEN="$LIMIT_SCREEN" USAGE_LIMIT_REGEX="$CLAUDE_UL_RE"
 [[ "$(o .rc)" == 1 && "$(o .kind)" == usage_limit && "$(o .note)" == " — triage: triage session hit the usage limit: You've reached your Fable limit · resets 3pm (Asia/Seoul) (session worktree $TG/repo/tw/"* \
@@ -2549,8 +2574,8 @@ for f in wait_for_pr idle_fp_add bg_wait pr_settle repair session_active_recentl
   sed -n "/^${f}() {/,/^}/p" "$KIT/files/scripts/ticket-loop.sh" >> "$W/fn.sh"
   grep -q "^${f}() " "$W/fn.sh" || fail "${f} 를 찾지 못함"
 done
-sed -n '/^idle_fp_count() /p; /^ci_run_sec() {/,/^}/p; /^claude_project_dir() /p' "$KIT/files/scripts/ticket-loop.sh" >> "$W/fn.sh"
-grep -q '^idle_fp_count() ' "$W/fn.sh" && grep -q '^ci_run_sec() ' "$W/fn.sh" && grep -q '^claude_project_dir() ' "$W/fn.sh" || fail "idle_fp_count·ci_run_sec·claude_project_dir 를 찾지 못함"
+sed -n '/^idle_fp_count() /p; /^ci_run_sec() {/,/^}/p; /^claude_project_dir() /p; /^terminal_lost_note() /p' "$KIT/files/scripts/ticket-loop.sh" >> "$W/fn.sh"
+grep -q '^idle_fp_count() ' "$W/fn.sh" && grep -q '^ci_run_sec() ' "$W/fn.sh" && grep -q '^claude_project_dir() ' "$W/fn.sh" && grep -q '^terminal_lost_note() ' "$W/fn.sh" || fail "idle_fp_count·ci_run_sec·claude_project_dir·terminal_lost_note 를 찾지 못함"
 echo 'reach_reset() { :; }   # 백엔드 절의 것 — 이 검사들은 응답 없음 상태를 쓰지 않는다(터미널 끊김 사유 검사는 백엔드 절을 덧씌운다)' >> "$W/fn.sh"
 sed -n '/^# ----- 화면 분류 -----/,/^# ----- 화면 분류 끝 -----/p' "$KIT/files/scripts/ticket-loop.sh" >> "$W/fn.sh"   # 세 대기가 부르는 screen_check(#10)
 grep -q '^screen_kind() {' "$W/fn.sh" && grep -q '^screen_check() {' "$W/fn.sh" && grep -q '^screen_stop_check() {' "$W/fn.sh" || fail "화면 분류 블록을 찾지 못함"
@@ -2872,19 +2897,22 @@ CONTEXT_S=$'  Context limit reached · /compact or /clear to continue\n│ ❯'
 PROMPT_S=$'This shell -c script runs rm and could not be checked\n Do you want to proceed?\n ❯ 1. Yes\n   2. No'
 WORK_S=$'⠋ Running tests… (2m 10s · ↓ 1.2k tokens)'
 # $1 terminal_idle 이 idle(0)을 돌려줄 호출 번호들(all 이면 전부, 빈 값이면 전부 타임아웃), $2 화면, $3 이 호출 번호부터 $4 화면으로 바뀜(빈 값이면 안 바뀜),
-# $5 프리셋(claude: 두 정규식 기본값, codex: 빈 값), $6 PROMPT_STALL_SEC → "종료 코드|종류|사유|경고 줄 수|오판 수"
+# $5 프리셋(claude: 정규식 기본값, codex: 빈 값), $6 PROMPT_STALL_SEC, $7 BACKGROUND_WAIT_SEC(#69) → "종료 코드|종류|사유|경고 줄 수|오판 수"
+# (경고가 아닌 로그 줄은 $SC/log, 환경변수 ACTIVE_AT 은 세션 기록이 방금 갱신된 것으로 볼 호출 번호들)
 screen_case() {
-  (cd "$W" && SC="$SC" IDLE_AT="$1" SCREEN_A="$2" SWITCH_AT="${3:-}" SCREEN_B="${4:-}" MODE="${5:-claude}" STALL="${6:-300}" UL_RE="$CLAUDE_UL_RE" bash -c '
+  (cd "$W" && SC="$SC" IDLE_AT="$1" SCREEN_A="$2" SWITCH_AT="${3:-}" SCREEN_B="${4:-}" MODE="${5:-claude}" STALL="${6:-300}" BG_SEC="${7:-900}" UL_RE="$CLAUDE_UL_RE" BG_RE="$CLAUDE_BG_RE" bash -c '
     set -euo pipefail
-    echo 0 > "$SC/clock"; echo 0 > "$SC/icnt"; : > "$SC/warns"; : > "$SC/stop"
+    echo 0 > "$SC/clock"; echo 0 > "$SC/icnt"; : > "$SC/warns"; : > "$SC/stop"; : > "$SC/log"
     source fn.sh
     date() { if [[ "${1:-}" == +%s ]]; then echo $(( 1700000000 + $(cat "$SC/clock") )); else command date "$@"; fi; }
-    log() { [[ "${1:-}" != warn ]] || echo x >> "$SC/warns"; }; idle_wait_ms() { echo 1; }
+    log() { if [[ "${1:-}" == warn ]]; then echo x >> "$SC/warns"; else echo "$*" >> "$SC/log"; fi; }; idle_wait_ms() { echo 1; }
     terminal_idle() { local c; c=$(( $(cat "$SC/icnt") + 1 )); echo "$c" > "$SC/icnt"; echo $(( $(cat "$SC/clock") + 60 )) > "$SC/clock"
       if [[ "$IDLE_AT" == all || " $IDLE_AT " == *" $c "* ]]; then return 0; fi; return 1; }
     terminal_tail() { local c; c="$(cat "$SC/icnt")"; if [[ -n "$SWITCH_AT" && $c -ge $SWITCH_AT ]]; then printf "%s\n" "$SCREEN_B"; else printf "%s\n" "$SCREEN_A"; fi; }
     open_pr_for() { :; }; pr_created_epoch() { :; }; pr_settle() { :; }
-    if [[ "$MODE" == claude ]]; then USAGE_LIMIT_REGEX="$UL_RE"; PERMISSION_PROMPT_REGEX="Do you want to proceed\\?"; else USAGE_LIMIT_REGEX=""; PERMISSION_PROMPT_REGEX=""; fi
+    if [[ -n "${ACTIVE_AT:-}" ]]; then session_active_recently() { SESSION_LOG_AGE=1; [[ " $ACTIVE_AT " == *" $(cat "$SC/icnt") "* ]]; }; fi
+    if [[ "$MODE" == claude ]]; then USAGE_LIMIT_REGEX="$UL_RE"; PERMISSION_PROMPT_REGEX="Do you want to proceed\\?"; BACKGROUND_WAIT_REGEX="$BG_RE"; else USAGE_LIMIT_REGEX=""; PERMISSION_PROMPT_REGEX=""; BACKGROUND_WAIT_REGEX=""; fi
+    BACKGROUND_WAIT_SEC="$BG_SEC"
     AGENT="$MODE"; WT_PATH=""; PROGRESS_SEC=0; IDLE_WAIT_MS=1; STARTUP_GRACE_SEC=0; IDLE_RECHECK_SEC=0; IDLE_STRIKES=3; SESSION_LOG_FRESH_SEC=30; PROMPT_STALL_SEC="$STALL"
     IDLE_FP_FILE="$(mktemp)"; WAIT_STOP_FILE="$SC/stop"; rc=0
     bg_wait wait_for_pr 7 h $(( $(date +%s) + 660 )) > out || rc=$?
@@ -2913,19 +2941,43 @@ out="$(screen_case all "$PROMPT_S")"; [[ "$out" == "1|||3|0" ]] || fail "idle �
 out="$(screen_case all "$PROMPT_S" "" "" claude 60)"; [[ "$out" == "1|worker_no_pr|"*"(screen unchanged for 60s)|1|0" ]] || fail "idle 바퀴에서도 체류 시간이 차면 확인 창으로 멈춰야: $out"
 out="$(screen_case "" "$PROMPT_S" "" "" codex)"; [[ "$out" == "2|||0|0" ]] || fail "PERMISSION_PROMPT_REGEX 가 비면 확인 창을 보지 않아야: $out (기대 2|||0|0)"
 out="$(screen_case "" "$WORK_S")"; [[ "$out" == "2|||0|0" ]] || fail "일하는 화면은 아무것도 아님: $out (기대 2|||0|0)"
-# 수리 대기(repair)·수습 대기(wait_for_verdict)도 같은 분류 — $1 어느 대기, $2 idle 호출 번호들(all | 빈 값), $3 화면 → "종료 코드|종류|사유|경고 줄 수"
+# #69: 백그라운드 셸을 기다리며 턴을 끝낸 워커(화면 꼬리에 BACKGROUND_WAIT_REGEX)는 같은 화면으로 BACKGROUND_WAIT_SEC 까지 strike 를 세지 않는다.
+# 2026-11 실측 pdmate #238 — 검증을 백그라운드로 띄우고 턴을 끝낸 워커를 strike 셋에 멈췄고, 24초 뒤 검증이 통과해 워커가 혼자 PR 을 열었다
+BG_S=$'✻ Brewed for 9m 50s · done 오후 7:24 · 1 shell still running\n  ⏵⏵ bypass permissions on · 1 shell'
+BG_S2=$'✻ Brewed for 12m 3s · done 오후 7:31 · 2 shells still running\n  ⏵⏵ bypass permissions on · 2 shells'   # 복수형은 추정
+DONE_S=$'✻ Brewed for 9m 50s · done 오후 7:24\n  ⏵⏵ bypass permissions on'
+bg_logs() { printf '%s|%s' "$(grep -c 'background shell' "$SC/log" || true)" "$(grep -c 'counting idle strikes' "$SC/log" || true)"; }   # "가드 줄(상한 줄 포함)|상한 줄"
+for s in "$BG_S" "$BG_S2"; do
+  out="$(screen_case all "$s")"; [[ "$out" == "2|||0|11" && "$(bg_logs)" == "1|0" ]] || fail "백그라운드 셸을 기다리는 화면에 strike 를 셈(로그는 한 번): $out $(bg_logs) (기대 2|||0|11 1|0)"
+done
+out="$(screen_case all "$DONE_S")"; [[ "$out" == "1|||3|0" ]] || fail "백그라운드 문구가 없으면 전처럼 strike 세 번: $out (기대 1|||3|0)"
+out="$(screen_case all "$BG_S" "" "" codex)"; [[ "$out" == "1|||3|0" ]] || fail "BACKGROUND_WAIT_REGEX 가 비면(codex) 전처럼 strike 세 번: $out (기대 1|||3|0)"
+# 상한(여기서는 300초 — 시계는 idle 한 번에 60초, 제한 시간 660초): 같은 화면이 넘기면 그때부터 strike, 한 줄 남긴다. 0 이면 가드를 끈다
+out="$(screen_case all "$BG_S" "" "" claude 300 300)"; [[ "$out" == "1|||3|5" && "$(bg_logs)" == "2|1" ]] || fail "BACKGROUND_WAIT_SEC 를 넘긴 같은 화면은 strike 세 번에 멈춰야: $out $(bg_logs) (기대 1|||3|5 2|1)"
+out="$(screen_case all "$BG_S" "" "" claude 300 0)"; [[ "$out" == "1|||3|0" && "$(bg_logs)" == "0|0" ]] || fail "BACKGROUND_WAIT_SEC=0 이면 가드가 꺼져야: $out $(bg_logs) (기대 1|||3|0 0|0)"
+# 화면이 바뀌거나(문구는 그대로 — 로그는 되풀이하지 않는다) 워커가 다시 일하면(4번째가 idle 아님) 시계가 처음부터
+out="$(screen_case all "$BG_S" 4 "$BG_S2" claude 300 300)"; [[ "$out" == "1|||3|8" && "$(bg_logs)" == "2|1" ]] || fail "기다리던 중 화면이 바뀌면 상한 시계가 처음부터여야: $out $(bg_logs) (기대 1|||3|8 2|1)"
+out="$(screen_case "1 2 3 5 6 7 8 9 10 11" "$BG_S" "" "" claude 300 300)"; [[ "$out" == "2|||2|8" && "$(bg_logs)" == "3|1" ]] || fail "기다리던 중 워커가 다시 일하면 상한 시계가 처음부터여야: $out $(bg_logs) (기대 2|||2|8 3|1)"
+out="$(ACTIVE_AT=4 screen_case all "$BG_S" "" "" claude 300 300)"; [[ "$out" == "2|||2|9" && "$(bg_logs)" == "3|1" ]] || fail "기다리던 중 세션 기록이 갱신되면 상한 시계가 처음부터여야: $out $(bg_logs) (기대 2|||2|9 3|1)"
+out="$(screen_case all "$BG_S" 8 "$BG_S2" claude 300 300)"; [[ "$out" == "2|||2|11" && "$(bg_logs)" == "3|1" ]] || fail "strike 를 세던 중 화면이 바뀌면 다시 기다려야: $out $(bg_logs) (기대 2|||2|11 3|1)"
+# 사용량 한도·확인 창이 함께 있으면 그쪽으로 멈춘다
+out="$(screen_case all "$BG_S"$'\n'"$LIMIT_A")"; [[ "$out" == "1|usage_limit|worker hit the usage limit: "*"|0|0" ]] || fail "백그라운드 문구와 한도 문구가 함께 있으면 usage_limit 이어야: $out"
+out="$(screen_case all "$BG_S"$'\n'"$PROMPT_S")"; [[ "$out" == "1|worker_no_pr|worker is waiting at a confirmation prompt: "*"|0|5" ]] || fail "백그라운드 문구와 확인 창이 함께 있으면 확인 창으로 멈춰야: $out"
+# 수리 대기(repair)·수습 대기(wait_for_verdict)도 같은 분류 — $1 어느 대기, $2 idle 호출 번호들(all | 빈 값), $3 화면, $4 BACKGROUND_WAIT_SEC, $5 이 호출 번호부터 $6 화면으로
+# 바뀜 → "종료 코드|종류|사유|경고 줄 수"
 screen_wait_case() {
-  (cd "$W" && SC="$SC" WHICH="$1" IDLE_AT="$2" SCREEN_A="$3" UL_RE="$CLAUDE_UL_RE" bash -c '
+  (cd "$W" && SC="$SC" WHICH="$1" IDLE_AT="$2" SCREEN_A="$3" BG_SEC="${4:-900}" SWITCH_AT="${5:-}" SCREEN_B="${6:-}" UL_RE="$CLAUDE_UL_RE" BG_RE="$CLAUDE_BG_RE" bash -c '
     set -euo pipefail
-    echo 0 > "$SC/clock"; echo 0 > "$SC/icnt"; : > "$SC/warns"; : > "$SC/stop"
+    echo 0 > "$SC/clock"; echo 0 > "$SC/icnt"; : > "$SC/warns"; : > "$SC/stop"; : > "$SC/log"
     source fn.sh
     date() { if [[ "${1:-}" == +%s ]]; then echo $(( 1700000000 + $(cat "$SC/clock") )); else command date "$@"; fi; }
-    log() { [[ "${1:-}" != warn ]] || echo x >> "$SC/warns"; }
+    log() { if [[ "${1:-}" == warn ]]; then echo x >> "$SC/warns"; else echo "$*" >> "$SC/log"; fi; }
     idle_wait_ms() { echo 1; }; send_prompt() { :; }; progress_check() { :; }; progress_reset() { :; }; progress_dirty() { :; }
     terminal_idle() { local c; c=$(( $(cat "$SC/icnt") + 1 )); echo "$c" > "$SC/icnt"; echo $(( $(cat "$SC/clock") + 60 )) > "$SC/clock"
       if [[ "$IDLE_AT" == all || " $IDLE_AT " == *" $c "* ]]; then return 0; fi; return 1; }
-    terminal_tail() { printf "%s\n" "$SCREEN_A"; }; pr_head_sha() { echo aaa1111; }; verdict_written() { return 1; }; die() { echo "die $*"; exit 9; }
-    USAGE_LIMIT_REGEX="$UL_RE"; PERMISSION_PROMPT_REGEX="Do you want to proceed\\?"; PROMPT_STALL_SEC=300
+    terminal_tail() { local c; c="$(cat "$SC/icnt")"; if [[ -n "$SWITCH_AT" && $c -ge $SWITCH_AT ]]; then printf "%s\n" "$SCREEN_B"; else printf "%s\n" "$SCREEN_A"; fi; }; pr_head_sha() { echo aaa1111; }; verdict_written() { return 1; }; die() { echo "die $*"; exit 9; }
+    if [[ -n "${ACTIVE_AT:-}" ]]; then session_active_recently() { SESSION_LOG_AGE=1; [[ " $ACTIVE_AT " == *" $(cat "$SC/icnt") "* ]]; }; fi
+    USAGE_LIMIT_REGEX="$UL_RE"; PERMISSION_PROMPT_REGEX="Do you want to proceed\\?"; PROMPT_STALL_SEC=300; BACKGROUND_WAIT_REGEX="$BG_RE"; BACKGROUND_WAIT_SEC="$BG_SEC"
     AGENT=claude; WT_PATH=""; PROGRESS_SEC=0; REPAIR_SETTLE_SEC=0; CUR_N=7; BACKEND_NAME=x; STARTUP_GRACE_SEC=0; IDLE_RECHECK_SEC=0; IDLE_STRIKES=3; SESSION_LOG_FRESH_SEC=30
     WAIT_STOP_FILE="$SC/stop"; rc=0
     case "$WHICH" in
@@ -2941,6 +2993,16 @@ out="$(screen_wait_case repair all "$WORK_S")"; [[ "$out" == "0|||3" ]] || fail 
 out="$(screen_wait_case verdict all "$LIMIT_A")"; [[ "$out" == "1|usage_limit|triage session hit the usage limit: You've reached your Fable limit · resets 3pm (Asia/Seoul)|0" ]] || fail "wait_for_verdict: idle + 한도 문구: $out"
 out="$(screen_wait_case verdict "" "$PROMPT_S")"; [[ "$out" == "1|worker_no_pr|triage session is waiting at a confirmation prompt: Do you want to proceed? (screen unchanged for 300s)|0" ]] || fail "wait_for_verdict: idle 없이 확인 창: $out"
 out="$(screen_wait_case verdict all "$WORK_S")"; [[ "$out" == "1|||3" ]] || fail "wait_for_verdict: 보통 화면이면 전처럼 strike: $out (기대 1|||3)"
+# #69: 두 대기도 백그라운드 대기 가드 — 상한 전에는 strike 없이 제한 시간까지, 상한을 넘기면 strike 세 번, 화면이 바뀌거나 워커가 다시 일하면 처음부터
+for w in "repair 1 0" "verdict 2 1"; do   # 어느 대기, 제한 시간에 걸린 코드, strike 로 끝난 코드
+  read -r which t_rc s_rc <<<"$w"
+  out="$(screen_wait_case "$which" all "$BG_S")"; [[ "$out" == "$t_rc|||0" && "$(bg_logs)" == "1|0" ]] || fail "$which: 백그라운드 셸을 기다리는 화면에 strike 를 셈: $out $(bg_logs) (기대 $t_rc|||0 1|0)"
+  out="$(screen_wait_case "$which" all "$BG_S" 300)"; [[ "$out" == "$s_rc|||3" && "$(bg_logs)" == "2|1" ]] || fail "$which: 상한을 넘긴 같은 화면은 strike 세 번: $out $(bg_logs) (기대 $s_rc|||3 2|1)"
+  out="$(screen_wait_case "$which" all "$BG_S" 300 7 "$BG_S2")"; [[ "$out" == "$t_rc|||1" ]] || fail "$which: 화면이 바뀌면 상한 시계가 처음부터여야: $out (기대 $t_rc|||1)"
+  out="$(screen_wait_case "$which" "1 2 3 5 6 7 8 9 10 11" "$BG_S" 300)"; [[ "$out" == "$t_rc|||2" ]] || fail "$which: 워커가 다시 일하면 상한 시계가 처음부터여야: $out (기대 $t_rc|||2)"
+  out="$(ACTIVE_AT=4 screen_wait_case "$which" all "$BG_S" 300)"; [[ "$out" == "$t_rc|||2" ]] || fail "$which: 세션 기록이 갱신되면 상한 시계가 처음부터여야: $out (기대 $t_rc|||2)"
+  out="$(screen_wait_case "$which" all "$BG_S"$'\n'"$LIMIT_A")"; [[ "$out" == "$s_rc|usage_limit|"* ]] || fail "$which: 한도 문구가 함께 있으면 usage_limit 이어야: $out"
+done
 # 호출부(screen_stop_check): 사용량 한도는 수습 없이 usage_limit 로 die, 확인 창은 worker_no_pr 수습(진단만) 뒤 die, 분류가 없으면 0 으로 돌아와
 # 전처럼 간다. $1 WAIT_STOP_FILE 내용(종류<탭>사유, 빈 값이면 없음), $2 맥락 → 출력 줄들
 stopchk_case() {
@@ -2957,9 +3019,15 @@ out="$(stopchk_case $'usage_limit\tworker hit the usage limit: You have hit the 
 [[ "$out" == "die|usage_limit|#7: worker hit the usage limit: You have hit the usage limit — Try again at 15:00. No triage (it would hit the same limit) — rerun the loop after the limit resets. The issue-7 worktree is kept in cmux. The worker may resume on its own when the limit resets and open a PR outside the loop — check for one before you rerun (the loop does not take over an open PR)." ]] \
   || fail "screen_stop_check: 사용량 한도는 수습 없이 usage_limit 로 멈춰야: $out"
 out="$(stopchk_case $'worker_no_pr\tworker is waiting at a confirmation prompt: Do you want to proceed? (screen unchanged for 300s)' " while repairing PR #34")"
-[[ "$out" == $'triage|worker_no_pr|#7: worker is waiting at a confirmation prompt: Do you want to proceed? (screen unchanged for 300s) while repairing PR #34. The loop does not answer prompts — check the issue-7 worktree in cmux.\ndie|worker_no_pr|#7: worker is waiting at a confirmation prompt: Do you want to proceed? (screen unchanged for 300s) while repairing PR #34. The loop does not answer prompts — check the issue-7 worktree in cmux. — triage (project): stuck on rm' ]] \
+[[ "$out" == $'triage|worker_no_pr|#7: worker is waiting at a confirmation prompt: Do you want to proceed? (screen unchanged for 300s) while repairing PR #34. The loop does not answer prompts — check the issue-7 worktree in cmux. The worker may keep running outside the loop and open or update a PR — check for one before you rerun (the loop does not take over an open PR).\ndie|worker_no_pr|#7: worker is waiting at a confirmation prompt: Do you want to proceed? (screen unchanged for 300s) while repairing PR #34. The loop does not answer prompts — check the issue-7 worktree in cmux. The worker may keep running outside the loop and open or update a PR — check for one before you rerun (the loop does not take over an open PR). — triage (project): stuck on rm' ]] \
   || fail "screen_stop_check: 확인 창은 worker_no_pr 수습(진단만) 뒤 멈춰야: $out"
 out="$(stopchk_case "")"; [[ "$out" == "through|0|" ]] || fail "screen_stop_check: 분류가 없으면 전처럼 가야: $out"
+# #69: idle strike 로 멈춘 worker_no_pr 사유에도 같은 안내 — run_ticket 의 그 줄을 그대로 돌려 문장을 본다
+NOPR="$(sed -n '/^run_ticket() {/,/^}/p' "$KIT/files/scripts/ticket-loop.sh" | grep -F 'worker stopped without a PR')"
+[[ "$(wc -l <<<"$NOPR")" -eq 1 ]] || fail "run_ticket 의 worker_no_pr 사유 줄을 찾지 못함: $NOPR"
+out="$(cd "$W" && bash -c 'set -euo pipefail; source fn.sh; n=7; BRANCH_PREFIX=issue-; BACKEND_NAME=cmux; eval "$1"; echo "$reason"' _ "$NOPR")"
+[[ "$out" == "#7: worker stopped without a PR (a question or a failure?). Check the issue-7 worktree in cmux. The worker may keep running outside the loop and open or update a PR — check for one before you rerun (the loop does not take over an open PR)." ]] \
+  || fail "worker_no_pr 사유에 루프 밖 PR 안내가 없음: $out"
 # 배선: 세 대기가 screen_check 를 idle 바퀴(세션 기록 가드 뒤)와 타임아웃 바퀴 양쪽에서 부르고, 호출부 세 곳(PR 없이 멈춤·충돌 수리·CI 수리)이
 # screen_stop_check 를 본다. 프리셋: claude 는 두 정규식 기본값, codex·그 외는 빈 값. 상수 PROMPT_STALL_SEC=300. 수습 대상 판정에 usage_limit 없음
 [[ "$(grep -c '! screen_check "${handle}" worker 1 || return' "$KIT/files/scripts/ticket-loop.sh")" == 2 && "$(grep -c '! screen_check "${handle}" worker 0 || return' "$KIT/files/scripts/ticket-loop.sh")" == 2 \
@@ -2973,9 +3041,10 @@ grep -q '^    screen_stop_check "${n}"   # 사용량 한도' <(sed -n '/^run_tic
   && grep -q '^PROMPT_STALL_SEC=300 ' "$KIT/files/scripts/ticket-loop.sh" || fail "프리셋(claude 기본값, codex·그 외 빈 값)·PROMPT_STALL_SEC 상수가 다름"
 grep -q 'worker_no_pr) ;; \*) return 1 ;; esac' "$KIT/files/scripts/ticket-loop.sh" && ! grep -q 'usage_limit) resumable' "$KIT/files/scripts/ticket-loop.sh" || fail "usage_limit 가 수습 대상에 들어감"
 for f in docs/loop.md docs/loop.ko.md; do grep -q 'USAGE_LIMIT_REGEX' "$KIT/$f" && grep -q 'PERMISSION_PROMPT_REGEX' "$KIT/$f" && grep -q 'PROMPT_STALL_SEC' "$KIT/$f" || fail "$f 변수 목록에 화면 분류 정규식이 없음"; done
+grep -q '포그라운드' "$KIT/templates/.ticket-loop/worker-rules.md" && grep -q '600000' "$KIT/templates/.ticket-loop/worker-rules.md" || fail "워커 규칙 템플릿에 긴 검증을 포그라운드로 돌리는 규칙이 없음(#69)"
 grep -q '`usage_limit`' "$KIT/files/.agents/skills/loop-triage/SKILL.md" || fail "loop-triage 스킬 종류 표에 usage_limit 가 없음"
 ! grep -q 'USAGE_LIMIT_REGEX\|PERMISSION_PROMPT_REGEX' "$KIT/files/.agents/skills/setup-ticket-loop/SKILL.md" || fail "setup-ticket-loop 결정 표에 화면 분류 정규식을 넣지 않기로 했다"
-echo "ok  strike 전 화면 분류(#10 — 사용량 한도는 수습 없이 usage_limit, 확인 창 PROMPT_STALL_SEC 체류는 idle 없이도 worker_no_pr, 빈 정규식은 전처럼)"
+echo "ok  strike 전 화면 분류(#10 — 사용량 한도는 수습 없이 usage_limit, 확인 창 PROMPT_STALL_SEC 체류는 idle 없이도 worker_no_pr, 빈 정규식은 전처럼, 백그라운드 셸 대기는 BACKGROUND_WAIT_SEC 까지 strike 아님 #69)"
 
 # 터미널에 닿지 못해 멈출 때(#61): 사유가 원인(앱이 N초 응답하지 않음·앱 없음·터미널 없음)을 가르고, 워커가 루프 밖에서 PR 을 열 수 있으니 다시
 # 돌리기 전에 보라는 안내를 싣는다. 앱이 살아 있는데 "app closed?"라고 추측하지 않는다. 수리 대기(repair)는 진짜로 돌려 die 문장을 고정한다 —
@@ -3334,6 +3403,7 @@ grep -q 'setup-ticket-loop' <<<"$out" && grep -q 'In Codex' <<<"$out" || fail "c
 C="$T/npx-cmux"; mkdir -p "$C"; git -C "$C" init -q -b main; git -C "$C" commit -q --allow-empty -m init
 (cd "$C" && node "$KIT/bin/ticket-loop-kit.js" init --yes --backend cmux --no-skills --no-github --no-git-credential >/dev/null) || fail "cmux 백엔드 init 실패"
 grep -qxF 'BACKEND="${BACKEND:-cmux}"' "$C/.ticket-loop/loop.env" || fail "cmux 선택이 loop.env 에 반영되지 않음"
+grep -q '^# .*IDLE_STRIKES·IDLE_RECHECK_SEC·BACKGROUND_WAIT_SEC·BACKGROUND_WAIT_REGEX' "$C/.ticket-loop/loop.env" || fail "새 loop.env 머리 주석에 idle 대기 설정(#69)이 없음"
 grep -q 'WORKTREE_SETUP_CMD' "$C/.ticket-loop/loop.env" || fail "cmux loop.env 에 WORKTREE_SETUP_CMD 안내가 없음"
 (cd "$N" && node "$KIT/bin/ticket-loop-kit.js" init --bogus >/dev/null 2>&1) && fail "모르는 인자를 거절해야 한다"
 echo "ok  npx 껍질 설치·재실행·백엔드 선택·거절"

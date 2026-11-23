@@ -11,6 +11,8 @@ So that a loop that breaks while you are away does not go unnoticed, the loop re
 
 A stop is reported once however the loop ends: a stop condition (no PR, timeout, repairs used up, …), the terminal window closing, Ctrl-C, `kill`, or a command failing under `set -e` (for example `git fetch` or `gh` when the network drops). `kill -9`, power loss and sleep cannot be caught: the script gets no chance to send anything.
 
+**Stopped without a PR (`worker_no_pr`).** The loop stops when the worker is idle without a PR `IDLE_STRIKES` times in a row (default 3) or sits at a confirmation prompt. A worker that ended its turn to wait for a background shell (`1 shell still running` on its screen, `BACKGROUND_WAIT_REGEX`) is given `BACKGROUND_WAIT_SEC` (default 900 s) with the same screen before strikes count. Even after the stop the worker may keep running and open a PR outside the loop, and the loop does not take over an open PR. The reason says so: check for a PR before you rerun. `IDLE_STRIKES`, `IDLE_RECHECK_SEC` and `BACKGROUND_WAIT_SEC` change how long the loop waits (see [Running the loop](loop.md)).
+
 Slack setup (once per computer):
 
 1. <https://api.slack.com/apps> → **Create New App** → **Blank app** (formerly From scratch) → a name (e.g. `ticket-loop`) and the workspace.
