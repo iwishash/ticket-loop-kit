@@ -1681,7 +1681,7 @@ idle_wait_ms() { if [[ "$PROGRESS_SEC" -gt 0 ]]; then echo $(( PROGRESS_SEC * 10
 # ----- 진행 로그 끝 -----
 
 # idle 오판 $1번을 센다(idle_fp_count). 오판은 일하던 워커를 idle로 본 것이다 — 그 뒤 워커가 다시 일했거나(화면이 바뀜·idle이 풀림)
-# PR을 열었다
+# PR을 열었다. strike를 세지 않은 idle(세션 기록이 방금 갱신됨, 백그라운드 셸을 기다림 — background_waiting)은 일하던 것으로 보고 그 자리에서 센다
 idle_fp_add() { local i; for (( i = 0; i < $1; i++ )); do echo >> "${IDLE_FP_FILE:-/dev/null}"; done; }
 
 # idle로 보이는 워커가 실제로는 일하는 중인지를 Claude Code 세션 기록으로 본다 — $1 작업 폴더(워커의 WT_PATH, 수습 세션의 워크트리)의
@@ -1741,7 +1741,7 @@ wait_stop_read() {
 }
 
 # screen_kind 터미널 → usage_limit | permission_prompt | 빈 값을 stdout에 쓰고 SCREEN_KIND에도 둔다(커맨드 치환 없이 불러야 아래 값이 남는다).
-# 맞은 줄은 SCREEN_LINE(앞뒤 공백을 지운 것 — 멈춤 사유에 싣는다), 화면 체크섬은 SCREEN_SUM(확인 창 체류 시간용), 사용량 한도면 화면의
+# 맞은 줄은 SCREEN_LINE(앞뒤 공백을 지운 것 — 멈춤 사유에 싣는다), 화면 체크섬은 SCREEN_SUM(확인 창 체류·백그라운드 대기 시간용), 사용량 한도면 화면의
 # 재설정 시각 문구("resets at …", "try again at …")를 SCREEN_RESET에 둔다(맞은 줄에 재설정 문구가 이미 있으면 비운다 — 화면의 다른 줄, 예컨대
 # 서브에이전트의 API 오류 줄에서 뽑으면 같은 시각을 오류 꼬리와 함께 되풀이한다, #52). 두 문구가 다 있으면 한도가 먼저다.
 # 백그라운드 대기 문구에 맞은 부분은 종류와 따로 SCREEN_BACKGROUND에 둔다
@@ -1798,22 +1798,23 @@ screen_check() {
 
 # 백그라운드 대기 가드(#69) — $1 티켓(로그용). screen_check 바로 뒤에 부른다: 방금 읽은 화면에 백그라운드 대기 문구(SCREEN_BACKGROUND)가 있으면
 # 0 — 턴을 끝내고 백그라운드 셸을 기다리는 워커라 이번 idle은 strike가 아니다. 같은 화면(체크섬)으로 BACKGROUND_WAIT_SEC 이상 기다렸으면 1 —
-# 개발 서버를 켜 둔 채 정말 멈춘 워커도 같은 문구를 보이므로 그때부터 전처럼 strike를 센다. 화면이 바뀌면 시계를 다시 잰다. 워커가 다시 일하거나
+# 개발 서버를 켜 둔 채 정말 멈춘 워커도 같은 문구를 보이므로 그때부터 전처럼 strike를 센다. 확인 창이 함께 있으면(SCREEN_KIND) 1 — 기다리는
+# 워커가 아니다. 화면이 바뀌면 시계를 다시 잰다. 워커가 다시 일하거나
 # 세션 기록이 갱신되면 호출부가 background_reset으로 처음부터 잰다. 로그는 기다리기 시작할 때와 상한을 넘길 때 한 줄씩 — 화면만 바뀐 것은 이어진
 # 대기라 되풀이하지 않는다. 대기 함수가 시작할 때도 background_reset
-BG_SUM=""; BG_AT=0; BG_STATE=""   # BG_STATE: 빈 값(기다리지 않음) | waiting | over(상한을 넘김)
-background_reset() { BG_SUM=""; BG_AT=0; BG_STATE=""; }
+BACKGROUND_SUM=""; BACKGROUND_AT=0; BACKGROUND_STATE=""   # BACKGROUND_STATE: 빈 값(기다리지 않음) | waiting | over(상한을 넘김)
+background_reset() { BACKGROUND_SUM=""; BACKGROUND_AT=0; BACKGROUND_STATE=""; }
 background_waiting() {
   local now
-  if [[ -z "$SCREEN_BACKGROUND" || $BACKGROUND_WAIT_SEC -eq 0 ]]; then background_reset; return 1; fi
+  if [[ -z "$SCREEN_BACKGROUND" || -n "$SCREEN_KIND" || $BACKGROUND_WAIT_SEC -eq 0 ]]; then background_reset; return 1; fi
   now="$(date +%s)"
-  if [[ "$SCREEN_SUM" != "$BG_SUM" ]]; then BG_SUM="$SCREEN_SUM"; BG_AT="$now"; fi
-  if [[ $(( now - BG_AT )) -ge $BACKGROUND_WAIT_SEC ]]; then
-    [[ "$BG_STATE" == over ]] || log "#$1: the screen has shown a background shell (${SCREEN_BACKGROUND}) unchanged for $(( now - BG_AT ))s (BACKGROUND_WAIT_SEC) — counting idle strikes"
-    BG_STATE=over; return 1
+  if [[ "$SCREEN_SUM" != "$BACKGROUND_SUM" ]]; then BACKGROUND_SUM="$SCREEN_SUM"; BACKGROUND_AT="$now"; fi
+  if [[ $(( now - BACKGROUND_AT )) -ge $BACKGROUND_WAIT_SEC ]]; then
+    [[ "$BACKGROUND_STATE" == over ]] || log "#$1: the screen has shown a background shell (${SCREEN_BACKGROUND}) unchanged for $(( now - BACKGROUND_AT ))s (BACKGROUND_WAIT_SEC) — counting idle strikes"
+    BACKGROUND_STATE=over; return 1
   fi
-  [[ "$BG_STATE" == waiting ]] || log "#$1: idle reported, but a background shell is running (${SCREEN_BACKGROUND}) — waiting up to ${BACKGROUND_WAIT_SEC}s while the screen stays the same"
-  BG_STATE=waiting
+  [[ "$BACKGROUND_STATE" == waiting ]] || log "#$1: idle reported, but a background shell is running (${SCREEN_BACKGROUND}) — waiting up to ${BACKGROUND_WAIT_SEC}s while the screen stays the same"
+  BACKGROUND_STATE=waiting
 }
 
 # 대기가 화면 분류로 멈췄으면 여기서 멈춘다(die) — $1 티켓, $2 사유에 덧붙일 맥락(선택, 예 " while repairing PR #34"). 사용량 한도는 수습 없이

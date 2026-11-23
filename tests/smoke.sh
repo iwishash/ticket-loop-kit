@@ -2960,9 +2960,10 @@ out="$(screen_case all "$BG_S" 4 "$BG_S2" claude 300 300)"; [[ "$out" == "1|||3|
 out="$(screen_case "1 2 3 5 6 7 8 9 10 11" "$BG_S" "" "" claude 300 300)"; [[ "$out" == "2|||2|8" && "$(bg_logs)" == "3|1" ]] || fail "기다리던 중 워커가 다시 일하면 상한 시계가 처음부터여야: $out $(bg_logs) (기대 2|||2|8 3|1)"
 out="$(ACTIVE_AT=4 screen_case all "$BG_S" "" "" claude 300 300)"; [[ "$out" == "2|||2|9" && "$(bg_logs)" == "3|1" ]] || fail "기다리던 중 세션 기록이 갱신되면 상한 시계가 처음부터여야: $out $(bg_logs) (기대 2|||2|9 3|1)"
 out="$(screen_case all "$BG_S" 8 "$BG_S2" claude 300 300)"; [[ "$out" == "2|||2|11" && "$(bg_logs)" == "3|1" ]] || fail "strike 를 세던 중 화면이 바뀌면 다시 기다려야: $out $(bg_logs) (기대 2|||2|11 3|1)"
-# 사용량 한도·확인 창이 함께 있으면 그쪽으로 멈춘다
+# 사용량 한도·확인 창이 함께 있으면 가드가 걸리지 않는다(전과 같은 경로 — 한도는 바로, 확인 창은 strike 또는 PROMPT_STALL_SEC 체류)
 out="$(screen_case all "$BG_S"$'\n'"$LIMIT_A")"; [[ "$out" == "1|usage_limit|worker hit the usage limit: "*"|0|0" ]] || fail "백그라운드 문구와 한도 문구가 함께 있으면 usage_limit 이어야: $out"
-out="$(screen_case all "$BG_S"$'\n'"$PROMPT_S")"; [[ "$out" == "1|worker_no_pr|worker is waiting at a confirmation prompt: "*"|0|5" ]] || fail "백그라운드 문구와 확인 창이 함께 있으면 확인 창으로 멈춰야: $out"
+out="$(screen_case all "$BG_S"$'\n'"$PROMPT_S")"; [[ "$out" == "1|||3|0" && "$(bg_logs)" == "0|0" ]] || fail "백그라운드 문구와 확인 창이 함께 있으면 전처럼 strike 세 번: $out $(bg_logs) (기대 1|||3|0 0|0)"
+out="$(screen_case all "$BG_S"$'\n'"$PROMPT_S" "" "" claude 60)"; [[ "$out" == "1|worker_no_pr|worker is waiting at a confirmation prompt: "*"(screen unchanged for 60s)|1|0" ]] || fail "백그라운드 문구와 함께여도 확인 창 체류가 차면 확인 창으로 멈춰야: $out"
 # 수리 대기(repair)·수습 대기(wait_for_verdict)도 같은 분류 — $1 어느 대기, $2 idle 호출 번호들(all | 빈 값), $3 화면, $4 BACKGROUND_WAIT_SEC, $5 이 호출 번호부터 $6 화면으로
 # 바뀜 → "종료 코드|종류|사유|경고 줄 수"
 screen_wait_case() {
@@ -3403,7 +3404,10 @@ grep -q 'setup-ticket-loop' <<<"$out" && grep -q 'In Codex' <<<"$out" || fail "c
 C="$T/npx-cmux"; mkdir -p "$C"; git -C "$C" init -q -b main; git -C "$C" commit -q --allow-empty -m init
 (cd "$C" && node "$KIT/bin/ticket-loop-kit.js" init --yes --backend cmux --no-skills --no-github --no-git-credential >/dev/null) || fail "cmux 백엔드 init 실패"
 grep -qxF 'BACKEND="${BACKEND:-cmux}"' "$C/.ticket-loop/loop.env" || fail "cmux 선택이 loop.env 에 반영되지 않음"
-grep -q '^# .*IDLE_STRIKES·IDLE_RECHECK_SEC·BACKGROUND_WAIT_SEC·BACKGROUND_WAIT_REGEX' "$C/.ticket-loop/loop.env" || fail "새 loop.env 머리 주석에 idle 대기 설정(#69)이 없음"
+for l in 'IDLE_STRIKES="${IDLE_STRIKES:-3}"' 'IDLE_RECHECK_SEC="${IDLE_RECHECK_SEC:-30}"' 'BACKGROUND_WAIT_SEC="${BACKGROUND_WAIT_SEC:-900}"' 'BACKGROUND_WAIT_REGEX="${BACKGROUND_WAIT_REGEX:-[0-9]+ shells? still running}"'; do
+  grep -qxF "# $l" "$C/.ticket-loop/loop.env" || fail "새 loop.env 에 idle 대기 설정(#69) 예시 줄이 없음: $l"
+  grep -qF "$l" "$KIT/files/scripts/ticket-loop.sh" || fail "loop.env 예시의 기본값이 루프 스크립트와 다름: $l"
+done
 grep -q 'WORKTREE_SETUP_CMD' "$C/.ticket-loop/loop.env" || fail "cmux loop.env 에 WORKTREE_SETUP_CMD 안내가 없음"
 (cd "$N" && node "$KIT/bin/ticket-loop-kit.js" init --bogus >/dev/null 2>&1) && fail "모르는 인자를 거절해야 한다"
 echo "ok  npx 껍질 설치·재실행·백엔드 선택·거절"
