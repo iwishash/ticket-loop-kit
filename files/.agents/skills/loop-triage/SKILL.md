@@ -15,7 +15,7 @@ disable-model-invocation: true
 
 ## 1. 멈춤 기록 찾기
 
-- 인자가 파일 경로면 그것, `<id>`(예 `20261016-154317-108`)면 `.ticket-loop/stops/<id>.json`, 숫자 N이면 `ls -t .ticket-loop/stops/*-N.json`의 첫 줄, 없으면 `.ticket-loop/stops/`에서 가장 최근 것. `*.verdict.json`은 기록이 아니다.
+- 인자가 파일 경로면 그것, `<id>`(예 `20261016-154317-108`)면 `.ticket-loop/stops/<id>.json`, 숫자 N이면 `ls -t .ticket-loop/stops/*-N.json`의 첫 줄, 없으면 `.ticket-loop/stops/`에서 가장 최근 것. `*.verdict.json`은 기록이 아니다. `resolved_at`이 적힌 기록은 그 티켓이 이미 병합·정리된 것이다(`resolution`) — 인자 없이 고를 때는 건너뛴다.
 - 사람 모드에서 이 세션이 다른 워크트리에 있으면 기록은 메인 체크아웃(`git worktree list`의 첫 줄)의 `.ticket-loop/stops/`에 있다.
 - 같은 id의 `.verdict.json`이 있으면 무인 수습이 이미 돌았다. 먼저 읽고 그 판정·요약·`kit_bug_report`에서 이어 간다.
 

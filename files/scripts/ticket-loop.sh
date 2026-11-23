@@ -178,6 +178,9 @@ set -euo pipefail
 # kill -9·전원 꺼짐·잠자기처럼 스크립트가 아무것도 보내지 못하는 경우는 잡지 못한다.
 # 멈출 때마다 멈춤 기록(.ticket-loop/stops/<id>.json — 사유·이슈·PR·로그 경로·워크트리·다시 실행할 명령, 기계별)을 남긴다.
 # 사람은 그 저장소의 에이전트 세션에서 /loop-triage <id>(Codex는 $loop-triage)로 그 기록부터 이어받는다.
+# 멈춘 티켓을 사람이 이어받아 루프 밖에서 병합했으면, 다음 실행이 시작할 때 그 멈춤 기록을 보고 남은 것(백엔드 워크스페이스·워커 워크트리·
+# 로컬·원격 브랜치)을 루프가 직접 병합했을 때처럼 지우고, 그 병합을 병합 뒤 검증 창에 넣고, 기록에 해결을 표시한다(resolved_at·resolution).
+# --dry-run은 무엇을 지울지만 찍는다. PR이 열려 있거나 병합 없이 닫힌 티켓의 기록은 건드리지 않는다.
 #
 # 무인 수습(LOOP_TRIAGE=1, 기본): 아래 네 경우에는 멈추기 전에 멈춤 기록을 쓰고, 워커처럼 새 워크트리에 에이전트를 띄워
 # `/loop-triage <기록>`을 시킨 뒤 판정 파일(<id>.verdict.json — resume | halt)을 기다린다. Slack에는 "수습 시작"과 결과가 간다.
@@ -719,7 +722,7 @@ PM_STATE_FILE="${LOCK_DIR%/*}/ticket-loop-post-merge.json"
 if [[ $DRY_RUN -eq 0 ]]; then
   # 멈춤은 어떻게 끝나든 한 번 보고한다(on_exit·on_signal). 잠금을 못 잡고 멈추면 on_exit는 잠금을 지우지 않는다(다른 루프의 것)
   trap on_exit EXIT; trap 'on_signal HUP' HUP; trap 'on_signal INT' INT; trap 'on_signal TERM' TERM; trap 'on_signal PIPE' PIPE
-  mkdir "$LOCK_DIR" 2>/dev/null || die "Another loop is running (${LOCK_DIR}). If no loop is running (pgrep -fl ticket-loop), remove that directory."
+  mkdir "$LOCK_DIR" 2>/dev/null || die "Another loop is running (${LOCK_DIR}). If no loop is running (pgrep -fl 'bash .*ticket-loop\.sh' — a bare 'ticket-loop' also matches worker agents, whose prompt names the script), remove that directory."
   LOCK_HELD=1
   REACH_STATE_DIR="$(mktemp -d "${TMPDIR:-/tmp}/ticket-loop-terminal.XXXXXX")"   # 백엔드 대기가 서브셸을 넘어 남기는 터미널 상태(reach_*) — on_exit가 지운다
 fi
@@ -936,6 +939,9 @@ pick_next_targets() {
 #                                WT_PATH, WT_BRANCH(백엔드가 만든 브랜치 — 워커가 바꾸기 전 이름), HANDLE(에이전트 터미널)을 채운다.
 #                                NAME(워크트리·브랜치 이름)은 기본 <BRANCH_PREFIX>N — 무인 수습 세션은 loop-triage-N-<시각>을 준다
 #   _worktree_remove WT WT_PATH  워크트리를 지운다(브랜치 정리는 공통부가 한다)
+#   _worktree_find WT_PATH       멈춘 실행이 남긴 워크스페이스(WT를 모른다) — 그 경로를 지금 디렉터리로 둔 것을 "id<TAB>이름"으로 한 줄씩.
+#                                이름으로는 찾지 않는다(cmux·tmux는 저장소를 가리지 않아 다른 저장소의 issue-N이 걸린다)
+#   _worktree_sweep WT_PATH      _worktree_find가 찾은 것을 닫고(살아 있는 워커 프로세스도 끝난다) 워크트리를 지운다. 이미 없는 것은 건너뛴다
 #   _send HANDLE TEXT            프롬프트 한 줄을 에이전트 입력에 넣고 제출한다. 수락되지 않으면 비0
 #   _type HANDLE TEXT            셸 명령 한 줄을 입력하고 Enter(에이전트 재기동용 — 에이전트 입력 검사 없이)
 #   _interrupt HANDLE            Ctrl-C
@@ -946,6 +952,8 @@ pick_next_targets() {
 backend_check()           { "${BACKEND}_check" "$@"; }
 backend_worktree_create() { "${BACKEND}_worktree_create" "$@"; }
 backend_worktree_remove() { "${BACKEND}_worktree_remove" "$@"; }
+backend_worktree_find()   { "${BACKEND}_worktree_find" "$@"; }
+backend_worktree_sweep()  { "${BACKEND}_worktree_sweep" "$@"; }
 backend_send()            { "${BACKEND}_send" "$@"; }
 backend_type()            { "${BACKEND}_type" "$@"; }
 backend_interrupt()       { "${BACKEND}_interrupt" "$@"; }
@@ -1067,6 +1075,13 @@ orca_worktree_create() {
 }
 
 orca_worktree_remove() { orca_json worktree rm --worktree "id:$1" --force >/dev/null; }
+# Orca는 워크트리가 곧 워크스페이스다 — 따로 닫을 것이 없다. 지울 때는 경로 선택자로 Orca에 맡기고(터미널을 닫고 등록을 지운다),
+# Orca가 모르는 워크트리면 git으로 지운다
+orca_worktree_find() { :; }
+orca_worktree_sweep() {
+  orca_json worktree rm --worktree "path:$1" --force >/dev/null 2>&1 || true
+  worktree_drop "$1"
+}
 
 orca_send() {
   orca_json terminal send --terminal "$1" --text "$2" --enter --wait-submit 15 \
@@ -1150,6 +1165,12 @@ claude_trust_check() {
   trusted="$(jq -r --arg p "$MAIN_WT" '.projects[$p].hasTrustDialogAccepted // false' "$cfg" 2>/dev/null)" || return 0
   [[ "$trusted" == true ]] \
     || die "Claude Code does not trust ${MAIN_WT} yet — workers would stall at the trust dialog in a new worktree. Open claude once in the main checkout and choose 'Yes, I trust this folder'."
+}
+
+# 워크트리 $1이 디스크에 있고 이 저장소에 등록돼 있으면 지운다. 디렉터리만 사라진 등록은 호출부의 `git worktree prune`이 지운다
+worktree_drop() {
+  [[ -d "$1" ]] && git -C "$ROOT" worktree list --porcelain | grep -Fx "worktree $1" >/dev/null || return 0
+  git -C "$ROOT" worktree remove --force "$1"
 }
 
 # 워크트리는 루프가 git으로 만든다 (Orca는 orca worktree create가 한다)
@@ -1282,6 +1303,20 @@ cmux_worktree_remove() {
   # 에이전트 프로세스가 살아 있는 워크스페이스라 --force가 필요하다(없으면 confirmation_required로 거부)
   CMUX_QUIET=1 "$CMUX_CLI" workspace close "$1" --force >/dev/null 2>&1 || true
   git -C "$ROOT" worktree remove --force "$2"
+}
+
+# 앱이 답하지 않으면 기다리지 않고 1 — 시작할 때의 정리(#67)는 루프를 붙잡지 않는다(다음 실행이 다시 본다)
+cmux_worktree_find() {
+  local out
+  out="$(cmux_j workspace list --id-format uuids 2>/dev/null)" || return 1
+  jq -r --arg p "$1" '.workspaces[]? | (.current_directory // "") as $d | select($d == $p or ($d | startswith($p + "/"))) | "\(.id)\t\(.custom_title // "")"' <<<"$out"
+}
+cmux_worktree_sweep() {
+  local id _
+  while IFS=$'\t' read -r id _; do
+    [[ -z "$id" ]] || CMUX_QUIET=1 "$CMUX_CLI" workspace close "$id" --force >/dev/null 2>&1 || true
+  done < <(cmux_worktree_find "$1" || true)
+  worktree_drop "$1"
 }
 
 # 붙여 넣은 뒤 lifecycle이 직전 턴의 idle에서 벗어나는지 SEND_ACCEPT_SEC 동안 본다(tmux의 sent→running 확인과 같은 뜻). 붙여 넣은
@@ -1465,6 +1500,19 @@ tmux_worktree_remove() {
   git -C "$ROOT" worktree remove --force "$2"
   # 창을 닫으면 에이전트의 SessionEnd 훅이 뒤늦게 exited를 쓸 수 있어(실측) 파일이 남기도 한다. 다음 티켓은 만들 때 running으로 덮으니 무해하다
   rm -f "$TMUX_DIR/state/$(basename "$2")"
+}
+
+tmux_worktree_find() {
+  "$TMUX_CLI" list-windows -a -F "#{window_id}"$'\t'"#{window_name}"$'\t'"#{pane_current_path}" 2>/dev/null \
+    | awk -F'\t' -v p="$1" '$3 == p || index($3, p "/") == 1 { print $1 "\t" $2 }'
+}
+tmux_worktree_sweep() {
+  local id _
+  while IFS=$'\t' read -r id _; do
+    [[ -z "$id" ]] || "$TMUX_CLI" kill-window -t "$id" >/dev/null 2>&1 || true
+  done < <(tmux_worktree_find "$1" || true)
+  worktree_drop "$1"
+  rm -f "$TMUX_DIR/state/$(basename "$1")"
 }
 
 tmux_type()      { "$TMUX_CLI" send-keys -t "$1" -l -- "$2" && sleep 0.3 && "$TMUX_CLI" send-keys -t "$1" Enter; }
@@ -3008,6 +3056,146 @@ write_spec_report() {
   fi
 }
 
+# ---------- 병합된 티켓 정리 ----------
+
+# 병합된 티켓이 남긴 것을 지운다 — 백엔드 워크스페이스(터미널) → 워커 워크트리 → 로컬 브랜치 → 원격 브랜치. 루프가 직접 병합한 티켓(run_ticket)과
+# 멈춘 뒤 루프 밖에서 병합된 티켓(sweep_merged_stops, #67)이 같이 쓴다. ticket-state.sh가 찍는 손 정리 명령도 이 순서다(#68).
+# $1 이슈 $2 PR의 head 브랜치(모르면 빈 값) $3 워크트리 경로 $4 워크트리를 만들 때의 브랜치(루프·Orca가 만든 것, 없으면 빈 값)
+# $5 백엔드 워크스페이스 id — 비면(멈춘 실행의 것이라 모른다) 워크트리 경로로 찾아 닫는다(backend_worktree_sweep)
+ticket_cleanup() {
+  local n="$1" branch="$2" wt_path="$3" wt_branch="$4" wt="${5:-}"
+  if [[ -n "$wt" ]]; then
+    backend_worktree_remove "${wt}" "${wt_path}" || log warn "#${n}: failed to remove the worktree — clean up manually (${wt}, ${wt_path})"
+  elif [[ -n "$wt_path" ]]; then
+    backend_worktree_sweep "${wt_path}" || log warn "#${n}: failed to remove the worktree — clean up manually (${wt_path})"
+  fi
+  git -C "$ROOT" worktree prune || true
+  [[ -z "$branch" ]] || git -C "$ROOT" branch -D "${branch}" >/dev/null 2>&1 || true
+  if [[ -n "$wt_branch" && "$wt_branch" != "HEAD" && "$wt_branch" != "$BASE_BRANCH" ]]; then
+    git -C "$ROOT" branch -D "${wt_branch}" >/dev/null 2>&1 || true
+  fi
+  [[ -z "$branch" ]] || git -C "$ROOT" push -q origin --delete "${branch}" >/dev/null 2>&1 || true
+}
+
+# 이슈 $1의 멈춤 기록에 해결을 표시한다(resolved_at·resolution·resolved_pr) — 시작할 때의 훑기(sweep_merged_stops)가 다시 보지 않는다.
+# $2 merged-by-loop(루프가 병합) | merged-outside-loop(멈춘 뒤 루프 밖에서 병합), $3 PR
+stops_resolve() {
+  local n="$1" how="$2" pr="${3:-}" dir="${ROOT}/.ticket-loop/stops" f now
+  [[ -d "$dir" ]] || return 0
+  now="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+  for f in "$dir"/*.json; do
+    [[ -f "$f" && "$f" != *.verdict.json ]] || continue
+    jq -e --argjson n "$n" '.issue == $n and .resolved_at == null' "$f" >/dev/null 2>&1 || continue
+    if jq --arg at "$now" --arg how "$how" --arg pr "$pr" \
+         '. + {resolved_at: $at, resolution: $how, resolved_pr: (if $pr == "" then null else ($pr | tonumber) end)}' "$f" > "$f.tmp" 2>/dev/null; then
+      mv -f "$f.tmp" "$f"
+    else
+      rm -f "$f.tmp"; log warn "#${n}: could not mark the stop record resolved (${f#"$ROOT"/})"
+    fi
+  done
+}
+
+# 멈춘 티켓을 사람이 이어받아 루프 밖에서 병합하면, 다음 실행은 그 이슈를 대상으로 보지 않아 그 티켓 몫이 그대로 남았다(#67). 실측(pdmate
+# #153, 0.9.31): 사용량 한도로 멈춘 워커를 사람이 이어 PR을 병합한 뒤 rerun을 돌리자 "No tickets to process."로 끝났고, cmux 워크스페이스와
+# 그 안의 워커 프로세스(3시간째)·워커 워크트리·로컬·원격 브랜치가 남았으며 그 병합은 병합 뒤 검증을 거치지 않았다.
+# 시작할 때(대상 조회 전) 해결 표시가 없는 멈춤 기록을 훑어, 이슈가 닫혔고 그 티켓의 PR이 병합된 것에:
+#   - 루프가 직접 병합했을 때와 같은 정리를 돌린다(ticket_cleanup). 워크스페이스는 id를 모르니 워크트리 경로로 찾는다
+#   - 병합 커밋을 병합 뒤 검증 창에 넣는다 — 창이 찼거나 실행이 끝날 때 평소처럼 검증한다. 그 병합이 스펙을 끝냈으면 스펙도 닫고 창에 적는다.
+#     이미 창에 있거나 통과한 검증(PM_BASE)이 덮은 커밋이면 넣지 않는다. 루프가 병합한 티켓(티켓 기록에 그 PR의 merged)도 넣지 않는다 —
+#     병합 뒤 검증 실패로 멈춘 기록이 그렇다(그 창은 PM_STATE_FILE에 남아 있다)
+#   - STOPPED_LABEL·IN_REVIEW_LABEL을 떼고, 기록에 해결을 표시한다(stops_resolve)
+# PR은 open_pr_for와 같은 규칙(head가 <BRANCH_PREFIX>N 이거나 N-로 시작) 또는 기록의 PR 번호로 찾는다 — 병합된 최근 300건 안에서.
+# 이슈가 열려 있거나 병합된 PR이 없으면(PR이 열려 있음·병합 없이 닫힘) 건드리지 않는다. --dry-run은 무엇을 할지만 찍는다.
+# 조회가 실패하면 멈추지 않고 건너뛴다 — 기록이 그대로라 다음 실행이 다시 본다
+sweep_merged_stops() {
+  local dir="${ROOT}/.ticket-loop/stops" f open="" n prs="" files facts row rec_pr rec_wt rec_spec rec_backend
+  local pr branch commit how wt_path spec left note b fetched=0 head
+  [[ -d "$dir" ]] || return 0
+  for f in "$dir"/*.json; do
+    [[ -f "$f" && "$f" != *.verdict.json ]] || continue
+    open+="$(jq -r --arg f "$f" --arg repo "$OWNER_REPO" \
+      'select(.issue != null and .resolved_at == null and ((.repo // $repo) == $repo)) | "\(.issue)\t\($f)"' "$f" 2>/dev/null || true)"$'\n'
+  done
+  [[ -n "${open//$'\n'/}" ]] || return 0
+  for n in $(cut -f1 <<<"$open" | grep . | sort -un); do
+    [[ "$(gh issue view "$n" --json state -q .state 2>/dev/null || true)" == CLOSED ]] || continue
+    if [[ -z "$prs" ]]; then
+      prs="$(gh pr list --state merged --limit 300 --json number,headRefName,mergeCommit,mergedAt 2>/dev/null)" \
+        || { log warn "stop records: could not list merged PRs (GitHub) — tickets merged outside the loop are left for the next run"; return 0; }
+    fi
+    files="$(awk -F'\t' -v n="$n" '$1 == n { print $2 }' <<<"$open")"
+    # 그 이슈의 기록들에서 — PR·워크트리·스펙은 적힌 것 가운데 마지막, 백엔드는 마지막 기록의 것(한 줄에 하나)
+    facts="$(while IFS= read -r f; do cat "$f"; done <<<"$files" | jq -rs 'sort_by(.created_at)
+      | (map(.pr // empty) | last // ""), (map(.worker_worktree // empty) | last // ""), (map(.spec // empty) | last // ""), (last.backend // "")' 2>/dev/null || true)"
+    { read -r rec_pr; read -r rec_wt; read -r rec_spec; read -r rec_backend; } <<<"$facts" || true
+    row="$(jq -r --arg b "${BRANCH_PREFIX}${n}" --arg pr "${rec_pr:-}" '
+      map(select((.number | tostring) == $pr or .headRefName == $b or (.headRefName | startswith($b + "-")))) | sort_by(.mergedAt) | last
+      | if . == null then empty else .number, .headRefName, (.mergeCommit.oid // "") end' <<<"$prs" 2>/dev/null || true)"
+    [[ -n "$row" ]] || continue
+    { read -r pr; read -r branch; read -r commit; } <<<"$row" || true
+    [[ "$branch" != "$BASE_BRANCH" ]] || branch=""
+    how=merged-outside-loop
+    if [[ -f "$RECORDS_FILE" ]] && { grep '^{' "$RECORDS_FILE" || true; } \
+         | jq -es --argjson n "$n" --argjson pr "$pr" 'any(.[]; .issue == $n and .result == "merged" and .pr == $pr)' >/dev/null 2>&1; then
+      how=merged-by-loop
+    fi
+    # 워커 워크트리 — 기록의 경로, 없으면 이름이 <BRANCH_PREFIX>N인 등록된 워크트리, 그것도 없으면 루프가 만드는 자리(cmux·tmux)
+    wt_path="${rec_wt:-}"
+    [[ -n "$wt_path" ]] || wt_path="$(git -C "$ROOT" worktree list --porcelain | sed -n 's/^worktree //p' \
+      | awk -v s="/${BRANCH_PREFIX}${n}" 'length($0) > length(s) && substr($0, length($0) - length(s) + 1) == s { print; exit }' || true)"
+    [[ -n "$wt_path" || -z "$WORKTREE_DIR" ]] || wt_path="${WORKTREE_DIR}/${BRANCH_PREFIX}${n}"
+    [[ "$wt_path" != "$MAIN_WT" && "$wt_path" != "$ROOT" ]] || wt_path=""
+    # 남은 것 — 로그 한 줄에 적는다
+    left=""
+    if [[ -n "$wt_path" ]]; then
+      # 다른 백엔드에서 멈춘 기록이면 그쪽 워크스페이스는 이 실행이 닫지 못한다 — 알리기만 한다
+      [[ -z "${rec_backend:-}" || "$rec_backend" == "$BACKEND" ]] \
+        || log warn "#${n}: the stop was recorded on the ${rec_backend} backend and this run uses ${BACKEND} — if a ${rec_backend} workspace is still open for it, close it yourself"
+      [[ -z "$(backend_worktree_find "$wt_path" 2>/dev/null || true)" ]] || left+="the ${BACKEND_NAME} workspace"
+      [[ ! -d "$wt_path" ]] || left+="${left:+, }the worktree ${wt_path}"
+    fi
+    for b in "$branch" "${BRANCH_PREFIX}${n}"; do
+      [[ -n "$b" && ", ${left}," != *", local branch ${b},"* ]] || continue
+      ! git -C "$ROOT" show-ref --verify -q "refs/heads/${b}" || left+="${left:+, }local branch ${b}"
+    done
+    [[ -z "$branch" ]] || ! git -C "$ROOT" ls-remote --exit-code --heads origin "refs/heads/${branch}" >/dev/null 2>&1 || left+="${left:+, }origin/${branch}"
+    if [[ $how == merged-by-loop ]]; then
+      # 루프가 병합한 티켓의 기록(병합 뒤 검증 실패로 멈춤 등) — 보통 남은 것이 없다. 조용히 해결만 표시한다
+      [[ -n "$left" ]] || { [[ $DRY_RUN -eq 1 ]] || stops_resolve "$n" "$how" "$pr"; continue; }
+      head="#${n}: PR #${pr} was merged by the loop, but an earlier stop left something behind"
+    else
+      head="#${n}: PR #${pr} was merged outside the loop after the stop"
+    fi
+    if [[ $DRY_RUN -eq 1 ]]; then
+      log "${head} — a real run cleans up ${left:-nothing (nothing is left)}$([[ $how != merged-outside-loop || $POST_MERGE -ne 1 ]] || echo " and queues the merge for the post-merge check")"
+      continue
+    fi
+    ticket_cleanup "$n" "$branch" "$wt_path" "${BRANCH_PREFIX}${n}"
+    note=""
+    if [[ $how == merged-outside-loop ]]; then
+      gh issue edit "$n" --remove-label "$IN_REVIEW_LABEL" >/dev/null 2>&1 || true
+      gh issue edit "$n" --remove-label "$STOPPED_LABEL" >/dev/null 2>&1 || true
+      spec="${rec_spec:-}"; [[ -n "$spec" ]] || spec="$(PARENT="" spec_of_ticket "$n")"
+      close_spec_if_done "$spec"
+      if [[ $POST_MERGE -eq 1 ]]; then
+        [[ $fetched -eq 1 ]] || { git -C "$ROOT" fetch -q origin "$BASE_BRANCH" || true; fetched=1; }   # 병합 커밋과 그 부모(창의 시작)를 읽으려고
+        if grep -q "^${n}"$'\t' <<<"$PM_PENDING"; then note="already waiting for the post-merge check"
+        elif [[ -n "$commit" && -n "$PM_BASE" ]] && git -C "$ROOT" merge-base --is-ancestor "$commit" "$PM_BASE" 2>/dev/null; then
+          note="a passed post-merge check already covers the merge"
+        elif ci_expected "$pr" || spec_closed_this_run "$spec"; then   # run_ticket과 같은 조건 — CI가 안 붙는 문서 PR은 창에 넣지 않는다
+          pm_add "$n" "$pr" "$commit"; note="queued for the post-merge check"
+        else note="not queued for the post-merge check (path excluded from CI)"
+        fi
+        pm_spec_closed "$spec"
+      else
+        note="the post-merge check is off, so the merge is not queued for it"
+      fi
+    fi
+    stops_resolve "$n" "$how" "$pr"
+    log step "${head} — cleaned up ${left:-nothing (nothing was left)}${note:+; ${note}}"
+  done
+}
+
 # ---------- 티켓 하나 ----------
 
 run_ticket() {
@@ -3133,6 +3321,7 @@ run_ticket() {
   fi
   gh issue edit "${n}" --remove-label "$IN_REVIEW_LABEL" >/dev/null 2>&1 || true
   gh issue edit "${n}" --remove-label "$STOPPED_LABEL" >/dev/null 2>&1 || true   # 지난 실행이 멈추며 붙인 라벨(코멘트는 기록으로 남는다)
+  stops_resolve "${n}" merged-by-loop "${pr}"   # 이 티켓의 지난 멈춤 기록 — 다음 실행의 훑기(sweep_merged_stops)가 다시 보지 않게
   local spec; spec="$(spec_of_ticket "${n}")"
   close_spec_if_done "$spec"
 
@@ -3163,13 +3352,7 @@ run_ticket() {
   local branch; branch="$(gh pr view "${pr}" --json headRefName -q .headRefName || true)"
   [[ -n "$branch" ]] || log warn "#${n}: could not read the head branch of PR #${pr} — delete it yourself (local and origin)"
   backend_set_status "${wt}" completed "${pr}" "PR #${pr} 병합 완료" || true
-  backend_worktree_remove "${wt}" "${wt_path}" || log warn "#${n}: failed to remove the worktree — clean up manually (${wt}, ${wt_path})"
-  git -C "$ROOT" worktree prune || true
-  [[ -z "$branch" ]] || git -C "$ROOT" branch -D "${branch}" >/dev/null 2>&1 || true
-  if [[ -n "$orca_branch" && "$orca_branch" != "HEAD" && "$orca_branch" != "$BASE_BRANCH" ]]; then
-    git -C "$ROOT" branch -D "${orca_branch}" >/dev/null 2>&1 || true
-  fi
-  [[ -z "$branch" ]] || git -C "$ROOT" push -q origin --delete "${branch}" >/dev/null 2>&1 || true
+  ticket_cleanup "${n}" "$branch" "${wt_path}" "$orca_branch" "${wt}"
   # 병합 뒤 검증이 실패했으면 멈추기 전에 무인 수습을 띄운다(post_merge_recover). 이 티켓은 이미 병합됐으므로 수습 결과와 무관하게
   # 기록은 merged다 — 멈추면 die가 알린다
   if [[ $post_rc -ne 0 ]]; then
@@ -3189,6 +3372,7 @@ KIT_VERSION="$(kit_version)"
 kit_banner "ticket-loop-kit ${KIT_VERSION}"
 backend_check
 pm_load
+sweep_merged_stops   # 멈춘 뒤 루프 밖에서 병합된 티켓의 정리·검증 창(#67) — 대상 조회 전에
 # 시작 전에는 사람이 앞에 있다 — 조회가 실패하면 바로 멈추고, 후보 0행(2)은 재확인 없이 빈 목록 그대로다(재확인은 티켓 사이 — pick_next_targets).
 # 번호 지정이면 먼저 번호마다 상태·스펙 여부를 본다(닫힌 번호는 빼고, 스펙 이슈면 멈춘다 — #46·#53)
 [[ $TICKETS_GIVEN -eq 0 ]] || given_tickets_check

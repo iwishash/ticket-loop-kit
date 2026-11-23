@@ -372,7 +372,7 @@ echo "ok  ticket-loop.sh --help"
 
 # 백엔드마다 같은 함수 집합을 구현해야 한다(공통부는 backend_* 만 부른다)
 for b in orca cmux tmux; do
-  for f in check worktree_create worktree_remove send type interrupt wait_idle tail set_status; do
+  for f in check worktree_create worktree_remove worktree_find worktree_sweep send type interrupt wait_idle tail set_status; do
     grep -qE "^${b}_${f}\(\)" "$KIT/files/scripts/ticket-loop.sh" || fail "백엔드 ${b} 에 ${b}_${f} 함수가 없다"
   done
 done
@@ -908,7 +908,7 @@ spec_case '[{"number":41,"state":"closed"},{"number":42,"state":"closed"}]' clos
 spec_case '[{"number":41,"state":"closed"},{"number":42,"state":"open"}]' kept
 spec_case '[]' kept
 (cd "$S" && PATH="$S:$PATH" GH_LOG="$S/gh.log" SUBS="$S/subs.json" bash -c 'set -euo pipefail; source fn.sh; log() { :; }; close_spec_if_done ""; close_spec_if_done 0') || fail "빈 스펙 번호에서 실패"
-grep -c 'close_spec_if_done "' "$KIT/files/scripts/ticket-loop.sh" | grep -qx 3 || fail "close_spec_if_done 호출이 세 곳(티켓 뒤·티켓 없음·정상 종료)이 아니다"
+grep -c 'close_spec_if_done "' "$KIT/files/scripts/ticket-loop.sh" | grep -qx 4 || fail "close_spec_if_done 호출이 네 곳(티켓 뒤·루프 밖 병합 정리(#67)·티켓 없음·정상 종료)이 아니다"
 echo "ok  스펙 이슈 자동 닫기"
 
 # 회고 안내: 끝난 스펙이 있을 때만, 권고 문구로, 리포트가 있으면 경로·없으면 뽑는 방법, retro 스킬이 없으면 그 사실 — 아무것도 실행하지 않는다
@@ -1625,6 +1625,56 @@ done
 out="$(cd "$T" && HOME="$DS/home" PATH="$DS/bin:$PATH" BACKEND=tmux AGENT=codex POST_MERGE_CMD=c bash scripts/ticket-loop.sh --dry-run --skip-post-merge 2>&1)" || fail "--skip-post-merge --dry-run 실패: $out"
 sed 's/^\[[^]]*\] //' <<<"$out" | grep -qxF 'post-merge check: off' || fail "검증을 끈 실행의 시작 줄: $out"
 echo "ok  시작 줄의 검증 주기 — --dry-run(${shells[*]})"
+# #67 을 스크립트째로: 멈춤 기록의 티켓이 루프 밖에서 병합된 저장소에서 대상 0건으로 돌린다(가짜 gh·tmux, 진짜 git). --dry-run 은 찍기만 하고,
+# 실제 실행은 워크트리·브랜치를 지우고 그 병합의 검증 로그(post-merge-153-end.log)를 남기고 기록에 해결을 표시한다. bash 3.2 로도 돌린다
+OM="$(cd "$T" && pwd -P)/outside-merge"; mkdir -p "$OM/bin" "$OM/home"
+cat > "$OM/bin/gh" <<'GH'
+#!/bin/bash
+case "$1 $2" in
+  "repo view") case "$*" in *nameWithOwner*) echo o/r ;; *defaultBranchRef*) echo main ;; *) echo https://example.test/o/r ;; esac ;;
+  "issue list") echo '[]' ;;
+  "issue view") case "$*" in *title*) echo "T$3" ;; *) echo CLOSED ;; esac ;;
+  "pr list") cat "$OM/prs.json" ;;
+  "issue edit") echo "edit $3 $5" >> "$OM/edits" ;;
+  *) echo "unexpected gh $*" >&2; exit 1 ;;
+esac
+GH
+printf '#!/bin/bash\nexit 0\n' > "$OM/bin/tmux"; printf '#!/bin/bash\nexit 0\n' > "$OM/bin/osascript"; chmod +x "$OM/bin/"*
+om_run() { (cd "$OM/repo" && HOME="$OM/home" XDG_CONFIG_HOME="$OM/home/.config" PATH="$OM/bin:$PATH" OM="$OM" BACKEND=tmux AGENT=codex WORKTREE_DIR="$OM/wts" \
+  POST_MERGE_CMD='echo checked-at "$(git rev-parse HEAD)"' POST_MERGE_RETRY_CMD= SLACK_WEBHOOK_URL= LOOP_TRIAGE=0 REPORT_OPEN=0 "$@" 2>&1); }
+for shell in "${shells[@]}"; do
+  rm -rf "$OM/repo" "$OM/origin.git" "$OM/wts" "$OM/home/.cache" "$OM/edits"
+  git -C "$OM" init -q --bare origin.git; git clone -q "$OM/origin.git" "$OM/repo" 2>/dev/null
+  git -C "$OM/repo" -c user.name=t -c user.email=t@t commit -q --allow-empty -m init
+  git -C "$OM/repo" -c user.name=t -c user.email=t@t commit -q --allow-empty -m 'merge #153'; OMC="$(git -C "$OM/repo" rev-parse HEAD)"
+  git -C "$OM/repo" push -q origin HEAD:main 2>/dev/null; git -C "$OM/repo" fetch -q origin
+  mkdir -p "$OM/repo/scripts" "$OM/repo/.ticket-loop/stops"; cp "$KIT/files/scripts/ticket-loop.sh" "$OM/repo/scripts/"
+  git -C "$OM/repo" worktree add -q -b issue-153 "$OM/wts/issue-153" origin/main; git -C "$OM/wts/issue-153" checkout -q -b issue-153-bot
+  git -C "$OM/wts/issue-153" push -q origin issue-153-bot 2>/dev/null
+  jq -n --arg wt "$OM/wts/issue-153" '{id: "20261121-080705-153", kind: "usage_limit", mode: "manual", created_at: "2026-11-20T23:07:05Z", repo: "o/r", issue: 153, spec: 141, pr: null,
+    worker_worktree: $wt, backend: "tmux", rerun: "bash scripts/ticket-loop.sh --parent 141"}' > "$OM/repo/.ticket-loop/stops/20261121-080705-153.json"
+  jq -n --arg c "$OMC" '[{number: 167, headRefName: "issue-153-bot", mergeCommit: {oid: $c}, mergedAt: "2026-11-21T01:00:00Z"}]' > "$OM/prs.json"
+  rc=0; out="$(om_run "$shell" scripts/ticket-loop.sh --dry-run)" || rc=$?
+  [[ $rc -eq 0 ]] && grep -qF "#153: PR #167 was merged outside the loop after the stop — a real run cleans up the worktree $OM/wts/issue-153, local branch issue-153-bot, local branch issue-153, origin/issue-153-bot and queues the merge for the post-merge check" <<<"$out" \
+    && [[ -d "$OM/wts/issue-153" && ! -e "$OM/edits" && "$(jq -r .resolved_at "$OM/repo/.ticket-loop/stops/20261121-080705-153.json")" == null && ! -e "$OM/repo/.git/ticket-loop-post-merge.json" ]] \
+    || fail "#67 스크립트째 --dry-run($shell, rc=$rc): $out"
+  rc=0; out="$(om_run "$shell" scripts/ticket-loop.sh)" || rc=$?
+  pmlog="$(ls "$OM/repo/.ticket-loop/"post-merge-153*.log 2>/dev/null | head -n 1)"
+  [[ $rc -eq 0 ]] && ! grep -q 'syntax error\|unbound variable\|ERROR' <<<"$out" \
+    && grep -qF "#153: PR #167 was merged outside the loop after the stop — cleaned up the worktree $OM/wts/issue-153, local branch issue-153-bot, local branch issue-153, origin/issue-153-bot; queued for the post-merge check" <<<"$out" \
+    && grep -q 'post-merge check: 1 merged ticket from an earlier run not checked yet (#153)' <<<"$out" && grep -q 'No tickets to process\.' <<<"$out" \
+    && grep -q 'post-merge check at the end of the run: passed' <<<"$out" \
+    || fail "#67 스크립트째 실행($shell, rc=$rc): $out"
+  [[ -n "$pmlog" ]] && grep -qF "checked-at $OMC" "$pmlog" || fail "#67: 루프 밖 병합의 검증 로그가 없거나 그 커밋에서 돌지 않음($shell): $pmlog $(cat "$pmlog" 2>/dev/null)"
+  [[ ! -e "$OM/wts/issue-153" && -z "$(git -C "$OM/repo" branch --list issue-153 issue-153-bot)" && -z "$(git -C "$OM/repo" ls-remote --heads origin issue-153-bot)" ]] || fail "#67: 스크립트째 실행 뒤 워크트리·브랜치가 남음($shell)"
+  [[ "$(jq -r '[.resolution, .resolved_pr] | join("|")' "$OM/repo/.ticket-loop/stops/20261121-080705-153.json")" == "merged-outside-loop|167" \
+     && "$(sort "$OM/edits" | paste -sd , -)" == "edit 153 in-review,edit 153 loop-stopped" && "$(jq -c '.pending' "$OM/repo/.git/ticket-loop-post-merge.json")" == "[]" ]] \
+    || fail "#67: 스크립트째 실행 뒤 기록·라벨·창($shell): $(cat "$OM/repo/.ticket-loop/stops/20261121-080705-153.json") / $(cat "$OM/edits" 2>/dev/null) / $(cat "$OM/repo/.git/ticket-loop-post-merge.json" 2>/dev/null)"
+  # 다시 돌리면 그 기록을 다시 처리하지 않는다
+  out="$(om_run "$shell" scripts/ticket-loop.sh)" || fail "#67: 두 번째 실행 실패($shell): $out"
+  ! grep -q 'merged outside the loop' <<<"$out" || fail "#67: 해결된 기록을 두 번째 실행이 다시 처리함($shell): $out"
+done
+echo "ok  루프 밖 병합 — 스크립트째 --dry-run·정리·검증 로그·해결 표시(#67, ${shells[*]})"
 grep -q 'LOG_START_BYTES=$(( $(wc -c < "$LOG_FILE") ))' "$KIT/files/scripts/ticket-loop.sh" || fail "시작 때 로그 파일 크기(LOG_START_BYTES)를 기억하지 않음"
 grep -q '^LOG_FILE="$(abs_path "$LOG_FILE")"$' "$KIT/files/scripts/ticket-loop.sh" && grep -q '^RECORDS_FILE="$(abs_path "$RECORDS_FILE")"$' "$KIT/files/scripts/ticket-loop.sh" && grep -q '^REPORT_DIR="$(abs_path "$REPORT_DIR")"$' "$KIT/files/scripts/ticket-loop.sh" \
   && grep -qxF '[[ -z "$POST_MERGE_WORKTREE" ]] || POST_MERGE_WORKTREE="$(abs_path "$POST_MERGE_WORKTREE")"' "$KIT/files/scripts/ticket-loop.sh" \
@@ -1739,6 +1789,221 @@ out="$(jq -r --arg b issue-102 "$TS_JQ" <<<'[{"number":130,"state":"OPEN","headR
 grep -qF 'git ls-remote --heads origin "refs/heads/${b}" "refs/heads/${b}-*"' "$KIT/files/scripts/ticket-state.sh" || fail "ticket-state.sh 원격 브랜치 조회가 issue-N 과 issue-N-* 둘 다 보지 않음"
 grep -qE 'grep -E "/\$\{BRANCH_PREFIX:-issue-\}\$\{n\}\( \|-\|\$\)"' "$KIT/files/scripts/ticket-state.sh" || fail "ticket-state.sh 워크트리 조회 패턴이 바뀜"
 echo "ok  티켓 PR 찾기(issue-N·issue-N-slug 는 잡고 issue-N0 은 안 잡음)·ticket-state 필터"
+
+# #67: 멈춘 티켓이 루프 밖에서 병합되면 다음 실행이 시작할 때 그 티켓 몫을 정리하고 병합을 검증 창에 넣는다. 진짜 git(원격·워크트리·브랜치)에
+# 가짜 gh·cmux 로 본다
+SM="$(cd "$T" && pwd -P)/sweep"; mkdir -p "$SM/bin"
+git -C "$SM" init -q --bare origin.git
+git clone -q "$SM/origin.git" "$SM/repo" 2>/dev/null
+smc() { git -C "$SM/repo" -c user.name=t -c user.email=t@t commit -q --allow-empty -m "$1"; git -C "$SM/repo" rev-parse HEAD; }
+S0="$(smc init)"; S1="$(smc 'merge #153')"; S2="$(smc later)"
+git -C "$SM/repo" push -q origin HEAD:main 2>/dev/null; git -C "$SM/repo" fetch -q origin
+{ sed -n '/^# ---------- 병합 뒤 검증 ----------/,/^# ---------- 티켓 기록 · 스펙 리포트 ----------/p' "$KIT/files/scripts/ticket-loop.sh"
+  sed -n '/^# ---------- 병합된 티켓 정리 ----------/,/^# ---------- 티켓 하나 ----------/p' "$KIT/files/scripts/ticket-loop.sh"
+  sed -n '/^worktree_drop() {/,/^}/p; /^cmux_j() /p; /^cmux_worktree_find() {/,/^}/p; /^cmux_worktree_sweep() {/,/^}/p' "$KIT/files/scripts/ticket-loop.sh"
+  sed -n '/^backend_worktree_find() /p; /^backend_worktree_sweep() /p' "$KIT/files/scripts/ticket-loop.sh"; } > "$SM/fn.sh"
+for f in ticket_cleanup stops_resolve sweep_merged_stops worktree_drop cmux_worktree_find cmux_worktree_sweep backend_worktree_find backend_worktree_sweep pm_add; do
+  grep -q "^${f}() " "$SM/fn.sh" || fail "#67: ${f} 를 떼어 오지 못함"
+done
+cat > "$SM/bin/gh" <<'GH'
+#!/usr/bin/env bash
+printf "%s\x1e" "$@" | jq -Rsc '{cmd: "gh", args: (split("\u001e")[:-1])}' >> "$SM/calls.jsonl"
+case "$1 ${2:-}" in
+  "issue view") if [[ " ${CLOSED_IN:-} " == *" $3 "* ]]; then echo CLOSED; else echo OPEN; fi ;;
+  "pr list") [[ "${FAIL_PRS:-0}" == 0 ]] || { echo "gh: HTTP 502" >&2; exit 1; }; cat "$SM/prs.json" ;;
+  *) exit 0 ;;
+esac
+GH
+cat > "$SM/bin/cmux" <<'CMUX'
+#!/usr/bin/env bash
+case "$1 ${2:-}" in
+  "workspace list") [[ "${CMUX_DOWN:-0}" == 0 ]] || exit 1; jq -c '{window_id: "win1", workspaces: .}' "$SM/ws.json" ;;
+  "workspace close") echo "$3" >> "$SM/closed"; jq --arg id "$3" 'map(select(.id != $id))' "$SM/ws.json" > "$SM/ws.n" && mv "$SM/ws.n" "$SM/ws.json" ;;
+esac
+CMUX
+chmod +x "$SM/bin/gh" "$SM/bin/cmux"
+SWT="$SM/wts/issue-153"
+# $1 멈춤 기록 JSON(여럿이면 줄마다 하나), 나머지: 환경(VAR=값). 픽스처를 새로 만든다 — 워커 워크트리·cmux 워크스페이스(같은 경로 하나, 다른 저장소의
+# 같은 이름 하나)·로컬 브랜치 둘·원격 브랜치. 출력은 로그 줄들과 마지막에 "PENDING=…|BASE=…|SPEC=…"
+sweep_case() {
+  local recs="$1" i=0 r; shift
+  rm -rf "$SM/repo/.ticket-loop" "$SM/state.json" "$SM/closed" "$SM/wts"; : > "$SM/calls.jsonl"
+  git -C "$SM/repo" worktree prune; git -C "$SM/repo" branch -D issue-153 issue-153-bot >/dev/null 2>&1 || true
+  git -C "$SM/repo" worktree add -q -b issue-153 "$SWT" origin/main; git -C "$SWT" checkout -q -b issue-153-bot
+  git -C "$SWT" push -q origin issue-153-bot 2>/dev/null; echo dirty > "$SWT/uncommitted"
+  jq -n --arg p "$SWT" '[{id: "ws-153", custom_title: "issue-153", current_directory: $p}, {id: "ws-other", custom_title: "issue-153", current_directory: "/other/repo/issue-153"}]' > "$SM/ws.json"
+  mkdir -p "$SM/repo/.ticket-loop/stops"
+  while IFS= read -r r; do [[ -z "$r" ]] || { i=$((i + 1)); printf '%s\n' "$r" > "$SM/repo/.ticket-loop/stops/2026112$i-080705-x.json"; }; done <<<"$recs"
+  echo '{"verdict":"halt"}' > "$SM/repo/.ticket-loop/stops/20261121-080705-x.verdict.json"
+  (cd "$SM/repo" && env PATH="$SM/bin:$PATH" SM="$SM" "$@" bash -c '
+    set -euo pipefail
+    ROOT="$PWD"; MAIN_WT="$PWD"; OWNER_REPO=o/r; BASE_BRANCH=main; BRANCH_PREFIX=issue-; BACKEND=cmux; BACKEND_NAME=cmux; CMUX_CLI=cmux; WORKTREE_DIR="$SM/wts"
+    IN_REVIEW_LABEL=in-review; STOPPED_LABEL=loop-stopped; RECORDS_FILE="$PWD/.ticket-loop/tickets.jsonl"; PARENT=""; CLOSED_SPECS="${CLOSED_SPECS:-}"
+    POST_MERGE="${POST_MERGE:-1}"; POST_MERGE_EVERY=4; DRY_RUN="${DRY_RUN:-0}"; PM_STATE_FILE="$SM/state.json"
+    log() { case "${1:-}" in title|step|ok|warn|err) [[ $# -lt 2 ]] || shift ;; esac; echo "$*"; }
+    spec_of_ticket() { echo "${SPEC_OF:-0}"; }; close_spec_if_done() { echo "close_spec $1"; }; ci_expected() { [[ "${CI_EXPECTED:-1}" == 1 ]]; }
+    source "$SM/fn.sh"
+    [[ -z "${RECORDS:-}" ]] || printf "%s\n" "$RECORDS" > "$RECORDS_FILE"
+    PM_BASE="${BASE_IN:-}"; PM_PENDING="${PENDING_IN:-}"
+    sweep_merged_stops
+    echo "PENDING=$(tr "\t\n" ", " <<<"$PM_PENDING" | sed "s/ $//")|BASE=${PM_BASE}|SPEC=${PM_SPEC_COMPLETE}"' 2>&1)
+}
+srec() { jq -r "$1" "$SM/repo/.ticket-loop/stops/20261121-080705-x.json"; }
+sgh() { jq -rs '[.[] | select(.cmd == "gh") | .args[0:2] | join(" ")] | join(",")' "$SM/calls.jsonl"; }
+REC153="$(jq -cn --arg wt "$SWT" '{id: "a", kind: "usage_limit", mode: "manual", created_at: "2026-11-20T23:07:05Z", repo: "o/r", issue: 153, spec: 141, pr: null, worker_worktree: $wt, backend: "cmux"}')"
+jq -n --arg c "$S1" '[{number: 167, headRefName: "issue-153-bot", mergeCommit: {oid: $c}, mergedAt: "2026-11-21T01:00:00Z"}, {number: 9, headRefName: "issue-1530", mergeCommit: {oid: "x"}, mergedAt: "2026-11-21T02:00:00Z"}]' > "$SM/prs.json"
+# 루프 밖 병합: 같은 경로의 워크스페이스만 닫고(다른 저장소의 같은 이름은 둔다) 워크트리(커밋 안 된 파일이 있어도)·로컬 브랜치 둘·원격 브랜치를 지운다.
+# 병합 커밋이 창에 들어가고(창의 시작은 그 부모) 라벨을 떼고 기록에 해결이 남는다
+out="$(sweep_case "$REC153" CLOSED_IN=153)"
+grep -qF "#153: PR #167 was merged outside the loop after the stop — cleaned up the cmux workspace, the worktree ${SWT}, local branch issue-153-bot, local branch issue-153, origin/issue-153-bot; queued for the post-merge check" <<<"$out" \
+  || fail "#67: 루프 밖 병합의 정리 줄이 다르다: $out"
+[[ "$(tail -n 1 <<<"$out")" == "PENDING=153,167,${S1}|BASE=${S0}|SPEC=" ]] || fail "#67: 병합이 검증 창에 들지 않음: $(tail -n 1 <<<"$out")"
+[[ "$(cat "$SM/closed")" == ws-153 && ! -e "$SWT" ]] || fail "#67: 워크스페이스·워크트리 정리: $(cat "$SM/closed" 2>/dev/null) / $(ls "$SM/wts" 2>/dev/null)"
+[[ -z "$(git -C "$SM/repo" branch --list issue-153 issue-153-bot)" && -z "$(git -C "$SM/repo" ls-remote --heads origin issue-153-bot)" ]] || fail "#67: 로컬·원격 브랜치가 남음"
+[[ "$(srec '[.resolution, .resolved_pr, (.resolved_at | type), .kind] | join("|")')" == "merged-outside-loop|167|string|usage_limit" ]] || fail "#67: 멈춤 기록의 해결 표시: $(srec .)"
+[[ "$(jq -c '.pending' "$SM/state.json")" == "[{\"issue\":153,\"pr\":167,\"commit\":\"${S1}\"}]" ]] || fail "#67: 창을 저장하지 않음: $(cat "$SM/state.json" 2>/dev/null)"
+[[ "$(sgh)" == "issue view,pr list,issue edit,issue edit" ]] && grep -qF 'close_spec 141' <<<"$out" || fail "#67: 라벨 떼기·스펙 닫기 호출: $(sgh) / $out"
+# 해결이 표시된 기록은 다음 실행이 다시 보지 않는다(gh 를 부르지 않는다)
+: > "$SM/calls.jsonl"
+out="$(cd "$SM/repo" && env PATH="$SM/bin:$PATH" SM="$SM" bash -c 'set -euo pipefail; ROOT="$PWD"; OWNER_REPO=o/r; log() { echo "$*"; }; source "$SM/fn.sh"; sweep_merged_stops; echo END' 2>&1)"
+[[ "$out" == END && ! -s "$SM/calls.jsonl" ]] || fail "#67: 해결된 기록을 다시 처리함: $out / $(sgh)"
+# --dry-run: 무엇을 할지만 찍는다 — 닫지도 지우지도 창에 넣지도 기록을 고치지도 않는다
+out="$(sweep_case "$REC153" CLOSED_IN=153 DRY_RUN=1)"
+grep -qF "#153: PR #167 was merged outside the loop after the stop — a real run cleans up the cmux workspace, the worktree ${SWT}, local branch issue-153-bot, local branch issue-153, origin/issue-153-bot and queues the merge for the post-merge check" <<<"$out" \
+  || fail "#67: --dry-run 줄이 다르다: $out"
+[[ "$(tail -n 1 <<<"$out")" == "PENDING=|BASE=|SPEC=" && ! -e "$SM/closed" && -f "$SWT/uncommitted" && "$(srec '.resolved_at')" == null && "$(sgh)" == "issue view,pr list" \
+   && -n "$(git -C "$SM/repo" branch --list issue-153)" && -n "$(git -C "$SM/repo" ls-remote --heads origin issue-153-bot)" && ! -e "$SM/state.json" ]] \
+  || fail "#67: --dry-run 이 무언가를 바꿈: $out / $(sgh)"
+# 이슈가 열려 있거나(PR 이 열려 있음), 닫혔지만 병합된 PR 이 없으면 건드리지 않는다. 병합 PR 목록 조회가 실패해도 멈추지 않는다
+out="$(sweep_case "$REC153")"
+[[ "$out" == "PENDING=|BASE=|SPEC=" && -d "$SWT" && "$(srec '.resolved_at')" == null && "$(sgh)" == "issue view" ]] || fail "#67: 열린 이슈의 기록을 건드림: $out"
+cp "$SM/prs.json" "$SM/prs.keep"; echo '[{"number": 9, "headRefName": "issue-1530", "mergeCommit": {"oid": "x"}, "mergedAt": "2026-11-21T02:00:00Z"}]' > "$SM/prs.json"
+out="$(sweep_case "$REC153" CLOSED_IN=153)"
+[[ "$out" == "PENDING=|BASE=|SPEC=" && -d "$SWT" && "$(srec '.resolved_at')" == null ]] || fail "#67: 병합 없이 닫힌 티켓의 기록을 건드림(issue-1530 은 #153 의 PR 이 아니다): $out"
+mv "$SM/prs.keep" "$SM/prs.json"
+out="$(sweep_case "$REC153" CLOSED_IN=153 FAIL_PRS=1)"
+grep -qF 'could not list merged PRs (GitHub)' <<<"$out" && [[ "$(tail -n 1 <<<"$out")" == "PENDING=|BASE=|SPEC=" && -d "$SWT" ]] || fail "#67: PR 목록 조회 실패에서 멈추거나 지움: $out"
+# 통과한 검증이 이미 덮은 병합(PM_BASE 의 조상)·이미 창에 있는 병합·CI 가 안 붙는 PR·검증이 꺼진 실행은 창에 넣지 않는다 — 정리와 해결 표시는 한다
+out="$(sweep_case "$REC153" CLOSED_IN=153 BASE_IN="$S2")"
+grep -qF '; a passed post-merge check already covers the merge' <<<"$out" && [[ "$(tail -n 1 <<<"$out")" == "PENDING=|BASE=${S2}|SPEC=" && ! -e "$SWT" && "$(srec .resolution)" == merged-outside-loop ]] \
+  || fail "#67: 이미 검증이 덮은 병합을 창에 넣음: $out"
+out="$(sweep_case "$REC153" CLOSED_IN=153 PENDING_IN="$(printf '153\t167\t%s' "$S1")")"
+grep -qF '; already waiting for the post-merge check' <<<"$out" && [[ "$(tail -n 1 <<<"$out")" == "PENDING=153,167,${S1}|BASE=|SPEC=" ]] || fail "#67: 창에 있는 병합을 또 넣음: $out"
+out="$(sweep_case "$REC153" CLOSED_IN=153 CI_EXPECTED=0)"
+grep -qF '; not queued for the post-merge check (path excluded from CI)' <<<"$out" && [[ "$(tail -n 1 <<<"$out")" == "PENDING=|BASE=|SPEC=" ]] || fail "#67: CI 가 안 붙는 PR 을 창에 넣음: $out"
+out="$(sweep_case "$REC153" CLOSED_IN=153 CI_EXPECTED=0 CLOSED_SPECS=" 141")"   # 스펙을 끝낸 병합은 문서 PR 이어도 넣고 스펙을 창에 적는다
+[[ "$(tail -n 1 <<<"$out")" == "PENDING=153,167,${S1}|BASE=${S0}|SPEC=141" ]] || fail "#67: 스펙을 끝낸 루프 밖 병합: $out"
+out="$(sweep_case "$REC153" CLOSED_IN=153 POST_MERGE=0)"
+grep -qF '; the post-merge check is off, so the merge is not queued for it' <<<"$out" && [[ "$(tail -n 1 <<<"$out")" == "PENDING=|BASE=|SPEC=" && ! -e "$SWT" ]] || fail "#67: 검증이 꺼진 실행: $out"
+# 루프가 병합한 티켓의 기록(티켓 기록에 그 PR 의 merged — 병합 뒤 검증 실패로 멈춤 등): 창에 넣지 않고 라벨도 건드리지 않는다. 남은 것이 있으면
+# 지우고, 없으면 조용히 해결만 표시한다
+out="$(sweep_case "$REC153" CLOSED_IN=153 RECORDS='{"issue":153,"result":"merged","pr":167}')"
+grep -qF '#153: PR #167 was merged by the loop, but an earlier stop left something behind — cleaned up the cmux workspace' <<<"$out" \
+  && [[ "$(tail -n 1 <<<"$out")" == "PENDING=|BASE=|SPEC=" && ! -e "$SWT" && "$(srec .resolution)" == merged-by-loop && "$(sgh)" == "issue view,pr list" ]] || fail "#67: 루프가 병합한 티켓의 기록: $out / $(sgh)"
+out="$(sweep_case "$REC153" CLOSED_IN=153 RECORDS='{"issue":153,"result":"merged","pr":160}')"   # 다른 PR 의 merged(다시 열린 이슈)는 루프 병합이 아니다
+[[ "$(srec .resolution)" == merged-outside-loop ]] || fail "#67: 다른 PR 의 merged 기록을 루프 병합으로 봄: $out"
+# 워크트리가 기록에 없으면(멈출 때 디렉터리가 없었다) 이름이 issue-N 인 등록된 워크트리를 찾는다. 다른 백엔드에서 멈춘 기록이면 워크스페이스는 사람에게 넘긴다
+out="$(sweep_case "$(jq -c '.worker_worktree = null | .pr = 167' <<<"$REC153")" CLOSED_IN=153)"
+[[ ! -e "$SWT" && "$(cat "$SM/closed")" == ws-153 ]] || fail "#67: 기록에 워크트리가 없을 때 찾지 못함: $out"
+out="$(sweep_case "$(jq -c '.backend = "tmux"' <<<"$REC153")" CLOSED_IN=153)"
+grep -qF '#153: the stop was recorded on the tmux backend and this run uses cmux' <<<"$out" && [[ ! -e "$SWT" ]] || fail "#67: 다른 백엔드의 기록: $out"
+# cmux 앱이 답하지 않으면 기다리지 않는다 — 워크스페이스 없이 git 쪽만 지운다
+out="$(sweep_case "$REC153" CLOSED_IN=153 CMUX_DOWN=1)"
+grep -qF 'cleaned up the worktree' <<<"$out" && [[ ! -e "$SWT" ]] || fail "#67: cmux 가 답하지 않을 때: $out"
+# 같은 이슈의 기록이 둘이면 둘 다 해결을 표시하고 한 번만 처리한다
+out="$(sweep_case "$REC153"$'\n'"$(jq -c '.created_at = "2026-11-21T00:00:00Z" | .pr = 167' <<<"$REC153")" CLOSED_IN=153)"
+[[ "$(grep -c 'was merged outside the loop' <<<"$out")" == 1 && "$(cat "$SM/repo/.ticket-loop/stops/"2026112?-080705-x.json | jq -s 'map(select(.resolution == "merged-outside-loop")) | length')" == 2 ]] \
+  || fail "#67: 같은 이슈의 기록 둘: $out"
+# 루프가 직접 병합하는 길도 같은 정리 함수를 쓰고, 병합 직후 그 티켓의 지난 멈춤 기록에 해결을 표시한다. 훑기는 대상 조회 앞이다
+rt="$(sed -n '/^run_ticket() {/,/^}/p' "$KIT/files/scripts/ticket-loop.sh")"
+grep -qxF '  ticket_cleanup "${n}" "$branch" "${wt_path}" "$orca_branch" "${wt}"' <<<"$rt" && ! grep -q 'backend_worktree_remove\|branch -D' <<<"$rt" \
+  && grep -q '^  stops_resolve "${n}" merged-by-loop "${pr}"' <<<"$rt" \
+  && [[ "$(grep -n 'if ! merge_pr "${pr}"; then' <<<"$rt" | cut -d: -f1)" -lt "$(grep -n 'stops_resolve "${n}" merged-by-loop' <<<"$rt" | cut -d: -f1)" ]] \
+  || fail "#67: run_ticket 이 ticket_cleanup·stops_resolve 를 쓰지 않는다"
+grep -A2 '^backend_check$' "$KIT/files/scripts/ticket-loop.sh" | sed -n 3p | grep -q '^sweep_merged_stops ' \
+  && [[ "$(grep -n '^sweep_merged_stops ' "$KIT/files/scripts/ticket-loop.sh" | cut -d: -f1)" -lt "$(grep -n '^pick_rc=0; targets="$(pick_targets)"' "$KIT/files/scripts/ticket-loop.sh" | cut -d: -f1)" ]] \
+  || fail "#67: 메인이 대상 조회 전에 멈춤 기록을 훑지 않는다"
+echo "ok  멈춘 뒤 루프 밖에서 병합된 티켓 정리·검증 창·해결 표시(#67)"
+
+# #68: ticket-state.sh — 워커 세션 칸(워크트리 디렉터리가 지워져도 경로로 찾는다), 루프 잠금 칸은 루프 본체만, 병합됐는데 남은 것이 있으면 정리 명령
+TS="$(cd "$T" && pwd -P)/tstate"; mkdir -p "$TS/bin" "$TS/home"
+git -C "$TS" init -q --bare origin.git
+git clone -q "$TS/origin.git" "$TS/repo" 2>/dev/null
+git -C "$TS/repo" -c user.name=t -c user.email=t@t commit -q --allow-empty -m init; git -C "$TS/repo" push -q origin HEAD:main 2>/dev/null
+mkdir -p "$TS/repo/scripts" "$TS/repo/.ticket-loop/stops"; cp "$KIT/files/scripts/ticket-state.sh" "$TS/repo/scripts/"
+printf 'BACKEND="${BACKEND:-cmux}"\nWORKTREE_DIR="${WORKTREE_DIR:-%s}"\n' "$TS/wts" > "$TS/repo/.ticket-loop/loop.env"
+cat > "$TS/bin/gh" <<'GH'
+#!/usr/bin/env bash
+case "$1 ${2:-}" in
+  "repo view") echo o/r ;;
+  "issue view") echo "CLOSED | 라벨:  | 담당: " ;;
+  "pr list") cat "$TS/prs.json" ;;
+  *) exit 0 ;;
+esac
+GH
+cat > "$TS/bin/cmux" <<'CMUX'
+#!/usr/bin/env bash
+[[ "$1 ${2:-}" == "workspace list" ]] && jq -c '{workspaces: .}' "$TS/ws.json"
+CMUX
+# lsof·ps 는 고정 자료를 낸다 — 71672 는 지워진 워크트리를 cwd 로 둔 워커(프롬프트에 ticket-loop.sh 글자), 500 은 루프 본체, 600 은 다른 티켓(issue-1530)의 워커
+cat > "$TS/bin/lsof" <<'LSOF'
+#!/usr/bin/env bash
+printf 'p71672\nfcwd\nn%s\np600\nfcwd\nn%s\np500\nfcwd\nn%s\n' "$TS/wts/issue-153" "$TS/wts/issue-1530" "$TS/repo"
+LSOF
+cat > "$TS/bin/ps" <<'PS'
+#!/usr/bin/env bash
+all="71672 /Users/a/.local/bin/claude --session-id x /implement 153 — 무인 루프(ticket-loop.sh)에서 실행 중이다.
+  600 claude /implement 1530 — 무인 루프(ticket-loop.sh)에서 실행 중이다.
+  500 bash scripts/ticket-loop.sh --parent 141
+  501 /bin/bash -x ./scripts/ticket-loop.sh 153
+  700 vim scripts/ticket-loop.sh
+  701 bash -c echo ticket-loop.sh"
+[[ -n "${LOOP_RUNNING:-}" ]] || all="$(grep -v '^ *50[01] ' <<<"$all")"
+if [[ " $* " == *" -p "* ]]; then grep -E "^ *${*: -1} " <<<"$all"; else printf '%s\n' "$all"; fi
+PS
+chmod +x "$TS/bin/"*
+tstate() { (cd "$TS/repo" && env PATH="$TS/bin:$PATH" TS="$TS" HOME="$TS/home" XDG_CONFIG_HOME="$TS/home/.config" "$@" bash scripts/ticket-state.sh 153 2>&1); }
+echo '[{"number":167,"state":"MERGED","headRefName":"issue-153-bot"},{"number":160,"state":"CLOSED","headRefName":"issue-153"},{"number":9,"state":"MERGED","headRefName":"issue-1530"}]' > "$TS/prs.json"
+jq -n --arg p "$TS/wts/issue-153" '[{id: "WS-1", custom_title: "issue-153", current_directory: $p}, {id: "WS-2", custom_title: "issue-153", current_directory: "/other/issue-153"},
+  {id: "WS-3", custom_title: "issue-1530", current_directory: ($p + "0")}, {id: "WS-4", custom_title: "PDMate", current_directory: null}]' > "$TS/ws.json"
+git -C "$TS/repo" branch -q issue-153; git -C "$TS/repo" branch -q issue-153-bot; git -C "$TS/repo" push -q origin issue-153-bot 2>/dev/null
+# 실측 꼴(pdmate #153): 워크트리는 손으로 지웠고 cmux 워크스페이스와 워커 프로세스가 남았다. 루프는 돌지 않는다
+out="$(tstate)"
+sect() { awk -v h="== $1" '$0 == h || index($0, h " ") == 1 { on = 1; next } /^== / { on = 0 } on' <<<"$out"; }
+[[ "$(sect '워크트리')" == "(없음)" ]] || fail "#68: 워크트리 칸: $out"
+[[ "$(sect '워커 세션')" == "cmux 워크스페이스 WS-1 \"issue-153\" $TS/wts/issue-153"$'\n'"cmux 워크스페이스 WS-2 \"issue-153\" /other/issue-153  (이름만 같다 — 다른 저장소의 것일 수 있다)"$'\n'"71672 /Users/a/.local/bin/claude --session-id x /implement 153 — 무인 루프(ticket-loop.sh)에서 실행 중이다." ]] \
+  || fail "#68: 워커 세션 칸(지워진 워크트리의 워크스페이스·프로세스, issue-1530 은 아니다): $(sect '워커 세션')"
+[[ "$(sect '루프 잠금')" == "(없음)" ]] || fail "#68: 루프가 돌지 않는데 루프 잠금 칸에 무언가 찍힘(워커 프로세스?): $(sect '루프 잠금')"
+[[ "$(sect '정리')" == "(루프가 병합 뒤에 하는 순서다. 이 티켓의 멈춤 기록이 있으면 다음 루프 실행이 시작할 때 스스로 정리한다)
+  cmux workspace close WS-1 --force
+  cmux workspace close WS-2 --force   # \"issue-153\" — 이름만 같다. 이 저장소의 것인지 먼저 확인
+  git branch -D issue-153-bot
+  git branch -D issue-153
+  git push origin --delete issue-153-bot" ]] && grep -qxF '== 정리 — #167 병합됨, 남은 것이 있다' <<<"$out" || fail "#68: 정리 명령(워크스페이스 → 브랜치 → 원격): $out"
+# 루프 본체가 돌면 그것만 찍힌다(bash 가 ticket-loop.sh 를 실행 — 옵션이 끼어도). vim·bash -c 의 글자는 아니다
+out="$(tstate LOOP_RUNNING=1)"
+[[ "$(sect '루프 잠금')" == "(없음)"$'\n'"500 bash scripts/ticket-loop.sh --parent 141"$'\n'"501 /bin/bash -x ./scripts/ticket-loop.sh 153" ]] || fail "#68: 루프 잠금 칸이 루프 본체만 찍지 않음: $(sect '루프 잠금')"
+# 워크트리가 남아 있으면 워크스페이스 다음에 워크트리를 지우는 명령이 온다(멈춤 기록의 경로도 본다). tmux·Orca 는 각자의 명령
+git -C "$TS/repo" worktree add -q "$TS/elsewhere/issue-153" issue-153
+jq -n --arg wt "$TS/elsewhere/issue-153" '{issue: 153, worker_worktree: $wt}' > "$TS/repo/.ticket-loop/stops/a.json"
+out="$(tstate)"
+[[ "$(sect '정리' | sed -n '2,5p')" == "  cmux workspace close WS-1 --force
+  cmux workspace close WS-2 --force   # \"issue-153\" — 이름만 같다. 이 저장소의 것인지 먼저 확인
+  git worktree remove --force $TS/elsewhere/issue-153
+  git worktree prune" ]] || fail "#68: 워크트리가 남은 정리 명령: $out"
+out="$(tstate BACKEND=orca)"
+[[ "$(sect '정리' | sed -n '2,3p')" == "  orca worktree rm --worktree path:$TS/elsewhere/issue-153 --force
+  git worktree prune" && "$(sect '워커 세션')" == "71672 "* ]] || fail "#68: Orca 의 정리 명령: $out"
+git -C "$TS/repo" worktree remove --force "$TS/elsewhere/issue-153"; rm -f "$TS/repo/.ticket-loop/stops/a.json"
+# 남은 것이 없으면 정리 칸을 찍지 않는다. 병합되지 않았으면(열린 PR) 남은 것이 있어도 찍지 않는다
+echo '[{"number":167,"state":"OPEN","headRefName":"issue-153-bot"}]' > "$TS/prs.json"
+out="$(tstate)"; ! grep -q '^== 정리' <<<"$out" && grep -q '^cmux 워크스페이스 WS-1 ' <<<"$out" || fail "#68: 열린 PR 인데 정리 명령을 찍음: $out"
+echo '[{"number":167,"state":"MERGED","headRefName":"issue-153-bot"}]' > "$TS/prs.json"; echo '[]' > "$TS/ws.json"
+git -C "$TS/repo" branch -q -D issue-153 issue-153-bot; git -C "$TS/repo" push -q origin --delete issue-153-bot 2>/dev/null
+printf '#!/usr/bin/env bash\nexit 0\n' > "$TS/bin/lsof"
+out="$(tstate)"; ! grep -q '^== 정리' <<<"$out" && [[ "$(sect '워커 세션')" == "(없음)" ]] || fail "#68: 남은 것이 없는데 정리 칸을 찍음: $out"
+! grep -v '^ *#' "$KIT/files/scripts/ticket-state.sh" | grep -q 'pgrep' || fail "#68: ticket-state.sh 가 아직 pgrep -fl ticket-loop 로 루프를 찾는다"
+echo "ok  ticket-state.sh 워커 세션·루프 잠금·정리 명령(#68)"
 
 # 알림·멈춤 보고: 가짜 gh·curl·osascript 로 블록을 그대로 부른다(GitHub·Slack·데스크톱 없이).
 #   멈춤은 어떻게 끝나든 한 번 — die·set -e·HUP·INT·TERM·PIPE(정상 종료는 없음), 종료 코드는 그대로, 잠금은 이 실행이 잡았을 때만 푼다
