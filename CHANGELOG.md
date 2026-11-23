@@ -1,5 +1,35 @@
 # Changelog
 
+## 0.9.32 — 2026-11-21
+
+결함 하나(#67)와 개선 하나(#68)다. 멈춘 티켓을 사람이 이어받아 루프 밖에서 병합하면, 다음 실행은 그 티켓 몫으로 남은 것을 하나도 정리하지 않았고 그 병합은 병합 뒤 검증을 거치지 않았다. `ticket-state.sh`는 남은 워커 세션을 보여주지 않으면서 워커 프로세스를 "루프 잠금" 칸에 찍었다.
+
+- **멈춘 뒤 루프 밖에서 병합된 티켓을 다음 실행이 시작할 때 정리한다(#67).** 실측(pdmate #153, 키트 0.9.31, 2026-11-21): 08:07에 워커가 사용량 한도에 걸려 루프가 멈췄다(`kind: usage_limit`, `pr: null`, 워크트리는 남긴다 — 의도한 동작). 사람이 워커를 이어 PR #167을 열고 병합한 뒤 10:53에 멈춤 기록의 `rerun`을 돌리자 `No tickets to process.`로 끝났다. cmux 워크스페이스와 그 안의 워커 `claude` 프로세스(3시간 넘게), 워커 워크트리, 로컬 브랜치, `origin/issue-153-bot-verdict`가 남았고, `post-merge-153.log`도 창(`.git/ticket-loop-post-merge.json`)의 `pending`도 없었다.
+  - 원인: 정리는 루프가 직접 병합한 경로(`run_ticket`의 끝)에만 있었다. 루프 밖 병합을 알아보는 곳은 스펙 리포트(`merged-after-stop`)뿐이고, 시작할 때 멈춤 기록을 다시 보지 않았다.
+  - 이제 시작할 때(백엔드 검사·창 읽기 뒤, 대상 조회 전) 해결 표시가 없는 `.ticket-loop/stops/*.json`을 훑는다(`sweep_merged_stops`). 이슈가 닫혔고 그 티켓의 PR이 병합된 기록에는:
+    - 직접 병합했을 때와 같은 정리를 돌린다. 정리 블록을 `ticket_cleanup`으로 빼서 두 경로가 같이 쓴다 — 백엔드 워크스페이스 → 워커 워크트리 → `git worktree prune` → 로컬 브랜치(PR의 head, 루프가 만든 `issue-N`) → 원격 브랜치. 이미 없는 것은 건너뛴다. 워커 워크트리는 `--force`로 지우므로 커밋하지 않은 변경도 함께 지워진다(직접 병합한 티켓과 같다).
+    - 워크스페이스는 id를 모르므로(멈춘 실행의 것) 워크트리 경로로 찾는다. 백엔드마다 `_worktree_find`·`_worktree_sweep`을 더했다: cmux는 `workspace list`에서 `current_directory`가 그 경로(또는 그 아래)인 워크스페이스를 `workspace close --force`로 닫고, tmux는 `list-windows -a`의 `pane_current_path`로 찾아 `kill-window`, Orca는 `orca worktree rm --worktree path:<경로> --force`에 맡긴다. 이름(`issue-N`)으로는 찾지 않는다 — cmux·tmux는 저장소를 가리지 않아 다른 저장소의 같은 이름이 걸린다. cmux 앱이 답하지 않으면 기다리지 않고 git 쪽만 지운다. 기록의 백엔드가 이번 실행과 다르면 그쪽 워크스페이스는 사람이 닫으라고 경고한다.
+    - 병합 커밋을 병합 뒤 검증 창에 넣는다(`pm_add`). 그 뒤는 평소와 같다 — 창이 찼거나 실행이 끝날 때 검증하고, 대상이 0건인 실행이면 루프 끝 검증이 바로 돈다(`post-merge-N-end.log`). 그 병합이 스펙을 끝냈으면 스펙을 닫고 창에 적는다(`close_spec_if_done`·`pm_spec_closed`). 넣지 않는 경우: 이미 창에 있는 병합, 통과한 검증이 덮은 병합(`PM_BASE`의 조상 — 오래된 기록), CI가 안 붙는 PR(`ci_expected` — `run_ticket`과 같은 조건, 스펙을 끝낸 병합은 넣는다), 검증이 꺼진 실행(`--skip-post-merge`·`POST_MERGE_CMD` 없음). 로그 줄 끝에 어느 쪽인지 적는다.
+    - `loop-stopped`·`in-review` 라벨을 떼고, 기록에 `resolved_at`·`resolution: "merged-outside-loop"`·`resolved_pr`를 적는다. 다음 실행은 이 기록을 다시 보지 않는다(GitHub도 묻지 않는다).
+    - 로그: `#153: PR #167 was merged outside the loop after the stop — cleaned up the cmux workspace, the worktree …, local branch …, origin/…; queued for the post-merge check`.
+  - PR은 `open_pr_for`와 같은 규칙(head가 `issue-N`이거나 `issue-N-`로 시작) 또는 기록의 PR 번호로, 병합된 최근 300건 안에서 찾는다. 워크트리 경로는 기록의 `worker_worktree`, 없으면 이름이 `issue-N`인 등록된 워크트리, 그것도 없으면 `WORKTREE_DIR/issue-N`이다.
+  - 건드리지 않는 것: 이슈가 열려 있는 기록(PR이 열려 있음), 닫혔지만 병합된 PR이 없는 기록, 다른 저장소의 기록. 조회가 실패하면(GitHub) 멈추지 않고 경고 뒤 건너뛴다 — 기록이 그대로라 다음 실행이 다시 본다.
+  - `--dry-run`은 무엇을 지울지만 찍는다(`… — a real run cleans up … and queues the merge for the post-merge check`). 닫지도 지우지도 창에 넣지도 기록을 고치지도 않는다.
+  - 루프가 직접 병합한 티켓의 기록은 병합 직후 `resolution: "merged-by-loop"`로 표시한다(`stops_resolve` — 무인 수습이 이어 간 티켓, 멈췄다가 다시 돌려 끝낸 티켓). 병합 뒤 검증 실패로 멈춘 기록처럼 병합 뒤에 생긴 기록은 다음 실행의 훑기가 티켓 기록(`tickets.jsonl`에 그 PR의 `merged`)으로 알아보고, 창에 다시 넣지 않고 조용히 같은 표시만 한다(남은 것이 있으면 지우고 한 줄 남긴다).
+  - 잠금 안내(`Another loop is running`)의 확인 명령을 `pgrep -fl 'bash .*ticket-loop\.sh'`로 바꿨다. `pgrep -fl ticket-loop`는 프롬프트에 그 이름이 든 워커도 찍는다(#68과 같은 원인).
+  - 실측하지 않은 것: Orca의 `path:` 선택자 삭제와 tmux 창 찾기는 가짜 CLI·도움말로만 확인했다. cmux `workspace list`는 실제 응답 모양(0.65)으로 맞췄다.
+- **`ticket-state.sh`: 워커 세션 칸, 루프 본체만 찍는 루프 잠금 칸, 정리 명령(#68).** 같은 실측에서 `ticket-state.sh 153`은 "워크트리 (없음)"·"루프 잠금 (없음)" 아래에 워커 pid 71672의 `claude … /implement 153 — 무인 루프(ticket-loop.sh)에서 실행 중이다.` 줄을 찍었다. 워커 프롬프트에 `ticket-loop.sh`라는 글자가 있어 `pgrep -fl ticket-loop`에 걸린 것이고, 보는 사람은 루프가 도는 것으로 읽는다. 정작 그 워커가 지워진 워크트리를 붙든 채 cmux 워크스페이스에 살아 있다는 것은 어디에도 없었다.
+  - "루프 잠금" 칸은 bash가 `ticket-loop.sh`를 스크립트로 실행하는 프로세스만 찍는다(옵션이 끼어도 — `/bin/bash -x ./scripts/ticket-loop.sh`). 인자 어딘가에 그 이름이 든 프로세스(워커, `vim scripts/ticket-loop.sh`)는 찍지 않는다.
+  - "워커 세션" 칸을 더했다. 백엔드 워크스페이스(cmux 워크스페이스·tmux 창)는 지금 디렉터리가 워커 워크트리 경로인 것과 이름이 `issue-N`인 것을 보이고, 이름만 같은 것에는 "다른 저장소의 것일 수 있다"를 붙인다. 에이전트 프로세스는 그 경로를 지금 디렉터리로 둔 것(`lsof -d cwd`, 없으면 `/proc`)과 명령 인자에 그 경로가 든 것이다. 워크트리 디렉터리가 이미 지워졌어도 같은 경로 문자열로 찾는다 — 경로는 등록된 워크트리, `WORKTREE_DIR/issue-N`, 그 티켓의 멈춤 기록(`worker_worktree`)에서 모은다. `issue-15`가 `issue-153`에 걸리지 않게 경로 뒤가 끝·`/`·공백일 때만 맞춘다.
+  - PR이 병합됐고 열린 PR이 없는데 워크스페이스·워크트리·브랜치 가운데 남은 것이 있으면 "정리" 칸에 루프와 같은 순서의 명령을 찍는다(`cmux workspace close <id> --force` → `git worktree remove --force <경로>` → `git worktree prune` → `git branch -D …` → `git push origin --delete …`, tmux는 `kill-window`, Orca는 `orca worktree rm --worktree path:…`). 워크스페이스 없이 프로세스만 남았으면 `kill <pid>`를 찍는다. 스크립트가 직접 지우지는 않는다. 남은 것이 없으면 이 칸은 없다.
+  - 루프와 같은 설정을 읽는다(사용자 `loop.env` → 저장소 `loop.env`). 전에는 환경변수 `BRANCH_PREFIX`만 봐서, `loop.env`에서 접두를 바꾼 저장소는 아무것도 찾지 못했다.
+- 스모크: 셋을 더했다.
+  - `sweep_merged_stops`를 진짜 git(원격·워크트리·브랜치)과 가짜 gh·cmux로 — 루프 밖 병합의 정리·창·라벨·해결 표시, 해결된 기록은 gh를 부르지 않음, `--dry-run`, 열린 이슈·병합 없는 닫힘(`issue-1530`은 #153의 PR이 아니다)·PR 목록 조회 실패, 창에 넣지 않는 네 경우와 스펙을 끝낸 병합, 루프가 병합한 티켓의 기록, 기록에 워크트리가 없을 때, 다른 백엔드의 기록, cmux가 답하지 않을 때, 같은 이슈의 기록 둘.
+  - 스크립트째 — 가짜 gh·tmux로 `ticket-loop.sh`를 대상 0건으로 돌려 `--dry-run`의 한 줄, 실제 실행의 정리·검증 로그(`post-merge-153-end.log`가 그 병합 커밋에서 돈다)·해결 표시, 두 번째 실행이 다시 처리하지 않음을 본다. `/bin/bash`가 3.x면 그 bash로도 돌린다.
+  - `ticket-state.sh`를 가짜 gh·cmux·lsof·ps로 — 지워진 워크트리의 워크스페이스·프로세스가 워커 세션 칸에 보이고, 워커가 루프 잠금 칸에 없고, 루프 본체는 있고, 정리 명령의 순서와 백엔드별 꼴, 열린 PR이거나 남은 것이 없으면 정리 칸이 없음.
+  - 문서: 가이드 10.2(멈춤 기록·진단 스크립트)·R1·R5·R8·부록 D·E, `docs/stops*.md`, `loop-triage` 스킬(해결 표시가 있는 기록은 건너뜀), PDF.
+- 이미 설치된 저장소: 키트를 올리면 바로 바뀐다. 올린 뒤 첫 실행은 `stops/`에 쌓인 지난 기록을 모두 본다 — 닫힌 이슈마다 `gh issue view` 한 번, 병합된 PR 목록 한 번. 루프가 병합했던 티켓의 기록은 조용히 표시만 하고, 루프 밖에서 병합됐지만 통과한 검증이 이미 덮은 것은 창에 넣지 않는다. 먼저 `--dry-run`으로 무엇을 지울지 볼 수 있다.
+
 ## 0.9.31 — 2026-11-21
 
 결함 하나(#65)를 PR #66으로 고쳤다. macOS 기본 bash 3.2에서 루프를 시작하면 시작 로그의 "post-merge check" 줄이 구문 오류를 내고 `case` 원문을 찍었다. 대상 목록과 루프 동작은 그대로였고, 깨진 것은 이 로그 한 줄이다.
