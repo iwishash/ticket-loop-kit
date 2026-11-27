@@ -129,6 +129,11 @@ set -euo pipefail
 #                       cmux 워크스페이스를 만드는 중에 앱이 멈춰도 같은 상한으로 기다린다(#63)
 #   TERMINAL_RETRY      터미널 화면을 읽지 못할 때(터미널·앱이 없음) 연달아 다시 읽어 보는 횟수 (기본 5). 다 실패하면 터미널 끊김으로 멈춘다
 #   TERMINAL_RETRY_SEC  그 사이 쉬는 간격 (기본 10초)
+#   IDLE_STRIKES        PR 없이 연달아 이만큼 idle이면 멈춘 워커로 본다 (기본 3). 수리 뒤 새 커밋 없는 idle, 수습 세션의 판정 없는 idle도 같다
+#   IDLE_RECHECK_SEC    idle을 잡은 뒤 다시 보기까지 쉬는 간격 (기본 30초). PR·수습 대기는 strike마다 두 번, 수리 대기는 한 번 쉰다
+#   BACKGROUND_WAIT_SEC  백그라운드 셸을 기다리며 턴을 끝낸 워커(화면에 BACKGROUND_WAIT_REGEX)를 strike 없이 기다리는 상한 (기본 900초). 같은 화면이
+#                       이 시간을 넘기면 strike를 센다(개발 서버를 켜 둔 채 정말 멈춘 워커). 화면이 바뀌거나 워커가 다시 일하면 처음부터 잰다.
+#                       0이면 전처럼 바로 센다(#69)
 #   RECORDS_FILE        티켓별 기록 JSONL (기본 .ticket-loop/tickets.jsonl, 기계별 — 커밋하지 않는다). 상대 경로는 저장소 루트 기준
 #   REPORT_DIR          스펙 리포트 HTML 디렉터리 (기본 docs/loop-reports — 리포트는 사람이 PR로 커밋). 상대 경로는 저장소 루트 기준
 #   REPORT_OPEN         리포트를 쓴 뒤 브라우저로 여는지 (기본 1). 0이면 안 연다. SSH 세션·화면 없는 Linux에서는 값과 무관하게 안 연다
@@ -147,6 +152,9 @@ set -euo pipefail
 #   PERMISSION_PROMPT_REGEX  워커 화면 끝에서 권한 확인 창 문구를 찾는 정규식(ERE) (claude: "Do you want to proceed\?", codex·그 외: 없음). 그 줄이 든
 #                       화면이 PROMPT_STALL_SEC(300초) 동안 글자 그대로면 idle 신호가 없어도 worker_no_pr로 멈춘다. 루프는 확인 창에 답하지 않는다.
 #                       비우면 감지하지 않는다
+#   BACKGROUND_WAIT_REGEX  워커 화면 끝 25줄에서 백그라운드 셸을 기다린다는 문구를 찾는 정규식(ERE) (claude: "[0-9]+ shells? still running" — 복수형은
+#                       추정, codex·그 외: 없음 = 감지하지 않는다). 맞으면 idle이어도 BACKGROUND_WAIT_SEC까지 strike를 세지 않는다.
+#                       사용량 한도·확인 창 판정이 먼저다
 #   SLACK_WEBHOOK_URL   Slack Incoming Webhook URL (기본 없음 = Slack 끔). 루프 시작·티켓 완료·멈춤·루프 종료를 그 채널에 올린다.
 #                       잠금을 잡은 실행만 보낸다(--dry-run, 이미 도는 루프와 겹친 실행은 안 보낸다). 비밀 값이다 — 커밋하는 저장소
 #                       loop.env가 아니라 ~/.config/ticket-loop/loop.env나 환경변수에 둔다
@@ -268,18 +276,20 @@ RECORDS_FILE="$(abs_path "$RECORDS_FILE")"
 REPORT_DIR="$(abs_path "$REPORT_DIR")"
 [[ -z "$POST_MERGE_WORKTREE" ]] || POST_MERGE_WORKTREE="$(abs_path "$POST_MERGE_WORKTREE")"
 # ----- 에이전트 프리셋 -----
-# AGENT가 기동 명령·배너·모델 정규식·스킬 접두사·화면 분류 정규식(사용량 한도·권한 확인 창)의 기본값을 정한다. loop.env나 환경변수로 준 값이 이긴다.
+# AGENT가 기동 명령·배너·모델 정규식·스킬 접두사·화면 분류 정규식(사용량 한도·권한 확인 창·백그라운드 대기)의 기본값을 정한다. loop.env나 환경변수로 준 값이 이긴다.
 #   claude  Claude Code. 스킬은 /이름. 모델명은 상태줄·배너의 "Opus 5.5" 꼴. 사용량 한도는 "You've reached your … limit"(#10)·"You've hit your
 #           weekly limit"·"Usage limit reached"(#52 — 2026-11 실측, 문장 첫머리가 대문자다), 이전 판의 "Claude usage limit reached"·"5-hour limit
 #           reached"·"Weekly limit reached"(키트 실측 아님). "Context limit reached"(맥락 한도)는 맞지 않게 둔다. 권한 확인 창은
-#           "Do you want to proceed?"(screen_kind — idle strike 앞에서 본다)
+#           "Do you want to proceed?"(screen_kind — idle strike 앞에서 본다). 백그라운드 대기는 "1 shell still running"(#69 — 2026-11 실측, Claude Code
+#           2.1.312). 복수형 "2 shells still running"은 실측하지 못한 추정이다
 #   codex   Codex CLI. 스킬은 $이름 — Codex는 .claude/skills/ 를 읽지 않고 .agents/skills/ 를 읽는다(배치는 키트 다음 단계). 배너 "OpenAI Codex",
 #           모델명 "gpt-5.1-codex" 꼴(상태줄 설정에 따라 안 보일 수 있다 → not recorded). --dangerously-bypass-approvals-and-sandbox(=--yolo)는
 #           Claude의 --dangerously-skip-permissions에 해당한다 — 더 좁은 --sandbox workspace-write는 네트워크를 막아 push·gh pr create가 안 된다.
 #           .claude/settings.json의 deny(gh pr merge)는 Codex에 안 걸린다 — 병합 금지는 프롬프트와 GitHub 브랜치 보호에 기댄다
-#           사용량 한도·확인 창 문구는 실측 전이라 비워 둔다(감지하지 않음) — 실측 뒤 loop.env의 USAGE_LIMIT_REGEX·PERMISSION_PROMPT_REGEX로 켠다
-#   그 외   프리셋 없음. AGENT_RESTART_CMD·AGENT_BANNER_REGEX(·AGENT_MODEL_FLAG·MODEL_REGEX·SKILL_PREFIX·USAGE_LIMIT_REGEX·PERMISSION_PROMPT_REGEX)를 loop.env에 적는다.
-#           기동 명령·배너가 비어 있으면 시작 때 멈춘다
+#           사용량 한도·확인 창·백그라운드 대기 문구는 실측 전이라 비워 둔다(감지하지 않음) — 실측 뒤 loop.env의 USAGE_LIMIT_REGEX·
+#           PERMISSION_PROMPT_REGEX·BACKGROUND_WAIT_REGEX로 켠다
+#   그 외   프리셋 없음. AGENT_RESTART_CMD·AGENT_BANNER_REGEX(·AGENT_MODEL_FLAG·MODEL_REGEX·SKILL_PREFIX·USAGE_LIMIT_REGEX·PERMISSION_PROMPT_REGEX·BACKGROUND_WAIT_REGEX)를
+#           loop.env에 적는다. 기동 명령·배너가 비어 있으면 시작 때 멈춘다
 # 기본값("${VAR:-…}")에는 }를 쓰지 않는다 — bash는 기본값을 처음 나오는 }에서 끊고 나머지를 글자 그대로 뒤에 붙인다. 0.9.25의 한도 정규식
 # "( [a-z0-9-]+){0,2} limit"이 "{0,2 limit}"으로 깨져 grep이 매번 rc=2(invalid repetition count)를 냈고 한도 감지가 꺼졌다(#57). 횟수 반복은
 # ?를 겹쳐 풀어 쓴다
@@ -291,7 +301,8 @@ case "$AGENT" in
     MODEL_REGEX="${MODEL_REGEX:-(Opus|Sonnet|Haiku|Fable|Mythos)[[:space:]]+[0-9]+(\.[0-9]+)?}"
     SKILL_PREFIX="${SKILL_PREFIX:-/}"
     USAGE_LIMIT_REGEX="${USAGE_LIMIT_REGEX:-usage limit reached|(weekly|[0-9]+-hour) limit reached|(hit|reached) your( [a-z0-9-]+)?( [a-z0-9-]+)? limit}"
-    PERMISSION_PROMPT_REGEX="${PERMISSION_PROMPT_REGEX:-Do you want to proceed\?}" ;;
+    PERMISSION_PROMPT_REGEX="${PERMISSION_PROMPT_REGEX:-Do you want to proceed\?}"
+    BACKGROUND_WAIT_REGEX="${BACKGROUND_WAIT_REGEX:-[0-9]+ shells? still running}" ;;
   codex)
     AGENT_RESTART_CMD="${AGENT_RESTART_CMD:-codex --dangerously-bypass-approvals-and-sandbox}"
     AGENT_MODEL_FLAG="${AGENT_MODEL_FLAG:---model}"
@@ -299,7 +310,8 @@ case "$AGENT" in
     MODEL_REGEX="${MODEL_REGEX:-gpt-[0-9]+(\.[0-9]+)?(-[[:alnum:]]+)*}"
     SKILL_PREFIX="${SKILL_PREFIX:-\$}"
     USAGE_LIMIT_REGEX="${USAGE_LIMIT_REGEX:-}"
-    PERMISSION_PROMPT_REGEX="${PERMISSION_PROMPT_REGEX:-}" ;;
+    PERMISSION_PROMPT_REGEX="${PERMISSION_PROMPT_REGEX:-}"
+    BACKGROUND_WAIT_REGEX="${BACKGROUND_WAIT_REGEX:-}" ;;
   *)
     AGENT_RESTART_CMD="${AGENT_RESTART_CMD:-}"
     AGENT_MODEL_FLAG="${AGENT_MODEL_FLAG:-}"
@@ -307,7 +319,8 @@ case "$AGENT" in
     MODEL_REGEX="${MODEL_REGEX:-}"
     SKILL_PREFIX="${SKILL_PREFIX:-/}"
     USAGE_LIMIT_REGEX="${USAGE_LIMIT_REGEX:-}"
-    PERMISSION_PROMPT_REGEX="${PERMISSION_PROMPT_REGEX:-}" ;;
+    PERMISSION_PROMPT_REGEX="${PERMISSION_PROMPT_REGEX:-}"
+    BACKGROUND_WAIT_REGEX="${BACKGROUND_WAIT_REGEX:-}" ;;
 esac
 # ----- 에이전트 프리셋 끝 -----
 IDLE_WAIT_MS=600000       # idle 1회 대기 상한(Orca: terminal wait 한 번, cmux: 폴링 한 바퀴). PR·수리 대기는 PROGRESS_SEC(진행 로그)마다 돌아온다
@@ -318,8 +331,10 @@ TERMINAL_RETRY_SEC="${TERMINAL_RETRY_SEC:-10}"   # 그 사이 쉬는 간격
 TERMINAL_UNRESPONSIVE_SEC="${TERMINAL_UNRESPONSIVE_SEC:-600}"   # 앱에 닿지 못하지만 앱 프로세스는 있을 때(앱이 멈춤) 응답을 기다리는 상한(경과 시간).
                           # 넘기면 터미널 끊김으로 멈춘다(#61 — 2026-11 실측에서 cmux 앱이 1~2분 멈췄다). 위 셋은 loop.env·환경변수로 바꾼다
 TERMINAL_UNRESPONSIVE_LOG_SEC=60   # 앱이 응답하지 않는 동안 경과를 한 줄씩 찍는 간격
-IDLE_STRIKES=3            # PR 없이 연속 idle이면 멈춤으로 본다
-IDLE_RECHECK_SEC=30
+IDLE_STRIKES="${IDLE_STRIKES:-3}"            # PR 없이 연속 idle이면 멈춤으로 본다
+IDLE_RECHECK_SEC="${IDLE_RECHECK_SEC:-30}"   # idle을 잡은 뒤 다시 보기까지 쉬는 간격
+BACKGROUND_WAIT_SEC="${BACKGROUND_WAIT_SEC:-900}"   # 백그라운드 대기 문구(BACKGROUND_WAIT_REGEX)가 든 같은 화면의 idle을 strike 없이 기다리는 상한.
+                          # 0이면 끔(background_waiting). 위 셋은 loop.env·환경변수로 바꾼다
 SESSION_LOG_FRESH_SEC=30  # idle로 보여도 Claude Code 세션 기록(*.jsonl)이 이 안에 갱신됐으면 아직 일하는 중 — strike를 세지 않는다(session_active_recently)
 PROMPT_STALL_SEC=300      # 권한 확인 창 문구(PERMISSION_PROMPT_REGEX)가 든 화면이 이만큼 글자 그대로면 idle 신호가 없어도 확인 창에 멈춘 워커로 보고
                           # worker_no_pr로 멈춘다(screen_check). 화면이 바뀌면 다시 센다. 2026-10 실측(#3, tmux): idle 신호가 비어 27분을 조용히 기다렸다
@@ -374,6 +389,9 @@ if [[ -n "$AGENT_MODEL" ]]; then
 fi
 # ----- 워커 모델 끝 -----
 [[ -n "$POST_MERGE_CMD" ]] || POST_MERGE=0
+[[ "$IDLE_STRIKES" =~ ^[1-9][0-9]*$ ]] || { echo "IDLE_STRIKES must be a positive integer (got '${IDLE_STRIKES}')" >&2; exit 2; }
+[[ "$IDLE_RECHECK_SEC" =~ ^[1-9][0-9]*$ ]] || { echo "IDLE_RECHECK_SEC must be a positive integer (got '${IDLE_RECHECK_SEC}')" >&2; exit 2; }
+[[ "$BACKGROUND_WAIT_SEC" =~ ^(0|[1-9][0-9]*)$ ]] || { echo "BACKGROUND_WAIT_SEC must be 0 or a positive integer (got '${BACKGROUND_WAIT_SEC}')" >&2; exit 2; }
 [[ "$POST_MERGE_EVERY" =~ ^(0|[1-9][0-9]*)$ ]] || { echo "POST_MERGE_EVERY must be 0 or a positive integer (got '${POST_MERGE_EVERY}')" >&2; exit 2; }
 # 병합 뒤 검증은 시작할 때마다 검증 워크트리를 기본 브랜치 끝으로 되돌리고 추적 안 된·무시된 파일을 지운다(pm_clean). 그 자리가 메인 체크아웃
 # (또는 루프를 띄운 체크아웃)이면 사람의 작업 파일이 지워지므로 시작하지 않는다 — 실제 경로로 비교한다(상대 경로·심볼릭 링크로 줘도)
@@ -1024,7 +1042,7 @@ terminal_lost_why() {
   esac
 }
 # 그 멈춤에 붙이는 안내(사용량 한도 멈춤과 같은 뜻) — $1 루프 밖에서 PR을 열 수 있는 쪽(worker | triage session). 2026-11-12 실측(#61)에서
-# 루프가 멈춘 뒤에도 워커 둘이 혼자 PR을 열었다
+# 루프가 멈춘 뒤에도 워커 둘이 혼자 PR을 열었다. PR 없이 멈춘 워커(worker_no_pr)도 같다(#69)
 terminal_lost_note() { echo "The $1 may keep running outside the loop and open or update a PR — check for one before you rerun (the loop does not take over an open PR)."; }
 
 # ----- Orca: 워크트리·터미널·idle 대기를 모두 Orca CLI가 한다 -----
@@ -1663,7 +1681,7 @@ idle_wait_ms() { if [[ "$PROGRESS_SEC" -gt 0 ]]; then echo $(( PROGRESS_SEC * 10
 # ----- 진행 로그 끝 -----
 
 # idle 오판 $1번을 센다(idle_fp_count). 오판은 일하던 워커를 idle로 본 것이다 — 그 뒤 워커가 다시 일했거나(화면이 바뀜·idle이 풀림)
-# PR을 열었다
+# PR을 열었다. strike를 세지 않은 idle(세션 기록이 방금 갱신됨, 백그라운드 셸을 기다림 — background_waiting)은 일하던 것으로 보고 그 자리에서 센다
 idle_fp_add() { local i; for (( i = 0; i < $1; i++ )); do echo >> "${IDLE_FP_FILE:-/dev/null}"; done; }
 
 # idle로 보이는 워커가 실제로는 일하는 중인지를 Claude Code 세션 기록으로 본다 — $1 작업 폴더(워커의 WT_PATH, 수습 세션의 워크트리)의
@@ -1671,8 +1689,9 @@ idle_fp_add() { local i; for (( i = 0; i < $1; i++ )); do echo >> "${IDLE_FP_FIL
 # subagents/ 포함) 중 가장 최근 것이 SESSION_LOG_FRESH_SEC 안에 갱신됐으면 0. AGENT가 claude가 아니거나 폴더·파일이 없으면 1 — 호출부는
 # idle 판정을 그대로 쓴다. 갱신 뒤 지난 초를 SESSION_LOG_AGE에 남긴다(로그용). 세 대기(wait_for_pr·repair·wait_for_verdict)가 strike를
 # 세기 직전에 부른다. cmux에서 백그라운드 작업 알림으로 시작되는 턴 전후에 lifecycle이 잠깐 idle로 보이는 것으로 추정된다 — 2026-10-22
-# rental-portal #266에서 strike 3회 중 앞의 2회는 워커가 도구를 7번 호출하던 중이었다. 진짜 idle(백그라운드 verify를 기다리며 턴이 끝난
-# 상태 등)은 기록이 갱신되지 않아 전처럼 센다 — 이 가드는 strike를 줄이기만 하고 늘리지 않는다. mtime은 stat으로 읽는다(macOS -f %m,
+# rental-portal #266에서 strike 3회 중 앞의 2회는 워커가 도구를 7번 호출하던 중이었다. 진짜 idle은 기록이 갱신되지 않아 전처럼 센다
+# (백그라운드 verify를 기다리며 턴이 끝난 상태도 갱신되지 않는다 — 화면으로 가른다, background_waiting). 이 가드는 strike를 줄이기만 하고
+# 늘리지 않는다. mtime은 stat으로 읽는다(macOS -f %m,
 # Linux -c %Y). Codex는 세션 기록 형식이 달라 아직 보지 않는다
 session_active_recently() {
   local dir newest fmt
@@ -1700,6 +1719,9 @@ session_active_recently() {
 #                      idle 신호가 빈 값으로 이어지는 백엔드 상태(#2)에서도 닿는 경로다 — 2026-10 실측(#3, tmux)에서 bypass 모드의 워커(서브에이전트의
 #                      Bash)가 "Do you want to proceed?"에 27분 멈춰 있는 동안 루프 로그는 한 줄도 없었다. 루프는 확인 창에 답하지 않는다(승인·거부
 #                      둘 다) — bypass 모드에서도 물었다는 것은 deny 규칙 때문일 수 있다
+# 종류와 따로, 백그라운드 셸을 기다린다는 문구(BACKGROUND_WAIT_REGEX)도 같은 화면에서 본다 — 멈춤이 아니라 strike를 세지 않을 까닭이다
+# (background_waiting, 위 두 종류가 먼저다). 2026-11 실측(#69, pdmate #238): 검증을 백그라운드로 띄우고 턴을 끝낸 워커를 2분 40초 만에
+# worker_no_pr로 멈췄고, 24초 뒤 검증이 통과해 워커가 혼자 PR을 열었다.
 # 빈 정규식은 그 종류를 감지하지 않는다(codex 프리셋 — 실측 전). 분류 결과는 멈춤 기록의 kind와 사유에만 남는다(새 필드 없음).
 #
 # 대기 함수가 "멈춤"의 종류·사유를 호출부에 넘기는 길: wait_for_pr·wait_for_verdict는 bg_wait 서브셸에서 돌아 변수가 부모에 남지 않으므로
@@ -1719,15 +1741,16 @@ wait_stop_read() {
 }
 
 # screen_kind 터미널 → usage_limit | permission_prompt | 빈 값을 stdout에 쓰고 SCREEN_KIND에도 둔다(커맨드 치환 없이 불러야 아래 값이 남는다).
-# 맞은 줄은 SCREEN_LINE(앞뒤 공백을 지운 것 — 멈춤 사유에 싣는다), 화면 체크섬은 SCREEN_SUM(확인 창 체류 시간용), 사용량 한도면 화면의
+# 맞은 줄은 SCREEN_LINE(앞뒤 공백을 지운 것 — 멈춤 사유에 싣는다), 화면 체크섬은 SCREEN_SUM(확인 창 체류·백그라운드 대기 시간용), 사용량 한도면 화면의
 # 재설정 시각 문구("resets at …", "try again at …")를 SCREEN_RESET에 둔다(맞은 줄에 재설정 문구가 이미 있으면 비운다 — 화면의 다른 줄, 예컨대
-# 서브에이전트의 API 오류 줄에서 뽑으면 같은 시각을 오류 꼬리와 함께 되풀이한다, #52). 두 문구가 다 있으면 한도가 먼저다
-SCREEN_KIND=""; SCREEN_LINE=""; SCREEN_SUM=""; SCREEN_RESET=""
+# 서브에이전트의 API 오류 줄에서 뽑으면 같은 시각을 오류 꼬리와 함께 되풀이한다, #52). 두 문구가 다 있으면 한도가 먼저다.
+# 백그라운드 대기 문구에 맞은 부분은 종류와 따로 SCREEN_BACKGROUND에 둔다
+SCREEN_KIND=""; SCREEN_LINE=""; SCREEN_SUM=""; SCREEN_RESET=""; SCREEN_BACKGROUND=""
 screen_trim() { sed -e 's/^[[:space:]]*\(│\)\{0,1\}[[:space:]]*//' -e 's/[[:space:]]*\(│\)\{0,1\}[[:space:]]*$//'; }   # 앞뒤 공백과 TUI 상자 테두리(│)
 screen_kind() {
   local tail line reset_re='(resets?|try again)( at| in| on)?[[:space:]]+'
-  SCREEN_KIND=""; SCREEN_LINE=""; SCREEN_SUM=""; SCREEN_RESET=""
-  [[ -n "${USAGE_LIMIT_REGEX:-}" || -n "${PERMISSION_PROMPT_REGEX:-}" ]] || return 0
+  SCREEN_KIND=""; SCREEN_LINE=""; SCREEN_SUM=""; SCREEN_RESET=""; SCREEN_BACKGROUND=""
+  [[ -n "${USAGE_LIMIT_REGEX:-}" || -n "${PERMISSION_PROMPT_REGEX:-}" || -n "${BACKGROUND_WAIT_REGEX:-}" ]] || return 0
   tail="$(terminal_tail "$1" 2>/dev/null)" || true
   [[ -n "$tail" ]] || return 0
   SCREEN_SUM="$(cksum <<<"$tail" | cut -d' ' -f1)"
@@ -1744,6 +1767,7 @@ screen_kind() {
     line="$(grep -E "$PERMISSION_PROMPT_REGEX" <<<"$tail" | tail -n 1 || true)"
     [[ -z "$line" ]] || { SCREEN_KIND=permission_prompt; SCREEN_LINE="$(screen_trim <<<"$line")"; }
   fi
+  [[ -z "${BACKGROUND_WAIT_REGEX:-}" ]] || SCREEN_BACKGROUND="$(grep -oE "$BACKGROUND_WAIT_REGEX" <<<"$tail" | tail -n 1 || true)"
   printf '%s' "$SCREEN_KIND"
 }
 
@@ -1772,6 +1796,27 @@ screen_check() {
   esac
 }
 
+# 백그라운드 대기 가드(#69) — $1 티켓(로그용). screen_check 바로 뒤에 부른다: 방금 읽은 화면에 백그라운드 대기 문구(SCREEN_BACKGROUND)가 있으면
+# 0 — 턴을 끝내고 백그라운드 셸을 기다리는 워커라 이번 idle은 strike가 아니다. 같은 화면(체크섬)으로 BACKGROUND_WAIT_SEC 이상 기다렸으면 1 —
+# 개발 서버를 켜 둔 채 정말 멈춘 워커도 같은 문구를 보이므로 그때부터 전처럼 strike를 센다. 확인 창이 함께 있으면(SCREEN_KIND) 1 — 기다리는
+# 워커가 아니다. 화면이 바뀌면 시계를 다시 잰다. 워커가 다시 일하거나
+# 세션 기록이 갱신되면 호출부가 background_reset으로 처음부터 잰다. 로그는 기다리기 시작할 때와 상한을 넘길 때 한 줄씩 — 화면만 바뀐 것은 이어진
+# 대기라 되풀이하지 않는다. 대기 함수가 시작할 때도 background_reset
+BACKGROUND_SUM=""; BACKGROUND_AT=0; BACKGROUND_STATE=""   # BACKGROUND_STATE: 빈 값(기다리지 않음) | waiting | over(상한을 넘김)
+background_reset() { BACKGROUND_SUM=""; BACKGROUND_AT=0; BACKGROUND_STATE=""; }
+background_waiting() {
+  local now
+  if [[ -z "$SCREEN_BACKGROUND" || -n "$SCREEN_KIND" || $BACKGROUND_WAIT_SEC -eq 0 ]]; then background_reset; return 1; fi
+  now="$(date +%s)"
+  if [[ "$SCREEN_SUM" != "$BACKGROUND_SUM" ]]; then BACKGROUND_SUM="$SCREEN_SUM"; BACKGROUND_AT="$now"; fi
+  if [[ $(( now - BACKGROUND_AT )) -ge $BACKGROUND_WAIT_SEC ]]; then
+    [[ "$BACKGROUND_STATE" == over ]] || log "#$1: the screen has shown a background shell (${SCREEN_BACKGROUND}) unchanged for $(( now - BACKGROUND_AT ))s (BACKGROUND_WAIT_SEC) — counting idle strikes"
+    BACKGROUND_STATE=over; return 1
+  fi
+  [[ "$BACKGROUND_STATE" == waiting ]] || log "#$1: idle reported, but a background shell is running (${SCREEN_BACKGROUND}) — waiting up to ${BACKGROUND_WAIT_SEC}s while the screen stays the same"
+  BACKGROUND_STATE=waiting
+}
+
 # 대기가 화면 분류로 멈췄으면 여기서 멈춘다(die) — $1 티켓, $2 사유에 덧붙일 맥락(선택, 예 " while repairing PR #34"). 사용량 한도는 수습 없이
 # usage_limit로(수습 세션도 같은 한도에 걸린다 — 멈춤 기록은 stop_report가 manual로 쓴다), 확인 창은 전의 worker_no_pr처럼 진단만 하는 수습 뒤
 # 멈춘다. 분류가 없으면 0 — 호출부가 전처럼 간다(idle strike → worker_no_pr, 수리 끝 → head 비교)
@@ -1783,7 +1828,7 @@ screen_stop_check() {
       STOP_KIND=usage_limit
       die "#${n}: ${WAIT_STOP_REASON}${ctx}. No triage (it would hit the same limit) — rerun the loop after the limit resets. The ${BRANCH_PREFIX}${n} worktree is kept in ${BACKEND_NAME}. The worker may resume on its own when the limit resets and open a PR outside the loop — check for one before you rerun (the loop does not take over an open PR)." ;;
     worker_no_pr)
-      reason="#${n}: ${WAIT_STOP_REASON}${ctx}. The loop does not answer prompts — check the ${BRANCH_PREFIX}${n} worktree in ${BACKEND_NAME}."
+      reason="#${n}: ${WAIT_STOP_REASON}${ctx}. The loop does not answer prompts — check the ${BRANCH_PREFIX}${n} worktree in ${BACKEND_NAME}. $(terminal_lost_note worker)"
       STOP_KIND=worker_no_pr
       triage worker_no_pr "$reason" || true   # 진단만 — 요약을 사유에 붙여 멈춘다
       die "${reason}${TRIAGE_NOTE}" ;;
@@ -1816,7 +1861,7 @@ pr_settle() {
 wait_for_pr() {
   local n="$1" handle="$2" deadline="$3" strikes=0 pending=0 pr started idle idle_at created last_screen="" screen wait_ms active_said=0
   reach_reset "$handle"
-  started="$(date +%s)"; wait_ms="$(idle_wait_ms)"; PROMPT_SUM=""; PROMPT_AT=0
+  started="$(date +%s)"; wait_ms="$(idle_wait_ms)"; PROMPT_SUM=""; PROMPT_AT=0; background_reset
   while :; do
     pr="$(open_pr_for "${n}")"
     if [[ -n "${pr}" ]]; then
@@ -1848,18 +1893,23 @@ wait_for_pr() {
       # 경우와 같은 처리). 로그는 연속된 idle 판정에서 한 번만
       if session_active_recently "${WT_PATH:-}"; then
         [[ $active_said -eq 1 ]] || log "#${n}: idle reported, but the session log was written ${SESSION_LOG_AGE}s ago — still working"
-        idle_fp_add $((pending + 1)); pending=0; strikes=0; active_said=1
+        idle_fp_add $((pending + 1)); pending=0; strikes=0; active_said=1; background_reset
         sleep "$IDLE_RECHECK_SEC"; continue
       fi
       active_said=0
       # 화면 분류(screen_check): 사용량 한도면 strike 없이 바로, 확인 창에 PROMPT_STALL_SEC 머물렀으면 worker_no_pr로 — 둘 다 PR 없이 멈춤(1)
       ! screen_check "${handle}" worker 1 || return 1
+      # 백그라운드 셸을 기다리며 턴을 끝낸 워커 — 세션 기록이 방금 갱신된 경우와 같은 처리(오판으로 세고 strike는 세지 않는다)
+      if background_waiting "${n}"; then
+        idle_fp_add $((pending + 1)); pending=0; strikes=0
+        sleep "$IDLE_RECHECK_SEC"; continue
+      fi
       strikes=$((strikes + 1)); pending=$((pending + 1))
       log warn "#${n}: worker idle, no PR (${strikes}/${IDLE_STRIKES})"
       [[ ${strikes} -lt $IDLE_STRIKES ]] || return 1   # 정말 멈췄다 — 이 연속 idle은 오판이 아니다
       sleep "$IDLE_RECHECK_SEC"
     else
-      idle_fp_add "$pending"; pending=0; strikes=0; active_said=0   # 워커가 계속 일한다 — 앞서 센 idle은 오판
+      idle_fp_add "$pending"; pending=0; strikes=0; active_said=0; background_reset   # 워커가 계속 일한다 — 앞서 센 idle은 오판
       ! screen_check "${handle}" worker 0 || return 1   # idle 신호가 없어도 확인 창에 멈춘 워커는 여기서 잡는다(타임아웃으로 돌아온 바퀴)
     fi
   done
@@ -1876,7 +1926,7 @@ wait_for_pr() {
 repair() {
   local handle="$1" text="$2" deadline="$3" pr="${4:-}" idle wait_ms before="" head="" seen="" seen_at=0 strikes=0 last_screen="" screen active_said=0
   reach_reset "$handle"
-  wait_ms="$(idle_wait_ms)"; PROMPT_SUM=""; PROMPT_AT=0
+  wait_ms="$(idle_wait_ms)"; PROMPT_SUM=""; PROMPT_AT=0; background_reset
   [[ -z "$pr" ]] || before="$(pr_head_sha "$pr" 2>/dev/null || true)"
   send_prompt "${handle}" "$text"
   while :; do
@@ -1891,17 +1941,21 @@ repair() {
       if [[ "$screen" != "$last_screen" ]]; then strikes=0; last_screen="$screen"; fi
       if session_active_recently "${WT_PATH:-}"; then   # 세션 기록이 방금 갱신됐으면 아직 일하는 중 — strike를 세지 않는다(wait_for_pr와 같은 규칙)
         [[ $active_said -eq 1 ]] || log "#${CUR_N}: idle reported, but the session log was written ${SESSION_LOG_AGE}s ago — still working"
-        strikes=0; active_said=1
+        strikes=0; active_said=1; background_reset
       else
         active_said=0
         ! screen_check "${handle}" worker 1 || return 0   # 사용량 한도·확인 창 — 호출부(screen_stop_check)가 종류대로 멈춘다
-        strikes=$((strikes + 1))
-        log warn "#${CUR_N}: worker idle after the repair prompt, no new commit on PR #${pr} yet (${strikes}/${IDLE_STRIKES})"
-        [[ ${strikes} -lt $IDLE_STRIKES ]] || return 0
+        if background_waiting "$CUR_N"; then   # 백그라운드 셸을 기다린다 — strike를 세지 않는다(wait_for_pr와 같은 규칙)
+          strikes=0
+        else
+          strikes=$((strikes + 1))
+          log warn "#${CUR_N}: worker idle after the repair prompt, no new commit on PR #${pr} yet (${strikes}/${IDLE_STRIKES})"
+          [[ ${strikes} -lt $IDLE_STRIKES ]] || return 0
+        fi
       fi
       sleep "$IDLE_RECHECK_SEC"
     else
-      strikes=0; active_said=0   # 워커가 다시 일한다
+      strikes=0; active_said=0; background_reset   # 워커가 다시 일한다
       ! screen_check "${handle}" worker 0 || return 0   # idle 신호가 없어도 확인 창에 멈춘 워커는 여기서 잡는다
       if [[ -n "$head" && "$head" != "$before" ]]; then
         [[ "$head" == "$seen" ]] || { seen="$head"; seen_at="$(date +%s)"; }
@@ -2477,7 +2531,7 @@ verdict_written() { jq -e '.verdict == "resume" or .verdict == "halt"' "$1" >/de
 wait_for_verdict() {
   local n="$1" handle="$2" vfile="$3" deadline="$4" wt_path="$5" strikes=0 started idle last_screen="" screen wait_ms active_said=0
   reach_reset "$handle"
-  started="$(date +%s)"; wait_ms="$(idle_wait_ms)"; PROMPT_SUM=""; PROMPT_AT=0
+  started="$(date +%s)"; wait_ms="$(idle_wait_ms)"; PROMPT_SUM=""; PROMPT_AT=0; background_reset
   [[ "$PROGRESS_SEC" -le 0 ]] || progress_reset "$wt_path"
   while :; do
     if verdict_written "$vfile"; then
@@ -2496,17 +2550,21 @@ wait_for_verdict() {
       if [[ "$screen" != "$last_screen" ]]; then strikes=0; last_screen="$screen"; fi
       if session_active_recently "$wt_path"; then   # 수습 세션의 기록이 방금 갱신됐으면 아직 일하는 중 — strike를 세지 않는다
         [[ $active_said -eq 1 ]] || log "#${n}: idle reported, but the session log was written ${SESSION_LOG_AGE}s ago — still working"
-        strikes=0; active_said=1
+        strikes=0; active_said=1; background_reset
       else
         active_said=0
         ! screen_check "$handle" "triage session" 1 || return 1   # 수습 세션도 같은 한도에 걸린다 — "판정 없이 멈춤"이 아니라 usage_limit로
-        strikes=$((strikes + 1))
-        log warn "#${n}: triage session idle, no verdict (${strikes}/${IDLE_STRIKES})"
-        [[ ${strikes} -lt $IDLE_STRIKES ]] || return 1
+        if background_waiting "$n"; then   # 수습 세션이 백그라운드 셸을 기다린다 — strike를 세지 않는다
+          strikes=0
+        else
+          strikes=$((strikes + 1))
+          log warn "#${n}: triage session idle, no verdict (${strikes}/${IDLE_STRIKES})"
+          [[ ${strikes} -lt $IDLE_STRIKES ]] || return 1
+        fi
       fi
       sleep "$IDLE_RECHECK_SEC"
     else
-      strikes=0; active_said=0
+      strikes=0; active_said=0; background_reset
       ! screen_check "$handle" "triage session" 0 || return 1
     fi
   done
@@ -3237,7 +3295,7 @@ run_ticket() {
     [[ $rc -ne 2 ]] || die "#${n}: ticket timed out (${TICKET_TIMEOUT_SEC}s)"
     [[ $rc -ne 3 ]] || die "#${n}: cannot reach ${BACKEND_NAME} terminal ${handle}: $(terminal_lost_why "${handle}"). The worktree is still on disk. $(terminal_lost_note worker)"
     screen_stop_check "${n}"   # 사용량 한도(usage_limit — 수습 없음)·확인 창(worker_no_pr)에 멈춘 워커면 여기서 멈춘다. 아니면 전처럼 idle strike
-    reason="#${n}: worker stopped without a PR (a question or a failure?). Check the ${BRANCH_PREFIX}${n} worktree in ${BACKEND_NAME}."
+    reason="#${n}: worker stopped without a PR (a question or a failure?). Check the ${BRANCH_PREFIX}${n} worktree in ${BACKEND_NAME}. $(terminal_lost_note worker)"
     STOP_KIND=worker_no_pr
     triage worker_no_pr "$reason" || true   # 진단만 — 요약을 사유에 붙여 멈춘다
     die "${reason}${TRIAGE_NOTE}"
